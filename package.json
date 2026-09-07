@@ -1,0 +1,42 @@
+{
+  "name": "codex-remote",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": "22.23.2"
+  },
+  "packageManager": "npm@10.9.8",
+  "scripts": {
+    "dev": "NODE_ENV=development node --env-file-if-exists=.env --watch --experimental-strip-types server/index.ts",
+    "start": "NODE_ENV=production node --env-file-if-exists=.env dist-server/index.js",
+    "status": "node --env-file-if-exists=.env scripts/status.mjs",
+    "typecheck": "tsc -b",
+    "build:client": "vite build",
+    "build:server": "tsc -p tsconfig.server.json",
+    "build": "npm run typecheck && npm run build:client && npm run build:server",
+    "lint": "oxlint server src scripts vite.config.ts",
+    "test": "vitest run",
+    "smoke": "node scripts/smoke.mjs",
+    "check:pwa": "node scripts/validate-pwa.mjs",
+    "check": "npm run lint && npm run test && npm run build && npm run check:pwa"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "6.0.3",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1",
+    "vite": "8.1.1",
+    "web-push": "3.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.2",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@types/web-push": "3.6.4",
+    "oxlint": "1.71.0",
+    "typescript": "6.0.2",
+    "vitest": "4.1.10"
+  }
+}

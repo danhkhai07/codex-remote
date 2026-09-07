@@ -1,0 +1,9 @@
+.remote-push.json
+.remote-push.json.tmp
+node_modules/
+dist/
+dist-server/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example

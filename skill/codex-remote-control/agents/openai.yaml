@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Remote Control"
+  short_description: "Operate the private phone client for local Codex threads"
+  default_prompt: "Use $codex-remote-control to start or inspect the phone client and report its secure URL and health."
