@@ -28,6 +28,13 @@ the turn completes, with a 24-hour cleanup fallback for missing completion
 events. Unsent images expire after ten minutes; restarting clears temporary
 uploads. Failed sends retain the browser draft for retry.
 
+The installed PWA caches the latest conversation on-device and paints it before
+network refreshes complete. Codex turns continue on the host when the browser is
+suspended. The live event stream stays connected while the app is visible or a
+turn is active, and disconnects while hidden and idle to avoid needless battery
+and network use. Web Push reports completion when the operating system suspends
+the PWA's JavaScript.
+
 Reverse proxies must accept bodies larger than the image limit. Nginx defaults
 to 1 MB, so use `client_max_body_size 11m;`; see
 [`deploy/nginx/codex-remote.conf`](deploy/nginx/codex-remote.conf).

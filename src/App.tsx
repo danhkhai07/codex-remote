@@ -4,9 +4,10 @@ import { api, ApiError } from './api'
 import { useYoloPreference } from './useYoloPreference'
 import { enablePush, disablePush, restorePush } from './push'
 import { MarkdownMessage } from './MarkdownMessage'
-import { EventAssembler } from './eventStream'
+import { EventAssembler, shouldKeepEventStream } from './eventStream'
 import { TranscriptViewport, type ReadingPosition } from './TranscriptViewport'
 import { matchingSlashCommands, parseSlashCommand, slashCommands } from './slashCommands'
+import { clearConversationSnapshot, loadConversationSnapshot, saveConversationSnapshot } from './deviceCache'
 import {
   commandText,
   commandSummary,
@@ -503,6 +504,8 @@ export function App() {
   const [tab, setTab] = useState<'conversation' | 'output'>('conversation')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [connected, setConnected] = useState(false)
+  const [cacheReady, setCacheReady] = useState(false)
+  const [pageVisible, setPageVisible] = useState(() => document.visibilityState !== 'hidden')
   const [online, setOnline] = useState(() => navigator.onLine)
   const [installPrompt, setInstallPrompt] = useState<PwaInstallPrompt | null>(null)
   const [updateWorker, setUpdateWorker] = useState<ServiceWorker | null>(null)
@@ -516,6 +519,7 @@ export function App() {
   const previewUrls = useRef(new Set<string>())
   const readingPositions = useRef(new Map<string, ReadingPosition>())
   const notificationOperation = useRef(false)
+  const eventCursor = useRef(0)
 
   useEffect(() => () => {
     for (const url of previewUrls.current) URL.revokeObjectURL(url)
@@ -600,45 +604,109 @@ export function App() {
     }
   }, [])
 
+  useEffect(() => {
+    const handleVisibility = () => setPageVisible(document.visibilityState !== 'hidden')
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => document.removeEventListener('visibilitychange', handleVisibility)
+  }, [])
+
   const refreshThreads = useCallback(async () => {
     const response = await api.threads()
     setThreads(response.data)
     return response.data
   }, [])
 
-  const openThread = useCallback(async (target: Thread, csrf = session?.csrf) => {
+  const openThread = useCallback(async (target: Thread, csrf = session?.csrf, preserveVisibleCache = false) => {
     if (!csrf) return
     setSelectedId(target.id)
     selectedRef.current = target.id
     setDrawerOpen(false)
     setError('')
     setCommandNotice(null)
-    setThread(null)
-    const response = await api.resumeThread(target.id, csrf)
-    setThread(response.thread)
-    setSelectedModel(response.thread.model ?? null)
+    if (!preserveVisibleCache) setThread(null)
+    const history = await api.thread(target.id)
+    await api.resumeThread(target.id, csrf)
+    setThread((current) => history.thread.historyUnavailable && preserveVisibleCache && current?.id === target.id
+      ? { ...current, ...history.thread, turns: current.turns }
+      : history.thread)
+    setSelectedModel(history.thread.model ?? null)
     setSelectedEffort(null)
-    const running = [...(response.thread.turns ?? [])].reverse().find((turn) => turn.status === 'inProgress')
-    setActiveTurnId(running?.id ?? null)
+    if (!history.thread.historyUnavailable || !preserveVisibleCache) {
+      const running = [...(history.thread.turns ?? [])].reverse().find((turn) => turn.status === 'inProgress')
+      setActiveTurnId(running?.id ?? null)
+    }
   }, [session?.csrf])
 
   useEffect(() => {
-    if (!session) return
+    if (!session) {
+      setCacheReady(false)
+      return
+    }
     let cancelled = false
-    Promise.all([refreshThreads(), api.pending(), api.models()]).then(([items, pendingResponse, modelResponse]) => {
+    void (async () => {
+      const cached = await loadConversationSnapshot()
       if (cancelled) return
-      setPending(pendingResponse.data)
-      setModels(modelResponse.data)
-      if (items[0]) void openThread(items[0], session.csrf).catch((requestError) => setError(errorMessage(requestError)))
-    }).catch((requestError) => setError(errorMessage(requestError)))
+      if (cached) {
+        setThreads(cached.threads)
+        setSelectedId(cached.selectedId)
+        selectedRef.current = cached.selectedId
+        setThread(cached.thread)
+        setTranscripts(cached.transcripts)
+        setActiveTurnId(cached.activeTurnId)
+        eventCursor.current = cached.lastEventId
+      }
+      setCacheReady(true)
+
+      try {
+        const [items, pendingResponse, modelResponse] = await Promise.all([refreshThreads(), api.pending(), api.models()])
+        if (cancelled) return
+        setPending(pendingResponse.data)
+        setModels(modelResponse.data)
+        const preferred = items.find((item) => item.id === cached?.selectedId) ?? items[0]
+        if (preferred) await openThread(preferred, session.csrf, preferred.id === cached?.selectedId)
+      } catch (requestError) {
+        if (!cancelled) setError(errorMessage(requestError))
+      }
+    })()
     return () => { cancelled = true }
   }, [session, refreshThreads, openThread])
 
   useEffect(() => {
-    if (!session) return
-    const source = new EventSource('/api/events')
+    if (!session || !cacheReady || (thread && thread.id !== selectedId)) return
+    const timer = setTimeout(() => {
+      void saveConversationSnapshot({
+        threads,
+        selectedId,
+        thread,
+        transcripts,
+        activeTurnId,
+        lastEventId: eventCursor.current,
+      })
+    }, 150)
+    return () => clearTimeout(timer)
+  }, [activeTurnId, cacheReady, selectedId, session, thread, threads, transcripts])
+
+  const keepLive = shouldKeepEventStream(pageVisible, activeTurnId)
+
+  useEffect(() => {
+    if (!session || !keepLive) {
+      setConnected(false)
+      return
+    }
+    const source = new EventSource(`/api/events?after=${eventCursor.current}`)
     const assembler = new EventAssembler()
-    source.onopen = () => setConnected(true)
+    source.onopen = () => {
+      setConnected(true)
+      if (document.visibilityState !== 'hidden') {
+        void refreshThreads().catch(() => undefined)
+        const id = selectedRef.current
+        if (id) void api.thread(id).then((response) => setThread((current) => (
+          response.thread.historyUnavailable && current?.id === id
+            ? { ...current, ...response.thread, turns: current.turns }
+            : response.thread
+        ))).catch(() => undefined)
+      }
+    }
     source.onerror = () => { assembler.reset(); setConnected(false) }
     const receive = (data: string) => {
       let event: RemoteEvent
@@ -647,6 +715,7 @@ export function App() {
       } catch {
         return
       }
+      eventCursor.current = Math.max(eventCursor.current, event.id)
       setEvents((current) => [...current, event].slice(-600))
 
       if (event.type === 'request') {
@@ -682,7 +751,11 @@ export function App() {
           setActiveTurnId(null)
           setTimeout(() => {
             const id = selectedRef.current
-            if (id) api.thread(id).then((response) => setThread(response.thread)).catch(() => undefined)
+            if (id) api.thread(id).then((response) => setThread((current) => (
+              response.thread.historyUnavailable && current?.id === id
+                ? { ...current, ...response.thread, turns: current.turns }
+                : response.thread
+            ))).catch(() => undefined)
           }, 150)
         }
         void refreshThreads().catch(() => undefined)
@@ -696,8 +769,11 @@ export function App() {
       const data = assembler.accept((message as MessageEvent<string>).data)
       if (data !== null) receive(data)
     })
-    return () => source.close()
-  }, [session, refreshThreads])
+    return () => {
+      source.close()
+      setConnected(false)
+    }
+  }, [keepLive, session, refreshThreads])
 
   const selectedEvents = useMemo(() => events.filter((event) => {
     const id = eventThreadId(event)
@@ -1054,9 +1130,14 @@ export function App() {
       setError(`Could not lock the app: ${errorMessage(requestError)}`)
       return
     }
+    await clearConversationSnapshot()
+    eventCursor.current = 0
+    selectedRef.current = null
     setSession(null)
     setThread(null)
     setThreads([])
+    setSelectedId(null)
+    setActiveTurnId(null)
     setEvents([])
     setTranscripts({})
     setSentMessages({})
@@ -1132,7 +1213,7 @@ export function App() {
           </div>
           <div className={`connection-chip ${connected && online ? 'is-online' : ''} ${!online ? 'is-offline' : ''}`}>
             <span className="connection-dot" />
-            {!online ? 'Offline' : connected ? 'Live' : 'Reconnecting'}
+            {!online ? 'Offline' : connected ? 'Live' : activeTurnId ? 'Running' : 'Syncing'}
           </div>
           <div className="header-actions">
             {yoloMode && <button className="yolo-chip" type="button" onClick={() => {

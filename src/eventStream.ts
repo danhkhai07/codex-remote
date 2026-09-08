@@ -1,3 +1,7 @@
+export function shouldKeepEventStream(pageVisible: boolean, activeTurnId: string | null): boolean {
+  return pageVisible || Boolean(activeTurnId)
+}
+
 /** Assemble one ordered event; reconnects replay any unfinished event in full. */
 export class EventAssembler {
   private id = -1

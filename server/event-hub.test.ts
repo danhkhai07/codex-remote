@@ -59,6 +59,22 @@ describe('EventHub replay metadata', () => {
     expect(output).not.toMatch(/"state":"busy"}.*"replayed":true/)
   })
 
+  it('replays from a new epoch when a device cursor is ahead after restart', () => {
+    const hub = new EventHub()
+    hub.publish('state', { state: 'ready' })
+    const writes: string[] = []
+    const response = {
+      writeHead: () => response,
+      flushHeaders: () => {},
+      write: (value: string) => { writes.push(value); return true },
+    } as unknown as ServerResponse
+
+    const unsubscribe = hub.subscribe(response, 500)
+    unsubscribe()
+
+    expect(writes.join('')).toMatch(/"state":"ready"}.*"replayed":true/)
+  })
+
   it('transports megabyte events in bounded frames and preserves Unicode and replay metadata', () => {
     const event = { id: 42, at: 'now', type: 'codex' as const, payload: { text: 'hello 🌍\ndata: "\\'.repeat(100_000) } }
     const frames = encodeEvent(event, true)

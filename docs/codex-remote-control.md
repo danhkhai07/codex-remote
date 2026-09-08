@@ -105,6 +105,19 @@ ends its active event stream and interrupts active turns; schedule updates while
 idle. Signed browser sessions remain valid until expiry when the signing secret
 is preserved, and persisted Codex threads can be resumed after reconnecting.
 
+The PWA stores the latest selected thread, its live transcript, thread-list
+metadata and the last received event ID in IndexedDB on that device. It renders
+that snapshot immediately after session validation, then refreshes from the
+gateway and replays only newer events. Explicit logout clears the snapshot; it
+contains no password, cookie, Codex credential or pending image file.
+
+Browsers, especially iOS, may suspend all page JavaScript in the background, so
+no PWA can promise a permanent SSE connection. Codex Remote keeps SSE connected
+while the page is visible or a turn is active and closes it only when the page is
+both hidden and idle. The turn itself continues in App Server on the host. Web
+Push signals completion while the page is suspended, and the cached event cursor
+plus thread refresh reconcile any missed updates when the page becomes visible.
+
 Type `/` in the composer to open the local command palette. `/model` discovers
 picker-visible entries from App Server `model/list`; `/effort` uses the selected
 model's advertised reasoning levels. The selection is sent as a `turn/start`

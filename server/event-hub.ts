@@ -72,9 +72,12 @@ export class EventHub {
     res.flushHeaders()
     // Named events survive intermediaries that consume SSE comments.
     res.write('event: ready\ndata: {}\n\n')
+    // A device cursor can outlive a gateway restart, while event IDs restart at
+    // one. Treat a cursor from a future ID as a new epoch and replay the backlog.
+    const replayAfterId = afterId >= this.#nextId ? 0 : afterId
     for (const event of this.#events) {
-      if (event.id > afterId) {
-        for (const frame of encodeEvent(event, afterId === 0)) res.write(frame)
+      if (event.id > replayAfterId) {
+        for (const frame of encodeEvent(event, replayAfterId === 0)) res.write(frame)
       }
     }
 
