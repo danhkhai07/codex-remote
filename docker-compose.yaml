@@ -1,35 +1,35 @@
 # Codex Remote gateway, containerized while sharing the HOST Codex install.
 #
-# Architecture (mirrors the documented loopback + external-TLS model):
-#
 #   phone browser --HTTPS--> your proxy/tunnel --127.0.0.1:5173--> docker-proxy
-#                                                                      |
-#                                             gateway (container) -> codex app-server
-#                                                                      |
-#                                             host ~/.codex  +  workspace bind mounts
+#                                                    gateway (container) -> codex app-server
+#                                                    host ~/.codex  +  workspace bind mounts
 #
-# The container runs the Node gateway only. The Codex CLI, its login
-# (auth.json), thread history and sqlite state all stay on the host under
-# ~/.codex. It is bind-mounted read-write at the SAME absolute path it occupies
-# on the host (default /home/<user>/.codex; override CODEX_HOME_HOST if
-# relocated) — not at a /codex alias — because the Codex standalone layout
-# stores absolute symlinks (packages/standalone/current -> release dir) that
-# only resolve when the container sees ~/.codex at its host path. CODEX_HOME is
-# set to that same path. Workspace repositories are mounted the same way, at
-# their host-identical paths, so the values in .env's
-# CODEX_REMOTE_WORKSPACE_ROOTS are valid both on the host and in the container.
+# The container runs the Node gateway only. Everything else lives on the host:
+#   - the Codex CLI install, login, and thread/sqlite state under ~/.codex
+#   - one or more workspace repositories that users may open
+# Both are bind-mounted read-write into the container at the SAME absolute path
+# they occupy on the host. Do NOT use a short alias like /codex or /workspace:
+#   1. The Codex standalone layout stores absolute symlinks
+#      (packages/standalone/current -> release dir); they only resolve when the
+#      container sees ~/.codex at its host path.
+#   2. CODEX_REMOTE_WORKSPACE_ROOTS must name paths that are valid both on the
+#      host and in the container, so the container must see them at host paths.
+#
+# Configuration lives in `.env` (copy `.env.example`). It mixes two kinds:
+#   - app variables passed to the Node process via env_file: the CODEX_REMOTE_* vars
+#   - host-layout variables used to build the bind mounts below (interpolated by
+#     compose, not read by the app):
+#       CODEX_HOME_HOST              host path of ~/.codex, e.g. /home/me/.codex
+#       CODEX_REMOTE_WORKSPACE_ROOT  the repo to expose, e.g. /home/me/code/proj
+#
+# The gateway runs as the user that OWNS those host dirs. The image's default is
+# the uid-1000 `node` user; if your host user is not uid 1000 (e.g. a root-owned
+# VPS), set CODEX_REMOTE_UID/CODEX_REMOTE_GID to match in `.env`.
 #
 # HTTPS is intentionally NOT terminated here: point your existing proxy/tunnel
-# (ngrok, Caddy, Tailscale, SSH…) at 127.0.0.1:${CODEX_REMOTE_PORT:-5173} and
-# set CODEX_REMOTE_PUBLIC_ORIGIN in .env to its exact HTTPS origin. The port is
-# published on the loopback interface only, as the app expects.
-#
-# Variables read from .env (env_file) for the app:
-#   CODEX_REMOTE_PUBLIC_ORIGIN, CODEX_REMOTE_PASSWORD, CODEX_REMOTE_SESSION_SECRET,
-#   CODEX_REMOTE_WORKSPACE_ROOTS, CODEX_REMOTE_HOST/PORT, CODEX_REMOTE_CODEX_BIN
-# Variables below (compose interpolation, defaulted to this machine) are
-# host-side layout: you normally only change them if ~/.codex or the workspace
-# lives somewhere else. Do not put secrets in interpolation defaults.
+# (ngrok, Caddy, Tailscale, SSH…) at 127.0.0.1:${CODEX_REMOTE_PORT:-5173} and set
+# CODEX_REMOTE_PUBLIC_ORIGIN to its exact HTTPS origin. The port is published on
+# the loopback interface only, as the app expects.
 
 name: codex-remote
 
@@ -40,6 +40,9 @@ services:
     image: codex-remote:0.1.0
     restart: unless-stopped
     init: true                      # reap the spawned codex child on shutdown
+    # Run as the user that owns the mounted host trees (see header). Defaults to
+    # 1000:1000 (the image's `node` user); override via CODEX_REMOTE_UID/GID.
+    user: "${CODEX_REMOTE_UID:-1000}:${CODEX_REMOTE_GID:-1000}"
     env_file:
       - .env
     environment:
@@ -47,40 +50,27 @@ services:
       # Must listen on all interfaces so docker-proxy can reach it; local-only
       # exposure is enforced by publishing on 127.0.0.1 below.
       CODEX_REMOTE_HOST: 0.0.0.0
-      # Codex data + executable live in the host ~/.codex mount, exposed at the
-      # same path it has on the host (absolute symlinks inside the standalone
-      # layout require this). Override CODEX_HOME_HOST if ~/.codex is elsewhere.
-      CODEX_HOME: ${CODEX_HOME_HOST:-/home/danhkhai07/.codex}
-      # Overrides the `codex` value from .env: the container has no PATH codex.
-      # Resolved through the stable `current` symlink so Codex self-updates
-      # (new release dirs) keep working without editing this file.
-      CODEX_REMOTE_CODEX_BIN: ${CODEX_HOME_HOST:-/home/danhkhai07/.codex}/packages/standalone/current/bin/codex
-      # Web-push state lives beside the repo like a local run. This must be a
-      # plain file inside a mounted *directory* (see volumes) — never a bind of
-      # a single host file: push.js writes a sibling .tmp then renames it over
-      # the target, and a rename cannot replace a single-file bind mount
-      # (mountpoint -> EBUSY). Value must equal the container side of the repo
-      # volume mount below.
-      CODEX_REMOTE_PUSH_STATE: /home/danhkhai07/softdev/TOOLS/codex-remote/.remote-push.json
+      # The mounted ~/.codex, at its host path (symlink caveat above).
+      CODEX_HOME: ${CODEX_HOME_HOST:?set CODEX_HOME_HOST in .env (see .env.example)}
+      # The container has no `codex` on PATH; point at the standalone binary
+      # through the stable `current` symlink so Codex self-updates keep working.
+      CODEX_REMOTE_CODEX_BIN: ${CODEX_HOME_HOST:?set CODEX_HOME_HOST in .env (see .env.example)}/packages/standalone/current/bin/codex
+      # Web-push state is a plain file inside the ~/.codex *directory* mount so
+      # it persists across restarts. It must not be a bind-mounted single file:
+      # push.js saves via a sibling .tmp + rename(), and rename() cannot replace
+      # a bind-mounted file (its path is a mountpoint -> EBUSY).
+      CODEX_REMOTE_PUSH_STATE: ${CODEX_HOME_HOST:?set CODEX_HOME_HOST in .env (see .env.example)}/codex-remote-push.json
     ports:
       # Loopback only. Your proxy/tunnel connects here, as in the docs.
       - "127.0.0.1:${CODEX_REMOTE_PORT:-5173}:${CODEX_REMOTE_PORT:-5173}"
     volumes:
-      # Host Codex install + login + sessions (rw so app-server can persist).
-      # Mounted at its HOST-IDENTICAL path (not /codex): absolute symlinks in
-      # ~/.codex/packages/standalone (e.g. `current`) must resolve in-container.
-      # Override CODEX_HOME_HOST if ~/.codex is relocated.
-      - ${CODEX_HOME_HOST:-/home/danhkhai07/.codex}:${CODEX_HOME_HOST:-/home/danhkhai07/.codex}
-      # One workspace root per line, each bound at the identical absolute path
-      # it has on the host. Add another `- /abs/path/other:/abs/path/other` for
-      # each entry you put in CODEX_REMOTE_WORKSPACE_ROOTS.
-      - ${CODEX_REMOTE_WORKSPACE_ROOT:-/home/danhkhai07/softdev/TOOLS/codex-remote}:/home/danhkhai07/softdev/TOOLS/codex-remote
-      # No separate bind for .remote-push.json: push state is written to
-      # ${CODEX_REMOTE_PUSH_STATE} (above), i.e. the host's .remote-push.json,
-      # reached through this rw repo mount since host and container paths are
-      # identical. It stays a regular file on a directory mount so push.js's
-      # atomic tmp+rename works. `touch .remote-push.json` on a fresh host so
-      # the file exists with the right uid before first start.
+      # Host ~/.codex (Codex install + login + sessions), mounted at its host
+      # path so the absolute symlinks under packages/standalone resolve.
+      - ${CODEX_HOME_HOST:?set CODEX_HOME_HOST in .env (see .env.example)}:${CODEX_HOME_HOST:?set CODEX_HOME_HOST in .env (see .env.example)}
+      # One workspace repo, mounted at its host path. Add one
+      # `- /abs/path/other:/abs/path/other` line per extra entry you put in
+      # CODEX_REMOTE_WORKSPACE_ROOTS.
+      - ${CODEX_REMOTE_WORKSPACE_ROOT:?set CODEX_REMOTE_WORKSPACE_ROOT in .env (see .env.example)}:${CODEX_REMOTE_WORKSPACE_ROOT:?set CODEX_REMOTE_WORKSPACE_ROOT in .env (see .env.example)}
 
     # Optional hardening. `cap_drop: [ALL]` / `no-new-privileges` are left off
     # by default because Codex's workspace sandbox may require capabilities;
