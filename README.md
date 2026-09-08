@@ -27,3 +27,7 @@ Uploads remain local and session-owned. Accepted images remain available until
 the turn completes, with a 24-hour cleanup fallback for missing completion
 events. Unsent images expire after ten minutes; restarting clears temporary
 uploads. Failed sends retain the browser draft for retry.
+
+Reverse proxies must accept bodies larger than the image limit. Nginx defaults
+to 1 MB, so use `client_max_body_size 11m;`; see
+[`deploy/nginx/codex-remote.conf`](deploy/nginx/codex-remote.conf).

@@ -32,6 +32,23 @@ async function jsonRequest(path, { method = 'GET', body, cookie, csrf } = {}) {
   return { response, payload }
 }
 
+async function uploadImage(body, cookie, csrf) {
+  const response = await fetch(`${targetOrigin}/api/attachments`, {
+    method: 'POST',
+    headers: {
+      Origin: browserOrigin,
+      Cookie: cookie,
+      'X-CSRF-Token': csrf,
+      'Content-Type': 'image/png',
+    },
+    body,
+    signal: AbortSignal.timeout(30_000),
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(`POST /api/attachments returned ${response.status}: ${payload.error ?? 'unknown error'}`)
+  return payload
+}
+
 const login = await jsonRequest('/api/session/login', {
   method: 'POST',
   body: { password },
@@ -40,6 +57,17 @@ const cookie = cookieFrom(login.response)
 const csrf = login.payload.csrf
 if (typeof csrf !== 'string') throw new Error('Login did not return a CSRF token')
 console.log('✓ Authenticated session')
+
+const uploadProbe = Buffer.alloc(1024 * 1024 + 1)
+Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(uploadProbe)
+const uploadedProbe = await uploadImage(uploadProbe, cookie, csrf)
+if (typeof uploadedProbe.id !== 'string') throw new Error('Image upload did not return an attachment id')
+await jsonRequest(`/api/attachments/${encodeURIComponent(uploadedProbe.id)}`, {
+  method: 'DELETE',
+  cookie,
+  csrf,
+})
+console.log('✓ Uploaded a >1 MB image through the configured origin')
 
 let threadId
 try {

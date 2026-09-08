@@ -128,6 +128,12 @@ accepted image remains readable until its turn completes, then is deleted; a
 24-hour cleanup fallback covers a missing completion event. A rejected request
 keeps the browser draft available to retry.
 
+The reverse proxy must allow request bodies larger than the application's 10 MB
+image limit. Nginx defaults to 1 MB and otherwise rejects ordinary phone photos
+before they reach Codex Remote. Set `client_max_body_size 11m;` in the HTTPS
+server block; the complete example in `deploy/nginx/codex-remote.conf` also
+disables buffering for the Server-Sent Events stream.
+
 The header bell registers real Web Push completion notifications. Enable it in
 the installed PWA and grant notification permission. On iPhone, use the Home
 Screen app. The bell shows **On** only after the server accepts the subscription.
@@ -159,3 +165,5 @@ read-only instruction reaches `turn/completed` through SSE.
 
 Set `CODEX_REMOTE_SMOKE_ORIGIN` to the public HTTPS origin to run the same live
 smoke through a reverse proxy or tunnel instead of directly against loopback.
+The smoke uploads and deletes an image payload larger than Nginx's 1 MB default,
+so it verifies the proxy upload limit as well as authentication and SSE.
