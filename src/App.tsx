@@ -686,6 +686,19 @@ export function App() {
     return () => clearTimeout(timer)
   }, [activeTurnId, cacheReady, selectedId, session, thread, threads, transcripts])
 
+  useEffect(() => {
+    if (!session || !pageVisible) return
+    void refreshThreads().catch(() => undefined)
+    const id = selectedRef.current
+    if (id) {
+      void api.thread(id).then((response) => setThread((current) => (
+        response.thread.historyUnavailable && current?.id === id
+          ? { ...current, ...response.thread, turns: current.turns }
+          : response.thread
+      ))).catch(() => undefined)
+    }
+  }, [pageVisible, session, refreshThreads])
+
   const keepLive = shouldKeepEventStream(pageVisible, activeTurnId)
 
   useEffect(() => {
@@ -695,18 +708,7 @@ export function App() {
     }
     const source = new EventSource(`/api/events?after=${eventCursor.current}`)
     const assembler = new EventAssembler()
-    source.onopen = () => {
-      setConnected(true)
-      if (document.visibilityState !== 'hidden') {
-        void refreshThreads().catch(() => undefined)
-        const id = selectedRef.current
-        if (id) void api.thread(id).then((response) => setThread((current) => (
-          response.thread.historyUnavailable && current?.id === id
-            ? { ...current, ...response.thread, turns: current.turns }
-            : response.thread
-        ))).catch(() => undefined)
-      }
-    }
+    source.onopen = () => setConnected(true)
     source.onerror = () => { assembler.reset(); setConnected(false) }
     const receive = (data: string) => {
       let event: RemoteEvent
@@ -773,7 +775,7 @@ export function App() {
       source.close()
       setConnected(false)
     }
-  }, [keepLive, session, refreshThreads])
+  }, [keepLive, pageVisible, session, refreshThreads])
 
   const selectedEvents = useMemo(() => events.filter((event) => {
     const id = eventThreadId(event)
@@ -884,7 +886,7 @@ export function App() {
           setBusy(false)
         }
         showCommandNotice('Remote status', [
-          { label: 'Connection', value: !online ? 'Offline' : connected ? 'Live' : 'Reconnecting' },
+          { label: 'Connection', value: !online ? 'Offline' : connected ? 'Live' : activeTurnId ? 'Running' : pageVisible ? 'Syncing' : 'Sleeping' },
           { label: 'Workspace', value: thread ? shortWorkspace(thread.cwd) : 'None' },
           { label: 'Model', value: effectiveModel || 'Server default' },
           { label: 'Effort', value: selectedEffort || effectiveModelOption?.defaultReasoningEffort || 'Model default' },
