@@ -34,6 +34,13 @@ ENV NODE_ENV=production
 
 WORKDIR /app
 
+# The host-mounted Codex binary uses the container's native TLS trust store.
+# bookworm-slim does not include one, which causes HTTPS requests to fail with
+# `invalid peer certificate: UnknownIssuer`.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
 # `npm ci --omit=dev` keeps the image lean; web-push and friends are prod deps.
 COPY --from=build --chown=node:node /app/package.json /app/package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
