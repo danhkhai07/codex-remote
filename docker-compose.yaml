@@ -49,7 +49,7 @@ services:
       NODE_ENV: production
       # Must listen on all interfaces so docker-proxy can reach it; local-only
       # exposure is enforced by publishing on 127.0.0.1 below.
-      CODEX_REMOTE_HOST: 0.0.0.0
+      CODEX_REMOTE_HOST: 127.0.0.1
       # The mounted ~/.codex, at its host path (symlink caveat above).
       CODEX_HOME: ${CODEX_HOME_HOST:?set CODEX_HOME_HOST in .env (see .env.example)}
       # The container has no `codex` on PATH; point at the standalone binary
@@ -60,9 +60,7 @@ services:
       # push.js saves via a sibling .tmp + rename(), and rename() cannot replace
       # a bind-mounted file (its path is a mountpoint -> EBUSY).
       CODEX_REMOTE_PUSH_STATE: ${CODEX_HOME_HOST:?set CODEX_HOME_HOST in .env (see .env.example)}/codex-remote-push.json
-    ports:
-      # Loopback only. Your proxy/tunnel connects here, as in the docs.
-      - "127.0.0.1:${CODEX_REMOTE_PORT:-5173}:${CODEX_REMOTE_PORT:-5173}"
+    network_mode: host
     volumes:
       # Host ~/.codex (Codex install + login + sessions), mounted at its host
       # path so the absolute symlinks under packages/standalone resolve.
