@@ -18,7 +18,12 @@ const vite = config.production
     }))
 
 const controller = new RemoteController(config)
-const push = new PushService(resolve(packageRoot, '.remote-push.json'), config.sessionSecret, config.publicOrigin.origin)
+// push.js persists via atomic sibling-.tmp + rename(), so its state file must
+// live inside a writable *directory* — not on a bind-mounted single file. The
+// container sets CODEX_REMOTE_PUSH_STATE to a path under a host-backed dir
+// mount; local runs keep the repo-root default.
+const pushState = process.env.CODEX_REMOTE_PUSH_STATE?.trim() || resolve(packageRoot, '.remote-push.json')
+const push = new PushService(pushState, config.sessionSecret, config.publicOrigin.origin)
 const attachments = new AttachmentStore()
 controller.onTurnCompleted = (threadId, turnId) => {
   attachments.completeTurn(turnId)
