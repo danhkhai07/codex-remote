@@ -155,18 +155,22 @@ describe('RemoteController', () => {
       .resolves.toMatchObject({ turn: { id: 'turn-new' } })
   })
 
-  it('allows explicit YOLO turns but rejects unknown approval policies', async () => {
+  it('always disables approvals and grants host access only to explicit YOLO turns', async () => {
     const appServer = new StubAppServer()
     const controller = new RemoteController(config, appServer)
 
     await controller.createThread('0')
-    await controller.startTurn('thread-new', 'continue autonomously', undefined, undefined, 'never')
+    await controller.startTurn('thread-new', 'continue autonomously', undefined, undefined, true)
     expect(appServer.calls.at(-1)).toMatchObject({
       method: 'turn/start',
-      params: { approvalPolicy: 'never', cwd: '/workspace' },
+      params: {
+        approvalPolicy: 'never',
+        cwd: '/workspace',
+        sandboxPolicy: { type: 'dangerFullAccess' },
+      },
     })
     await expect(controller.startTurn('thread-new', 'unsafe value', undefined, undefined, 'always'))
-      .rejects.toThrow('Invalid approval policy')
+      .rejects.toThrow('Invalid full access setting')
   })
 
   it('adds only trusted local image paths to a turn and supports image-only prompts', async () => {
@@ -174,7 +178,7 @@ describe('RemoteController', () => {
     const controller = new RemoteController(config, appServer)
 
     await controller.createThread('0')
-    await controller.startTurn('thread-new', '', undefined, undefined, 'on-request', ['/tmp/remote-image.png'])
+    await controller.startTurn('thread-new', '', undefined, undefined, false, ['/tmp/remote-image.png'])
     expect(appServer.calls.at(-1)).toMatchObject({
       method: 'turn/start',
       params: { input: [{ type: 'localImage', path: '/tmp/remote-image.png' }] },

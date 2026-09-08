@@ -40,9 +40,9 @@ export const api = {
   logout: (csrf: string) => request<{ ok: boolean }>('/api/session/logout', { method: 'POST', body: '{}' }, csrf),
   threads: () => request<ThreadList>('/api/threads'),
   thread: (id: string) => request<ThreadResponse>(`/api/threads/${encodeURIComponent(id)}`),
-  createThread: (workspaceId: string, csrf: string) => request<ThreadResponse>('/api/threads', {
+  createThread: (workspaceId: string, csrf: string, fullAccess = false) => request<ThreadResponse>('/api/threads', {
     method: 'POST',
-    body: JSON.stringify({ workspaceId }),
+    body: JSON.stringify({ workspaceId, fullAccess }),
   }, csrf),
   resumeThread: (id: string, csrf: string) => request<ThreadResponse>(`/api/threads/${encodeURIComponent(id)}/resume`, {
     method: 'POST',
@@ -52,7 +52,7 @@ export const api = {
     method: 'POST',
     body: '{}',
   }, csrf),
-  startTurn: (id: string, text: string, csrf: string, options: { model?: string; effort?: string; approvalPolicy?: 'on-request' | 'never'; attachmentIds?: string[] } = {}) => request<TurnResponse>(`/api/threads/${encodeURIComponent(id)}/turns`, {
+  startTurn: (id: string, text: string, csrf: string, options: { model?: string; effort?: string; fullAccess?: boolean; attachmentIds?: string[] } = {}) => request<TurnResponse>(`/api/threads/${encodeURIComponent(id)}/turns`, {
     method: 'POST',
     body: JSON.stringify({ text, ...options }),
   }, csrf),

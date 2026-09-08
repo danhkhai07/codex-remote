@@ -31,9 +31,11 @@ ignored `.env`; it is the sole source of deployment-specific configuration:
 | `CODEX_REMOTE_CODEX_BIN` | Codex executable, default `codex` |
 
 Remote secrets are removed from the environment inherited by `codex
-app-server`. The app starts and resumes threads only under the configured
-workspace roots, with `workspace-write`, `on-request` approvals and the user as
-approval reviewer. It exposes no arbitrary shell endpoint.
+app-server`. Approval prompts are disabled for every remote turn. By default,
+threads and turns still use `workspace-write` under the configured workspace
+roots. Explicit YOLO mode changes future turns to `dangerFullAccess`, which can
+access the VPS host and network as the service user. It exposes no arbitrary
+shell endpoint outside authenticated Codex turns.
 
 Eight failed password attempts from the gateway client address trigger a
 15-minute login lockout. A successful login clears that failure window. Session
@@ -121,11 +123,11 @@ plus thread refresh reconcile any missed updates when the page becomes visible.
 Type `/` in the composer to open the local command palette. `/model` discovers
 picker-visible entries from App Server `model/list`; `/effort` uses the selected
 model's advertised reasoning levels. The selection is sent as a `turn/start`
-override on future turns. `/yolo on` saves the `never` approval policy for future
-authenticated turns on this device; `/yolo off` saves `on-request`. The preference
-survives reloads, logout/login and gateway restarts on the same browser origin.
-YOLO deliberately keeps the `workspace-write` sandbox and configured workspace
-roots, and a visible header badge remains until the mode is turned off.
+override on future turns. Approval policy is always `never`. `/yolo on` saves
+`dangerFullAccess` for future authenticated turns on this device; `/yolo off`
+returns future turns to `workspaceWrite`. The preference survives reloads,
+logout/login and gateway restarts on the same browser origin. A visible header
+badge remains while full VPS host access is enabled.
 `/status`, `/new`, `/threads`, `/archive`, `/stop`,
 `/lock`, and `/help` are handled by the Remote client and are never forwarded as
 agent prompts. `/status` also reads live ChatGPT usage windows through

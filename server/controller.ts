@@ -12,8 +12,6 @@ type PendingRequest = {
 }
 
 const APPROVAL_DECISIONS = new Set(['accept', 'acceptForSession', 'decline', 'cancel'])
-const APPROVAL_POLICIES = new Set(['on-request', 'never'])
-
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -120,13 +118,14 @@ export class RemoteController {
     return this.appServer.request('account/rateLimits/read', {})
   }
 
-  async createThread(workspaceId: unknown): Promise<unknown> {
+  async createThread(workspaceId: unknown, fullAccess: unknown = false): Promise<unknown> {
+    if (typeof fullAccess !== 'boolean') throw new Error('Invalid full access setting')
     const cwd = this.#workspacePath(workspaceId)
     const result = await this.appServer.request('thread/start', {
       cwd,
-      approvalPolicy: 'on-request',
+      approvalPolicy: 'never',
       approvalsReviewer: 'user',
-      sandbox: 'workspace-write',
+      sandbox: fullAccess ? 'danger-full-access' : 'workspace-write',
       serviceName: 'codex_remote_control',
     })
     this.#markResumed(threadFromResult(result))
@@ -162,7 +161,7 @@ export class RemoteController {
     const result = await this.appServer.request('thread/resume', {
       threadId,
       cwd,
-      approvalPolicy: 'on-request',
+      approvalPolicy: 'never',
       approvalsReviewer: 'user',
       sandbox: 'workspace-write',
       excludeTurns: true,
@@ -181,13 +180,11 @@ export class RemoteController {
     return result
   }
 
-  async startTurn(threadId: string, text: unknown, model: unknown = undefined, effort: unknown = undefined, approvalPolicy: unknown = 'on-request', imagePaths: readonly string[] = []): Promise<unknown> {
+  async startTurn(threadId: string, text: unknown, model: unknown = undefined, effort: unknown = undefined, fullAccess: unknown = false, imagePaths: readonly string[] = []): Promise<unknown> {
     if (typeof text !== 'string') throw new Error('Instruction text must be a string')
     if (!text.trim() && imagePaths.length === 0) throw new Error('Instruction text or an image is required')
     if (text.length > 100_000) throw new Error('Instruction text is too long')
-    if (typeof approvalPolicy !== 'string' || !APPROVAL_POLICIES.has(approvalPolicy)) {
-      throw new Error('Invalid approval policy')
-    }
+    if (typeof fullAccess !== 'boolean') throw new Error('Invalid full access setting')
     const overrides: { model?: string; effort?: string } = {}
     if (model !== undefined && model !== null) {
       if (typeof model !== 'string' || !model.trim() || model.length > 120) throw new Error('Invalid model')
@@ -220,8 +217,11 @@ export class RemoteController {
     return this.appServer.request('turn/start', {
       threadId,
       cwd,
-      approvalPolicy,
+      approvalPolicy: 'never',
       approvalsReviewer: 'user',
+      sandboxPolicy: fullAccess
+        ? { type: 'dangerFullAccess' }
+        : { type: 'workspaceWrite', writableRoots: [cwd], networkAccess: false },
       input: [
         ...(text.trim() ? [{ type: 'text', text: text.trim(), text_elements: [] }] : []),
         ...imagePaths.map(path => ({ type: 'localImage', path })),

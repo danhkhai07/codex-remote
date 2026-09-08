@@ -275,7 +275,7 @@ export function Conversation({ thread, activeTurnId, items, pendingMessage, yolo
       {rows.length === 0 && !pendingMessage && !activeTurnId && (
         <div className="empty-state">
           <h2>What should Codex work on?</h2>
-          <p>Working in <strong>{shortWorkspace(thread.cwd)}</strong>. {yoloMode ? 'Workspace sandbox on; approval prompts off.' : 'Changes stay sandboxed and approval-gated.'}</p>
+          <p>Working in <strong>{shortWorkspace(thread.cwd)}</strong>. {yoloMode ? 'Full VPS host access is enabled.' : 'Commands run automatically inside the workspace sandbox.'}</p>
           <div className="starter-prompts">
             {starterPrompts.map(prompt => <button className="starter-prompt" key={prompt} onClick={() => onSuggestion(prompt)}>{prompt}</button>)}
           </div>
@@ -821,8 +821,8 @@ export function App() {
     if (yoloMatch) {
       const query = (yoloMatch[1] ?? '').toLocaleLowerCase()
       return [
-        { key: 'yolo-on', label: 'on', description: 'Disable approval prompts; keep workspace sandbox', fill: '/yolo on', badge: yoloMode ? 'Active' : undefined },
-        { key: 'yolo-off', label: 'off', description: 'Restore approval prompts', fill: '/yolo off', badge: yoloMode ? undefined : 'Active' },
+        { key: 'yolo-on', label: 'on', description: 'Grant future turns full VPS host access', fill: '/yolo on', badge: yoloMode ? 'Active' : undefined },
+        { key: 'yolo-off', label: 'off', description: 'Return future turns to the workspace sandbox', fill: '/yolo off', badge: yoloMode ? undefined : 'Active' },
       ].filter((option) => option.label.startsWith(query))
     }
 
@@ -848,7 +848,7 @@ export function App() {
     setBusy(true)
     setError('')
     try {
-      const response = await api.createThread(session.workspaces[0]?.id ?? '0', session.csrf)
+      const response = await api.createThread(session.workspaces[0]?.id ?? '0', session.csrf, yoloMode)
       await refreshThreads()
       await openThread(response.thread)
     } catch (requestError) {
@@ -889,7 +889,8 @@ export function App() {
           { label: 'Model', value: effectiveModel || 'Server default' },
           { label: 'Effort', value: selectedEffort || effectiveModelOption?.defaultReasoningEffort || 'Model default' },
           { label: 'Thread', value: activeTurnId ? 'Working' : typeof runtimeStatus === 'string' ? runtimeStatus : 'Idle' },
-          { label: 'Approvals', value: yoloMode ? 'Disabled (YOLO)' : `${selectedPending.length} pending` },
+          { label: 'Approvals', value: 'Disabled' },
+          { label: 'Sandbox', value: yoloMode ? 'Host access (YOLO)' : 'Workspace only' },
           { label: 'Buffered events', value: String(selectedEvents.length) },
           ...usageLines,
         ])
@@ -907,8 +908,8 @@ export function App() {
         const enabled = argument === 'on'
         setYoloMode(enabled)
         showCommandNotice(enabled ? 'YOLO mode enabled' : 'YOLO mode disabled', [
-          { label: 'Approval prompts', value: enabled ? 'Disabled for future turns' : 'Restored for future turns' },
-          { label: 'Workspace sandbox', value: 'Still enforced' },
+          { label: 'Approval prompts', value: 'Always disabled' },
+          { label: 'Next turn sandbox', value: enabled ? 'Full VPS host access' : 'Workspace only' },
           { label: 'Scope', value: 'Saved on this device until you change it' },
         ])
         return
@@ -1028,7 +1029,7 @@ export function App() {
       const response = await api.startTurn(thread.id, instruction, session.csrf, {
         model: effectiveModel ?? undefined,
         effort: selectedEffort ?? undefined,
-        approvalPolicy: yoloMode ? 'never' : 'on-request',
+        fullAccess: yoloMode,
         attachmentIds: uploadedIds,
       })
       setAttachments([])
@@ -1219,10 +1220,10 @@ export function App() {
             {yoloMode && <button className="yolo-chip" type="button" onClick={() => {
               setYoloMode(false)
               showCommandNotice('YOLO mode disabled', [
-                { label: 'Approval prompts', value: 'Restored for future turns' },
-                { label: 'Workspace sandbox', value: 'Still enforced' },
+                { label: 'Approval prompts', value: 'Always disabled' },
+                { label: 'Next turn sandbox', value: 'Workspace only' },
               ])
-            }} title="Approval prompts are disabled. Click to restore them.">YOLO</button>}
+            }} title="Full VPS host access is enabled. Click to return future turns to the workspace sandbox.">YOLO</button>}
             {pending.length > 0 && <span className="pending-badge" title={`${pending.length} action${pending.length === 1 ? '' : 's'} needed`}>{pending.length}</span>}
             <button className={`quiet-button notification-button ${notificationsEnabled ? 'is-enabled' : ''}`} type="button" disabled={notificationBusy} onClick={() => void toggleNotifications()} title={notificationsEnabled ? 'Completion notifications are on' : 'Enable completion notifications'} aria-label={notificationsEnabled ? 'Disable completion notifications' : 'Enable completion notifications'}>🔔<span>{notificationBusy ? 'Saving…' : notificationsEnabled ? 'On' : 'Notify'}</span></button>
             {installPrompt && <button className="quiet-button install-button" onClick={() => void installApp()}>Install</button>}

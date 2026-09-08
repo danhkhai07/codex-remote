@@ -317,7 +317,7 @@ export function createRemoteHttpServer(
       }
       if (url.pathname === '/api/threads' && method === 'POST') {
         const body = await readJson(req)
-        json(res, 201, await controller.createThread(body.workspaceId))
+        json(res, 201, await controller.createThread(body.workspaceId, body.fullAccess ?? false))
         return
       }
 
@@ -340,7 +340,7 @@ export function createRemoteHttpServer(
       if (turnThreadId && method === 'POST') {
         const body = await readJson(req)
         if (!attachments && body.attachmentIds !== undefined) throw new HttpError(503, 'Image attachments are unavailable')
-        const operation = (paths: string[]) => controller.startTurn(turnThreadId, body.text ?? '', body.model, body.effort, body.approvalPolicy, paths)
+        const operation = (paths: string[]) => controller.startTurn(turnThreadId, body.text ?? '', body.model, body.effort, body.fullAccess ?? false, paths)
         json(res, 202, attachments
           ? await attachments.use(body.attachmentIds, session, operation)
           : await operation([]))
