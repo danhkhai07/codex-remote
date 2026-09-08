@@ -193,7 +193,10 @@ export class RemoteController {
       if (typeof model !== 'string' || !model.trim() || model.length > 120) throw new Error('Invalid model')
       if (this.#models.size === 0) await this.listModels()
       const selected = this.#models.get(model)
-      if (!selected) throw new Error('Unknown model')
+      if (!selected) {
+        const available = [...this.#models.keys()]
+        throw new Error(`Unknown model: ${model} (available: ${available.length ? available.slice(0, 50).join(', ') : 'none'})`)
+      }
       overrides.model = model
 
       if (effort !== undefined && effort !== null) {
