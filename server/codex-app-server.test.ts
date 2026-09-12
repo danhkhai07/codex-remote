@@ -3,6 +3,20 @@ import { describe, expect, it } from 'vitest'
 import { CodexAppServer, type AppServerMessage } from './codex-app-server.js'
 
 describe('CodexAppServer', () => {
+  it('reads a large thread history without discarding its RPC response', async () => {
+    const fixture = fileURLToPath(new URL('./fixtures/fake-codex.mjs', import.meta.url))
+    const appServer = new CodexAppServer(process.execPath, [fixture])
+    try {
+      const result = await appServer.request('thread/read', {
+        threadId: 'thr_large', includeTurns: true,
+      }, 5_000) as { thread: { id: string; turns: { items: { text: string }[] }[] } }
+      expect(result.thread.id).toBe('thr_large')
+      expect(result.thread.turns[0].items[0].text).toHaveLength(10_000_000)
+    } finally {
+      appServer.stop()
+    }
+  })
+
   it('correlates RPC responses and forwards every notification and request', async () => {
     const fixture = fileURLToPath(new URL('./fixtures/fake-codex.mjs', import.meta.url))
     const appServer = new CodexAppServer(process.execPath, [fixture])

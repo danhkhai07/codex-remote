@@ -18,6 +18,16 @@ describe('sanitizeForBrowser', () => {
 })
 
 describe('EventHub replay metadata', () => {
+  it('resets an old server epoch even when its cursor is below the current event count', () => {
+    const hub = new EventHub()
+    for (let i = 0; i < 5; i++) hub.publish('state', { state: 'ready' })
+    const write = vi.fn(() => true)
+    const response = { writeHead: vi.fn(), flushHeaders: vi.fn(), write } as unknown as ServerResponse
+    const unsubscribe = hub.subscribe(response, 2, 'previous-server')
+    unsubscribe()
+    expect(write).toHaveBeenCalledWith(`event: stream-state\ndata: ${JSON.stringify({ epoch: hub.epoch, reset: true })}\n\n`)
+    expect(write.mock.calls.map(call => call[0]).join('')).toContain('"id":1')
+  })
   it('flushes the handshake and sends named heartbeats only while subscribed', () => {
     vi.useFakeTimers()
     const write = vi.fn(() => true)

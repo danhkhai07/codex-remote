@@ -151,7 +151,9 @@ export class CodexAppServer extends EventEmitter {
   }
 
   #handleLine(line: string): void {
-    if (Buffer.byteLength(line) > 5_000_000) {
+    // Full thread histories can exceed 5 MB even for ordinary document work.
+    // Keep a bounded allowance large enough for those RPC responses.
+    if (Buffer.byteLength(line) > 32_000_000) {
       this.emit('log', 'Discarded an oversized Codex App Server message')
       return
     }

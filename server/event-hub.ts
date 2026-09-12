@@ -1,4 +1,5 @@
 import type { ServerResponse } from 'node:http'
+import { randomUUID } from 'node:crypto'
 
 export type RemoteEvent = {
   id: number
@@ -41,6 +42,7 @@ export function encodeEvent(event: RemoteEvent, replayed = false): string[] {
 }
 
 export class EventHub {
+  readonly epoch = randomUUID()
   readonly #events: RemoteEvent[] = []
   readonly #subscribers = new Set<Subscriber>()
   #nextId = 1
@@ -62,7 +64,7 @@ export class EventHub {
     return event
   }
 
-  subscribe(res: ServerResponse, afterId: number): () => void {
+  subscribe(res: ServerResponse, afterId: number, previousEpoch?: string): () => void {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
@@ -74,7 +76,9 @@ export class EventHub {
     res.write('event: ready\ndata: {}\n\n')
     // A device cursor can outlive a gateway restart, while event IDs restart at
     // one. Treat a cursor from a future ID as a new epoch and replay the backlog.
-    const replayAfterId = afterId >= this.#nextId ? 0 : afterId
+    const reset = Boolean(previousEpoch && previousEpoch !== this.epoch) || afterId >= this.#nextId
+    const replayAfterId = reset ? 0 : afterId
+    res.write(`event: stream-state\ndata: ${JSON.stringify({ epoch: this.epoch, reset })}\n\n`)
     for (const event of this.#events) {
       if (event.id > replayAfterId) {
         for (const frame of encodeEvent(event, replayAfterId === 0)) res.write(frame)

@@ -17,6 +17,13 @@ lines.on('line', (line) => {
     send({ method: 'warning', params: { message: 'fixture notification' } })
     return
   }
+  if (message.method === 'thread/read') {
+    send({ id: message.id, result: { thread: {
+      id: message.params.threadId,
+      turns: [{ items: [{ type: 'agentMessage', text: 'x'.repeat(10_000_000) }] }],
+    } } })
+    return
+  }
   if (message.method === 'thread/start') {
     send({ id: message.id, result: { thread: { id: 'thr_fixture', cwd: message.params.cwd } } })
     send({

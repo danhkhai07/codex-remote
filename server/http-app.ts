@@ -295,7 +295,7 @@ export function createRemoteHttpServer(
       }
       if (url.pathname === '/api/events' && method === 'GET') {
         const lastId = Number(req.headers['last-event-id'] ?? url.searchParams.get('after') ?? 0)
-        const unsubscribe = controller.events.subscribe(res, Number.isFinite(lastId) ? lastId : 0)
+        const unsubscribe = controller.events.subscribe(res, Number.isFinite(lastId) ? lastId : 0, url.searchParams.get('epoch') ?? undefined)
         res.on('close', unsubscribe)
         return
       }
