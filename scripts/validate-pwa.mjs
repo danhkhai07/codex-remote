@@ -45,6 +45,12 @@ const html = (await read('index.html')).toString('utf8')
 assert.match(html, /rel="manifest"/)
 assert.match(html, /rel="apple-touch-icon"/)
 
+const client = (await Promise.all(
+  [...html.matchAll(/src="(\/assets\/[^"?#]+\.js)"/g)].map(match => read(match[1].slice(1))),
+)).map(buffer => buffer.toString('utf8')).join('\n')
+assert.match(client, /\/sw\.js\?v=/)
+assert.match(client, /updateViaCache:\s*["'\x60]none["'\x60]/)
+
 const worker = (await read('sw.js')).toString('utf8')
 assert.match(worker, /url\.pathname\.startsWith\('\/api\/'\)/)
 assert.match(worker, /SKIP_WAITING/)

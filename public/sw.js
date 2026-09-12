@@ -1,4 +1,4 @@
-const CACHE_NAME = 'codex-remote-shell-v3'
+const CACHE_NAME = `codex-remote-shell-v5-${new URL(self.location.href || `${self.location.origin}/sw.js`).searchParams.get('v') || 'dev'}`
 const CORE_ASSETS = [
   '/manifest.webmanifest',
   '/codex-remote.svg',
@@ -6,6 +6,7 @@ const CORE_ASSETS = [
   '/icon-512.png',
   '/icon-maskable-512.png',
   '/apple-touch-icon.png',
+  '/recovery.css',
 ]
 
 async function cacheApplicationShell() {
@@ -17,8 +18,9 @@ async function cacheApplicationShell() {
   const bundlePaths = [...html.matchAll(/(?:src|href)="(\/assets\/[^"?#]+)"/g)]
     .map((match) => match[1])
 
-  await cache.put('/', response)
   await cache.addAll([...CORE_ASSETS, ...new Set(bundlePaths)])
+  // Commit the HTML last: failed asset downloads must not replace a usable shell.
+  await cache.put('/', response)
 }
 
 self.addEventListener('install', (event) => {
@@ -28,7 +30,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => Promise.all(
-      keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)),
+      keys.filter((key) => key.startsWith('codex-remote-shell-') && key !== CACHE_NAME).map((key) => caches.delete(key)),
     )).then(() => self.clients.claim()),
   )
 })
@@ -76,8 +78,19 @@ self.addEventListener('notificationclick', (event) => {
 async function networkFirst(request, fallbackPath) {
   const cache = await caches.open(CACHE_NAME)
   try {
-    const response = await fetch(request)
-    if (response.ok && response.type === 'basic') await cache.put(request, response.clone())
+    const response = await fetch(request, { signal: AbortSignal.timeout(8_000) })
+    if (!response.ok) throw new Error('Gateway unavailable')
+    if (response.type === 'basic') {
+      const html = await response.clone().text()
+      const paths = [...html.matchAll(/(?:src|href)="(\/assets\/[^"?#]+)"/g)].map(match => match[1])
+      await Promise.all([...new Set(paths)].map(async path => {
+        if (await cache.match(path)) return
+        const asset = await fetch(path, { signal: AbortSignal.timeout(8_000) })
+        if (!asset.ok) throw new Error('Application bundle unavailable')
+        await cache.put(path, asset)
+      }))
+      await cache.put(request, response.clone())
+    }
     return response
   } catch {
     return (await cache.match(request)) ?? (await cache.match(fallbackPath)) ?? Response.error()

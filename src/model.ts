@@ -30,13 +30,15 @@ export function shortWorkspace(path: string): string {
 }
 
 export function formatTime(epochSeconds: number | undefined): string {
-  if (!epochSeconds) return ''
+  if (!epochSeconds || !Number.isFinite(epochSeconds)) return ''
+  const date = new Date(epochSeconds * 1_000)
+  if (!Number.isFinite(date.getTime())) return ''
   return new Intl.DateTimeFormat(undefined, {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-  }).format(new Date(epochSeconds * 1_000))
+  }).format(date)
 }
 
 export function eventThreadId(event: RemoteEvent): string | null {

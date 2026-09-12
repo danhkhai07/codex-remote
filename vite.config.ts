@@ -11,7 +11,9 @@ export default defineConfig(({ mode }) => {
   }
   return {
     plugins: [react()],
+    define: { __CODEX_REMOTE_BUILD_ID__: JSON.stringify(Date.now().toString(36)) },
     server: { allowedHosts },
-    build: { sourcemap: true },
+    // Open tabs may still request an earlier hashed bundle during an update.
+    build: { sourcemap: true, emptyOutDir: false },
   }
 })

@@ -1,0 +1,4 @@
+/* Stable bootstrap styling remains available if a hashed JS/CSS bundle fails. */
+.boot-recovery { box-sizing: border-box; min-height: 100vh; margin: 0; padding: 48px 24px; background: #080b09; color: #f2f7f3; font: 16px/1.6 system-ui,sans-serif; text-align: center; }
+.boot-recovery h1 { font-size: 22px; }
+.boot-recovery a { display: inline-block; padding: 12px 20px; border-radius: 10px; color: #172000; background: #dfff78; text-decoration: none; }

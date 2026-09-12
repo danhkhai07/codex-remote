@@ -1,17 +1,19 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
+import { AppRecovery } from './AppRecovery'
+import { flushScreenState } from './screenState'
 import './styles.css'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <AppRecovery><App /></AppRecovery>
   </StrictMode>,
 )
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').then((registration) => {
+    navigator.serviceWorker.register(`/sw.js?v=${encodeURIComponent(__CODEX_REMOTE_BUILD_ID__)}`, { updateViaCache: 'none' }).then((registration) => {
       const announceUpdate = (worker: ServiceWorker | null) => {
         if (!worker || !navigator.serviceWorker.controller) return
         window.dispatchEvent(new CustomEvent('codex-remote:update-ready', { detail: worker }))
@@ -32,6 +34,7 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (refreshing) return
       refreshing = true
+      flushScreenState()
       window.location.reload()
     })
   })
