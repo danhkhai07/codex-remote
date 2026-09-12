@@ -34,6 +34,9 @@ export type Thread = {
   model?: string | null
   turns?: Turn[]
   historyUnavailable?: boolean
+  historyCacheTruncated?: boolean
+  historyTruncation?: 'tail'
+  latestTurn?: { id: string; status: string }
 }
 
 export type ThreadList = {
@@ -67,6 +70,27 @@ export type ModelOption = {
 export type ModelList = {
   data: ModelOption[]
   nextCursor?: string | null
+}
+
+export type DirectoryListing = {
+  path: string
+  parentPath: string | null
+  entries: Array<{ name: string; path: string; kind: 'directory' | 'file' | 'unavailable'; symlink: boolean; size: number | null; modifiedAt: string | null }>
+  total: number
+  offset: number
+  limit: number
+}
+
+export type ServerFileInfo = {
+  path: string
+  name: string
+  size: number
+  extension: string
+  contentType: string
+  kind: 'text' | 'image' | 'pdf' | 'docx' | 'pptx' | 'download'
+  previewable: boolean
+  createdAt: string
+  modifiedAt: string
 }
 
 export type RateLimitWindow = {

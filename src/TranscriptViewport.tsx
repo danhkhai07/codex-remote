@@ -1,4 +1,5 @@
 import { type ReactNode, useLayoutEffect, useRef, useState } from 'react'
+import { readScreenState, writeScreenState } from './screenState'
 
 export type ReadingPosition = { top: number; following: boolean }
 
@@ -11,7 +12,8 @@ export function TranscriptViewport({ children, positions, viewKey, ready }: {
 }) {
   const viewport = useRef<HTMLDivElement>(null)
   const content = useRef<HTMLDivElement>(null)
-  const following = useRef(positions.get(viewKey)?.following ?? true)
+  const savedPosition = positions.get(viewKey) ?? readScreenState<ReadingPosition | null>(`reading:${viewKey}`, null)
+  const following = useRef(savedPosition?.following ?? true)
   const [reading, setReading] = useState(!following.current)
   const [unread, setUnread] = useState(false)
   const lastTop = useRef(0)
@@ -20,6 +22,9 @@ export function TranscriptViewport({ children, positions, viewKey, ready }: {
   function pause() {
     following.current = false
     setReading(true)
+    const position = { top: viewport.current?.scrollTop ?? 0, following: false }
+    positions.set(viewKey, position)
+    writeScreenState(`reading:${viewKey}`, position)
   }
 
   function latest() {
@@ -36,7 +41,7 @@ export function TranscriptViewport({ children, positions, viewKey, ready }: {
     if (!ready) return
     const element = viewport.current!
     const body = content.current!
-    const saved = positions.get(viewKey)
+    const saved = positions.get(viewKey) ?? readScreenState<ReadingPosition | null>(`reading:${viewKey}`, null)
     element.scrollTop = saved && !saved.following ? saved.top : element.scrollHeight
     lastTop.current = element.scrollTop
     let height = body.scrollHeight
@@ -44,6 +49,9 @@ export function TranscriptViewport({ children, positions, viewKey, ready }: {
       if (following.current) {
         element.scrollTop = element.scrollHeight
         lastTop.current = element.scrollTop
+        const position = { top: element.scrollTop, following: following.current }
+        positions.set(viewKey, position)
+        writeScreenState(`reading:${viewKey}`, position)
       } else if (body.scrollHeight > height) {
         setUnread(true)
       }
@@ -80,6 +88,9 @@ export function TranscriptViewport({ children, positions, viewKey, ready }: {
           setUnread(false)
         } else if (element.scrollTop < lastTop.current - 1) pause()
         lastTop.current = element.scrollTop
+        const position = { top: element.scrollTop, following: following.current }
+        positions.set(viewKey, position)
+        writeScreenState(`reading:${viewKey}`, position)
       }}
       onClickCapture={(event) => {
         if ((event.target as HTMLElement).closest('summary')) pause()
