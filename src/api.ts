@@ -62,8 +62,9 @@ export const api = {
     method: 'POST',
     body: JSON.stringify({ text, ...options }),
   }, csrf),
-  interrupt: (id: string, turnId: string, csrf: string) => request<Record<string, unknown>>(`/api/threads/${encodeURIComponent(id)}/interrupt`, {
+  interrupt: (id: string, turnId: string, csrf: string, signal?: AbortSignal) => request<Record<string, unknown>>(`/api/threads/${encodeURIComponent(id)}/interrupt`, {
     method: 'POST',
+    signal,
     body: JSON.stringify({ turnId }),
   }, csrf),
   pending: () => request<{ data: PendingRequest[] }>('/api/pending'),

@@ -47,6 +47,7 @@ export class RemoteController {
   readonly #resumedThreads = new Set<string>()
   readonly #models = new Map<string, Record<string, unknown>>()
   readonly #agentMessages = new Map<string, AgentMessages>()
+  readonly #interrupts = new Map<string, Promise<unknown>>()
   onTurnCompleted?: (threadId: string, turnId: string, answer: string) => void
 
   constructor(config: RemoteConfig, appServer = new CodexAppServer(config.codexBin)) {
@@ -307,8 +308,30 @@ export class RemoteController {
 
   async interruptTurn(threadId: string, turnId: unknown): Promise<unknown> {
     if (typeof turnId !== 'string' || !turnId) throw new Error('turnId is required')
-    if (!this.#resumedThreads.has(threadId)) await this.resumeThread(threadId)
-    return this.appServer.request('turn/interrupt', { threadId, turnId })
+    const key = `${threadId}:${turnId}`
+    const pending = this.#interrupts.get(key)
+    if (pending) return pending
+    const operation = (async () => {
+      if (!this.#resumedThreads.has(threadId)) await this.resumeThread(threadId)
+      let completed: (message: AppServerMessage) => void = () => {}
+      const completion = new Promise(resolve => {
+        completed = message => {
+          const params = asObject(message.params)
+          if (message.method === 'turn/completed' && params.threadId === threadId && asObject(params.turn).id === turnId) {
+            resolve({ stopped: true })
+          }
+        }
+        this.appServer.on('notification', completed)
+      })
+      try {
+        return await Promise.race([
+          this.appServer.request('turn/interrupt', { threadId, turnId }, 10_000),
+          completion,
+        ])
+      } finally { this.appServer.off('notification', completed) }
+    })()
+    this.#interrupts.set(key, operation)
+    try { return await operation } finally { this.#interrupts.delete(key) }
   }
 
   respondToRequest(key: string, body: unknown): void {
