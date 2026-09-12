@@ -106,7 +106,16 @@ describe('RemoteController', () => {
     await expect(controller.renameThread('thread-stored', 'New name')).rejects.toThrow('Rename failed')
     expect(publish).not.toHaveBeenCalled()
   })
-  it('dispatches completion without browser clients only for allowed loaded threads', async () => {
+  it('caps thread/read responses at 5 MB without changing the original history', async () => {
+    const appServer = new StubAppServer()
+    const source = { thread: { id: 'large', cwd: '/workspace', turns: [{ id: 'done', status: 'completed', items: [{ id: 'answer', type: 'agentMessage', text: 'x'.repeat(6_000_000) }] }] } }
+    vi.spyOn(appServer, 'request').mockResolvedValue(source)
+    const controller = new RemoteController(config, appServer)
+    const result = await controller.readThread('large')
+    expect(Buffer.byteLength(JSON.stringify(result), 'utf8')).toBeLessThanOrEqual(5_000_000)
+    expect(result).toMatchObject({ thread: { historyTruncation: 'tail', latestTurn: { id: 'done', status: 'completed' } } })
+    expect(source.thread.turns[0].items[0].text).toHaveLength(6_000_000)
+  })  it('dispatches completion without browser clients only for allowed loaded threads', async () => {
     const appServer = new StubAppServer()
     const controller = new RemoteController(config, appServer)
     controller.onTurnCompleted = vi.fn()

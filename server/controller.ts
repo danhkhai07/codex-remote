@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { RemoteConfig } from './config.js'
 import { CodexAppServer, type AppServerMessage, type JsonRpcId } from './codex-app-server.js'
 import { EventHub } from './event-hub.js'
+import { jsonBytes, limitConversation, MAX_CONVERSATION_BYTES } from './conversation-size.js'
 
 type PendingRequest = {
   key: string
@@ -198,8 +199,10 @@ export class RemoteController {
     try {
       const result = await this.appServer.request('thread/read', { threadId, includeTurns: true })
       this.#assertAllowedThread(result)
-      this.#cacheThread(threadFromResult(result))
-      return result
+      const wrapper = { ...asObject(result), thread: null }
+      const thread = limitConversation(threadFromResult(result), MAX_CONVERSATION_BYTES - jsonBytes(wrapper) + 4)
+      this.#cacheThread(thread)
+      return { ...asObject(result), thread }
     } catch (error) {
       if (!(error instanceof Error)) throw error
       const recoverable = error.message.includes('no rollout found') ||
