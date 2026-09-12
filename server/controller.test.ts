@@ -75,6 +75,32 @@ class StubAppServer extends CodexAppServer {
 }
 
 describe('RemoteController', () => {
+  it('returns only distinct assistant message IDs, including history beyond the display cap', async () => {
+    const appServer = new StubAppServer()
+    const source = { thread: { id: 'messages', cwd: '/workspace', turns: [{ id: 't1', items: [
+      { id: 'user', type: 'userMessage', text: 'Hi' },
+      { id: 'tool', type: 'commandExecution', text: 'x'.repeat(6_000_000) },
+      { id: 'reply', type: 'agentMessage', text: 'Hello' },
+      { id: 'reply', type: 'agentMessage', text: 'Hello' },
+      { id: 'blank', type: 'agentMessage', text: ' ' },
+    ] }, { id: 't2', items: [{ id: 'reply', type: 'agentMessage', text: 'Another reply' }] }] } }
+    vi.spyOn(appServer, 'request').mockResolvedValue(source)
+    const controller = new RemoteController(config, appServer)
+    expect(await controller.readMessageIds('messages')).toEqual({ ids: ['t1:reply', 't2:reply'] })
+    source.thread.cwd = '/outside'
+    await expect(controller.readMessageIds('messages')).rejects.toThrow()
+  })
+
+  it('caps thread/read responses at 5 MB without changing the original history', async () => {
+    const appServer = new StubAppServer()
+    const source = { thread: { id: 'large', cwd: '/workspace', turns: [{ id: 'done', status: 'completed', items: [{ id: 'answer', type: 'agentMessage', text: 'x'.repeat(6_000_000) }] }] } }
+    vi.spyOn(appServer, 'request').mockResolvedValue(source)
+    const controller = new RemoteController(config, appServer)
+    const result = await controller.readThread('large')
+    expect(Buffer.byteLength(JSON.stringify(result), 'utf8')).toBeLessThanOrEqual(5_000_000)
+    expect(result).toMatchObject({ thread: { historyTruncation: 'tail', latestTurn: { id: 'done', status: 'completed' } } })
+    expect(source.thread.turns[0].items[0].text).toHaveLength(6_000_000)
+  })
   it('validates conversation names before issuing any RPC', () => {
     expect(normalizeThreadName('  Báo giá phụ tùng 🚗  ')).toBe('Báo giá phụ tùng 🚗')
     for (const value of [undefined, null, 42, '', '   ', 'a'.repeat(201), 'two\nlines', 'bad\u0000name']) {
@@ -82,6 +108,7 @@ describe('RemoteController', () => {
     }
     expect(normalizeThreadName('a'.repeat(200))).toHaveLength(200)
   })
+
   it('saves names through Codex without resuming or interrupting a running conversation', async () => {
     const appServer = new StubAppServer()
     const controller = new RemoteController(config, appServer)
@@ -93,6 +120,7 @@ describe('RemoteController', () => {
     expect(publish).toHaveBeenCalledWith('codex', { method: 'thread/name/updated', params: { threadId: 'thread-stored', threadName: 'Hợp đồng mới' } })
     await expect(controller.readThread('thread-stored')).resolves.toMatchObject({ thread: { name: 'Hợp đồng mới' } })
   })
+
   it('does not rename an inaccessible thread or publish a failed rename', async () => {
     const appServer = new StubAppServer()
     const controller = new RemoteController(config, appServer)
@@ -106,16 +134,8 @@ describe('RemoteController', () => {
     await expect(controller.renameThread('thread-stored', 'New name')).rejects.toThrow('Rename failed')
     expect(publish).not.toHaveBeenCalled()
   })
-  it('caps thread/read responses at 5 MB without changing the original history', async () => {
-    const appServer = new StubAppServer()
-    const source = { thread: { id: 'large', cwd: '/workspace', turns: [{ id: 'done', status: 'completed', items: [{ id: 'answer', type: 'agentMessage', text: 'x'.repeat(6_000_000) }] }] } }
-    vi.spyOn(appServer, 'request').mockResolvedValue(source)
-    const controller = new RemoteController(config, appServer)
-    const result = await controller.readThread('large')
-    expect(Buffer.byteLength(JSON.stringify(result), 'utf8')).toBeLessThanOrEqual(5_000_000)
-    expect(result).toMatchObject({ thread: { historyTruncation: 'tail', latestTurn: { id: 'done', status: 'completed' } } })
-    expect(source.thread.turns[0].items[0].text).toHaveLength(6_000_000)
-  })  it('deduplicates Stop and resolves on the exact completion even if the RPC acknowledgement is lost', async () => {
+
+  it('deduplicates Stop and resolves on the exact completion even if the RPC acknowledgement is lost', async () => {
     const appServer = new StubAppServer()
     const controller = new RemoteController(config, appServer)
     await controller.createThread('0')
@@ -134,6 +154,7 @@ describe('RemoteController', () => {
     await expect(duplicate).resolves.toEqual({ stopped: true })
     expect(appServer.listenerCount('notification')).toBe(baseline)
   })
+
   it('cleans up a failed Stop so retry is possible without restarting other conversations', async () => {
     const appServer = new StubAppServer()
     const controller = new RemoteController(config, appServer)
@@ -145,21 +166,7 @@ describe('RemoteController', () => {
     await expect(controller.interruptTurn('thread-new', 'target')).resolves.toEqual({})
     expect(request).toHaveBeenCalledTimes(2)
   })
-  it('returns only distinct assistant message IDs, including history beyond the display cap', async () => {
-    const appServer = new StubAppServer()
-    const source = { thread: { id: 'messages', cwd: '/workspace', turns: [{ id: 't1', items: [
-      { id: 'user', type: 'userMessage', text: 'Hi' },
-      { id: 'tool', type: 'commandExecution', text: 'x'.repeat(6_000_000) },
-      { id: 'reply', type: 'agentMessage', text: 'Hello' },
-      { id: 'reply', type: 'agentMessage', text: 'Hello' },
-      { id: 'blank', type: 'agentMessage', text: ' ' },
-    ] }, { id: 't2', items: [{ id: 'reply', type: 'agentMessage', text: 'Another reply' }] }] } }
-    vi.spyOn(appServer, 'request').mockResolvedValue(source)
-    const controller = new RemoteController(config, appServer)
-    expect(await controller.readMessageIds('messages')).toEqual({ ids: ['t1:reply', 't2:reply'] })
-    source.thread.cwd = '/outside'
-    await expect(controller.readMessageIds('messages')).rejects.toThrow()
-  })
+
   it('dispatches completion without browser clients only for allowed loaded threads', async () => {
     const appServer = new StubAppServer()
     const controller = new RemoteController(config, appServer)

@@ -86,11 +86,19 @@ unauthenticated event streams. Login attempts are bounded per direct peer.
 
 ## Operation
 
+Use the pencil beside the active conversation title or beside a sidebar entry to
+rename that conversation. Names are trimmed, limited to 200 characters, and saved
+via Codex `thread/name/set`, not just browser storage. Renaming leaves drafts and
+running turns untouched; authenticated SSE clients receive `thread/name/updated`.
+The dialog preserves input on failure, disables saving offline, and supports
+Cancel/Escape and keyboard focus trapping.
+
 The UI lists only threads whose recorded working directory matches an allowed
 root. Selecting or sending to a thread resumes it through App Server so live
-notifications reach the Server-Sent Events connection. Every App Server message
-is retained in a bounded in-memory ring and rendered under **All output**; thread
-history remains persisted by Codex itself.
+notifications reach the Server-Sent Events connection. The server retains a bounded
+in-memory event ring for reconnects; the client applies events to the conversation
+without retaining a separate raw-output feed. Thread history remains persisted by
+Codex itself. The conversation toolbar also opens the working-directory file browser.
 
 Large events are delivered as bounded `fragment` SSE frames and reassembled
 losslessly by the client. The SSE cursor advances only on the final fragment,
@@ -108,10 +116,42 @@ idle. Signed browser sessions remain valid until expiry when the signing secret
 is preserved, and persisted Codex threads can be resumed after reconnecting.
 
 The PWA stores the latest selected thread, its live transcript, thread-list
-metadata and the last received event ID in IndexedDB on that device. It renders
-that snapshot immediately after session validation, then refreshes from the
-gateway and replays only newer events. Explicit logout clears the snapshot; it
-contains no password, cookie, Codex credential or pending image file.
+metadata and the event ID/server epoch in IndexedDB on that device. Lightweight
+screen state (open file/link/browser, folder filters, draft text per conversation,
+reading positions, Markdown mode and Word zoom/scroll) is saved locally with a
+seven-day lifetime. Draft images are stored separately in IndexedDB as files,
+not temporary blob URLs. Device storage is best-effort when quota is exhausted.
+
+Eight recently opened conversation histories are retained in an in-memory LRU and
+the device snapshot. Each cached history is limited to approximately 1 MB / 400
+recent items; partial history is labeled until the server refreshes it. Switching
+renders cached history immediately, including offline, while read/resume requests
+run separately. Stale requests cannot overwrite the newly selected conversation.
+History is not serialized into synchronous localStorage, and blocked IndexedDB
+operations time out rather than holding startup indefinitely.
+
+Persisted UI values are validated before rendering. A render error offers recovery
+without deleting drafts or logging out, and a static reload link remains when the
+JavaScript entry bundle fails to load. Shell cache updates publish HTML only after
+its bundles are available and use the prior shell on gateway errors. Hashed build
+assets are retained for already-open tabs; deployment maintenance should account
+for these retained assets when managing disk usage.
+
+A previously verified, unexpired session's workspace metadata can display the
+cached screen while session validation retries in the background. Credentials
+and CSRF tokens are not cached; sending remains disabled until validation succeeds.
+Only an actual 401 opens the login screen, not a network error or gateway timeout.
+Explicit logout clears these private snapshots and drafts. File contents are
+fetched again on cold reload; external cross-origin frames and native PDF viewers
+cannot expose their internal scroll/navigation state to the app.
+
+Stop has independent per-conversation progress and duplicate-click protection.
+An RPC acknowledgement alone does not mark a turn stopped: completion events or
+bounded history polling must confirm the exact turn is terminal. After 20 seconds
+without confirmation the UI allows retry; the interrupt RPC itself has a 10-second
+timeout and duplicate server requests are coalesced. Stop never kills the shared
+App Server or other conversations. Neither instructions nor Stop are automatically
+resent on reconnect.
 
 Browsers, especially iOS, may suspend all page JavaScript in the background, so
 no PWA can promise a permanent SSE connection. Codex Remote keeps SSE connected
@@ -143,6 +183,37 @@ accepted image remains readable until its turn completes, then is deleted; a
 24-hour cleanup fallback covers a missing completion event. A rejected request
 keeps the browser draft available to retry.
 
+Absolute file links in agent messages open an authenticated file viewer instead
+of navigating the PWA to a host filesystem path. The viewer renders UTF-8
+text/source files, Word DOCX, PDF and signature-validated PNG/JPEG/WebP/GIF images, honors
+the optional `:line` or `#L…` target for text, and offers a **Download** action
+for every regular file type. Downloads use an attachment response so the same
+link can save onto the phone, tablet or computer currently running Codex Remote.
+
+`GET /api/files/list` is authenticated and read-only. It lists one canonical
+directory within configured workspace roots, supports filename search, hidden-file
+filtering and pagination (100 entries by default, maximum 200). Child symlinks are
+checked before metadata is returned; unavailable/outside targets cannot be opened.
+The Files dialog starts at the conversation cwd and preserves its location while
+the existing file preview is open above it.
+
+Word preview is capped at 20 MB and lazy-loads the DOCX renderer. It preserves
+document widths and provides fit/zoom controls with scrolling on mobile. The
+authenticated `/api/files/docx-frame` isolates document styles; its CSP and iframe
+sandbox disable scripts and external resources. Images and fonts are embedded data
+URLs, HTML alternative chunks are disabled, and links route through the existing
+file/link viewers. Preview is approximate; downloads retain the original DOCX.
+
+The gateway resolves the real path on every metadata, preview and download
+request and rejects files outside `CODEX_REMOTE_WORKSPACE_ROOTS`; a symlink
+cannot escape that boundary. File APIs require the signed session, use
+`private, no-store`, stream bytes instead of buffering whole downloads, and
+support byte ranges for browser PDF viewers. Text preview is limited to 2 MB to
+protect mobile rendering; a larger text file remains downloadable. Configure
+workspace roots narrowly: every regular file below an allowed root is eligible
+for authenticated download, so using `/root` exposes substantially more than a
+single repository to a logged-in Codex Remote device.
+
 The reverse proxy must allow request bodies larger than the application's 10 MB
 image limit. Nginx defaults to 1 MB and otherwise rejects ordinary phone photos
 before they reach Codex Remote. Set `client_max_body_size 11m;` in the HTTPS
@@ -154,9 +225,14 @@ the installed PWA and grant notification permission. On iPhone, use the Home
 Screen app. The bell shows **On** only after the server accepts the subscription.
 The gateway sends notifications directly to the browser's push service when an
 allowed, loaded thread completes, even with no browser event stream connected.
-The service worker displays a generic alert without conversation content; tapping
-it focuses the app without reloading an existing draft. The gateway must remain
-running, and the device must eventually have network access.
+While enabled, a visible app sends a short-lived per-device heartbeat so the
+gateway does not send that subscription a completion push. The service worker
+also suppresses an accepted push when any local Codex Remote window is visible
+or focused. Otherwise it displays the first non-empty line of the final agent
+message, capped at 180 characters, with a generic completion fallback;
+tapping it focuses the app without reloading an existing draft. This preview
+passes through the browser's push provider. The gateway must remain running, and
+the device must eventually have network access.
 
 Subscriptions, stable VAPID keys, recent completion IDs and pending deliveries
 are stored in `.remote-push.json` with owner-only permissions.
