@@ -53,6 +53,11 @@ export const api = {
     method: 'POST',
     body: '{}',
   }, csrf),
+  renameThread: (id: string, name: string, csrf: string) => request<{ name: string }>(`/api/threads/${encodeURIComponent(id)}/name`, {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+    signal: AbortSignal.timeout(15_000),
+  }, csrf),
   startTurn: (id: string, text: string, csrf: string, options: { model?: string; effort?: string; fullAccess?: boolean; attachmentIds?: string[] } = {}) => request<TurnResponse>(`/api/threads/${encodeURIComponent(id)}/turns`, {
     method: 'POST',
     body: JSON.stringify({ text, ...options }),

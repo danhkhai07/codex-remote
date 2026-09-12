@@ -10,7 +10,7 @@ import {
   setSessionCookie,
 } from './auth.js'
 import type { RemoteConfig } from './config.js'
-import type { RemoteController } from './controller.js'
+import { ThreadNameError, type RemoteController } from './controller.js'
 import { LoginRateLimiter } from './login-rate-limit.js'
 import { validateSubscription, type PushService } from './push.js'
 import { AttachmentError, AttachmentStore, MAX_IMAGE_BYTES } from './attachments.js'
@@ -340,6 +340,12 @@ export function createRemoteHttpServer(
         return
       }
       const archiveThreadId = routeThread(url.pathname, '/archive')
+      const renameThreadId = routeThread(url.pathname, '/name')
+      if (renameThreadId && method === 'POST') {
+        const body = await readJson(req)
+        json(res, 200, await controller.renameThread(renameThreadId, body.name))
+        return
+      }
       if (archiveThreadId && method === 'POST') {
         json(res, 200, await controller.archiveThread(archiveThreadId))
         return
@@ -375,7 +381,7 @@ export function createRemoteHttpServer(
         res.destroy(error instanceof Error ? error : undefined)
         return
       }
-      const status = error instanceof HttpError || error instanceof AttachmentError ? error.status : 500
+      const status = error instanceof HttpError || error instanceof AttachmentError || error instanceof ThreadNameError ? error.status : 500
       const message = error instanceof Error ? error.message : 'Unexpected server error'
       json(res, status, { error: status === 500 ? 'Unexpected server error' : message })
       if (status === 500) {

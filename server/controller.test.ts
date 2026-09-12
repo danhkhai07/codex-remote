@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RemoteConfig } from './config.js'
 import { CodexAppServer, type JsonRpcId } from './codex-app-server.js'
-import { RemoteController } from './controller.js'
+import { normalizeThreadName, RemoteController } from './controller.js'
 
 const config: RemoteConfig = {
   host: '127.0.0.1',
@@ -75,6 +75,37 @@ class StubAppServer extends CodexAppServer {
 }
 
 describe('RemoteController', () => {
+  it('validates conversation names before issuing any RPC', () => {
+    expect(normalizeThreadName('  Báo giá phụ tùng 🚗  ')).toBe('Báo giá phụ tùng 🚗')
+    for (const value of [undefined, null, 42, '', '   ', 'a'.repeat(201), 'two\nlines', 'bad\u0000name']) {
+      expect(() => normalizeThreadName(value)).toThrow()
+    }
+    expect(normalizeThreadName('a'.repeat(200))).toHaveLength(200)
+  })
+  it('saves names through Codex without resuming or interrupting a running conversation', async () => {
+    const appServer = new StubAppServer()
+    const controller = new RemoteController(config, appServer)
+    await controller.listThreads()
+    appServer.calls.length = 0
+    const publish = vi.spyOn(controller.events, 'publish')
+    await expect(controller.renameThread('thread-stored', '  Hợp đồng mới  ')).resolves.toEqual({ name: 'Hợp đồng mới' })
+    expect(appServer.calls).toEqual([{ method: 'thread/name/set', params: { threadId: 'thread-stored', name: 'Hợp đồng mới' } }])
+    expect(publish).toHaveBeenCalledWith('codex', { method: 'thread/name/updated', params: { threadId: 'thread-stored', threadName: 'Hợp đồng mới' } })
+    await expect(controller.readThread('thread-stored')).resolves.toMatchObject({ thread: { name: 'Hợp đồng mới' } })
+  })
+  it('does not rename an inaccessible thread or publish a failed rename', async () => {
+    const appServer = new StubAppServer()
+    const controller = new RemoteController(config, appServer)
+    const request = vi.spyOn(appServer, 'request').mockResolvedValue({ thread: { id: 'outside', cwd: '/outside' } })
+    await expect(controller.renameThread('outside', 'New name')).rejects.toThrow()
+    expect(request).not.toHaveBeenCalledWith('thread/name/set', expect.anything(), expect.anything())
+    request.mockRestore()
+    await controller.listThreads()
+    const publish = vi.spyOn(controller.events, 'publish')
+    vi.spyOn(appServer, 'request').mockRejectedValue(new Error('Rename failed'))
+    await expect(controller.renameThread('thread-stored', 'New name')).rejects.toThrow('Rename failed')
+    expect(publish).not.toHaveBeenCalled()
+  })
   it('dispatches completion without browser clients only for allowed loaded threads', async () => {
     const appServer = new StubAppServer()
     const controller = new RemoteController(config, appServer)

@@ -13,6 +13,19 @@ type PendingRequest = {
 
 type AgentMessages = { order: string[]; text: Map<string, string> }
 
+export class ThreadNameError extends Error {
+  readonly status = 400
+}
+
+export function normalizeThreadName(value: unknown): string {
+  if (typeof value !== 'string') throw new ThreadNameError('Conversation name must be text')
+  const name = value.trim()
+  if (!name || name.length > 200 || [...name].some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) {
+    throw new ThreadNameError('Use a name between 1 and 200 characters, on one line')
+  }
+  return name
+}
+
 const APPROVAL_DECISIONS = new Set(['accept', 'acceptForSession', 'decline', 'cancel'])
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -219,6 +232,16 @@ export class RemoteController {
     const resumed = { ...threadFromResult(result), turns: [], historyUnavailable: true }
     this.#markResumed(resumed)
     return { ...asObject(result), thread: resumed }
+  }
+
+  async renameThread(threadId: string, value: unknown): Promise<{ name: string }> {
+    const name = normalizeThreadName(value)
+    if (!this.#loadedThreads.has(threadId)) await this.#readThreadMetadata(threadId)
+    await this.appServer.request('thread/name/set', { threadId, name }, 10_000)
+    const cached = this.#loadedThreads.get(threadId)
+    if (cached) this.#cacheThread({ ...cached, name })
+    this.events.publish('codex', { method: 'thread/name/updated', params: { threadId, threadName: name } })
+    return { name }
   }
 
   async archiveThread(threadId: string): Promise<unknown> {
