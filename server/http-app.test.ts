@@ -3,13 +3,14 @@ import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CodexAppServer } from './codex-app-server.js'
 import type { RemoteConfig } from './config.js'
-import { RemoteController } from './controller.js'
+import { normalizeThreadName, RemoteController } from './controller.js'
 import { createRemoteHttpServer } from './http-app.js'
 import { PushService } from './push.js'
 import { AttachmentStore } from './attachments.js'
+import { PptxPreviewCache } from './pptx-preview.js'
 
 type Response = {
   status: number
@@ -25,6 +26,7 @@ function fetchLocal(port: number, path: string, options: {
   body?: unknown
   rawBody?: Buffer
   contentType?: string
+  range?: string
 } = {}): Promise<Response> {
   const encoded = options.rawBody ?? (options.body === undefined ? undefined : Buffer.from(JSON.stringify(options.body)))
   return new Promise((resolve, reject) => {
@@ -38,6 +40,7 @@ function fetchLocal(port: number, path: string, options: {
         ...(options.origin ? { Origin: options.origin } : {}),
         ...(options.cookie ? { Cookie: options.cookie } : {}),
         ...(options.csrf ? { 'X-CSRF-Token': options.csrf } : {}),
+        ...(options.range ? { Range: options.range } : {}),
         ...(encoded ? {
           'Content-Type': options.contentType ?? 'application/json',
           'Content-Length': encoded.length,
@@ -67,8 +70,21 @@ describe('Codex Remote HTTP boundary', () => {
 
   it('serves the login shell publicly while protecting APIs and login origin', async () => {
     const distRoot = await fs.mkdtemp(join(tmpdir(), 'codex-remote-http-'))
+    const workspaceRoot = await fs.mkdtemp(join(tmpdir(), 'codex-remote-workspace-'))
+    const outsideRoot = await fs.mkdtemp(join(tmpdir(), 'codex-remote-outside-'))
     await fs.writeFile(join(distRoot, 'index.html'), '<!doctype html><title>Codex Remote</title>')
     await fs.writeFile(join(distRoot, 'icon-192.png'), Buffer.from('png fixture'))
+    const textPath = join(workspaceRoot, 'notes.md')
+    const pdfPath = join(workspaceRoot, 'report.pdf')
+    const binaryPath = join(workspaceRoot, 'archive.bin')
+    const docxPath = join(workspaceRoot, 'contract.docx')
+    const outsidePath = join(outsideRoot, 'outside.txt')
+    await fs.writeFile(textPath, 'first line\nsecond line\n')
+    await fs.writeFile(pdfPath, '%PDF-1.4\nfixture')
+    await fs.writeFile(binaryPath, Buffer.from([0, 1, 2, 3]))
+    await fs.writeFile(docxPath, Buffer.from([0x50, 0x4b, 0x03, 0x04, 1, 2, 3]))
+    await fs.writeFile(outsidePath, 'private')
+    await fs.symlink(outsidePath, join(workspaceRoot, 'escape.txt'))
     const config: RemoteConfig = {
       host: '127.0.0.1',
       port: 5173,
@@ -77,7 +93,7 @@ describe('Codex Remote HTTP boundary', () => {
       sessionSecret: 's'.repeat(48),
       sessionTtlSeconds: 600,
       codexBin: 'unused',
-      workspaceRoots: ['/workspace'],
+      workspaceRoots: [workspaceRoot],
       production: true,
     }
     const controller = new RemoteController(config, new CodexAppServer('unused'))
@@ -91,11 +107,15 @@ describe('Codex Remote HTTP boundary', () => {
       attachments.stop()
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
       await fs.rm(distRoot, { recursive: true, force: true })
+      await fs.rm(workspaceRoot, { recursive: true, force: true })
+      await fs.rm(outsideRoot, { recursive: true, force: true })
     })
 
     const shell = await fetchLocal(port, '/')
     expect(shell).toMatchObject({ status: 200, body: expect.stringContaining('Codex Remote') })
     expect(shell.headers['cache-control']).toBe('no-cache')
+    expect(shell.headers['cdn-cache-control']).toBe('no-store')
+    expect(shell.headers['content-security-policy']).toContain("frame-src 'self' https: http:")
     const icon = await fetchLocal(port, '/icon-192.png')
     expect(icon.status).toBe(200)
     expect(icon.headers['content-type']).toBe('image/png')
@@ -103,6 +123,10 @@ describe('Codex Remote HTTP boundary', () => {
     expect((await fetchLocal(port, '/api/push/key')).status).toBe(401)
     expect((await fetchLocal(port, '/api/push/subscription', { method: 'POST', body: {} })).status).toBe(401)
     expect((await fetchLocal(port, '/api/attachments', { method: 'POST', rawBody: Buffer.from('image'), contentType: 'image/png' })).status).toBe(401)
+    expect((await fetchLocal(port, `/api/files/info?path=${encodeURIComponent(textPath)}`)).status).toBe(401)
+    expect((await fetchLocal(port, '/api/files/docx-frame')).status).toBe(401)
+    expect((await fetchLocal(port, '/api/files/pptx-preview')).status).toBe(401)
+    expect((await fetchLocal(port, `/api/files/list?path=${encodeURIComponent(workspaceRoot)}`)).status).toBe(401)
 
     const rejected = await fetchLocal(port, '/api/session/login', {
       method: 'POST',
@@ -123,6 +147,102 @@ describe('Codex Remote HTTP boundary', () => {
     expect((await fetchLocal(port, '/api/session', { cookie })).status).toBe(200)
     const csrf = JSON.parse(login.body).csrf as string
     const options = { cookie, csrf, origin: config.publicOrigin.origin }
+    const messageIds = vi.spyOn(controller, 'readMessageIds').mockResolvedValue({ ids: ['turn:reply'] })
+    expect((await fetchLocal(port, '/api/threads/chat/message-ids')).status).toBe(401)
+    expect(messageIds).not.toHaveBeenCalled()
+    const messageSummary = await fetchLocal(port, '/api/threads/chat/message-ids', { cookie })
+    expect(messageSummary.status).toBe(200)
+    expect(JSON.parse(messageSummary.body)).toEqual({ ids: ['turn:reply'] })
+    expect(messageIds).toHaveBeenCalledWith('chat')
+    const rename = vi.spyOn(controller, 'renameThread').mockImplementation(async (_id, name) => ({ name: normalizeThreadName(name) }))
+    const renamePath = '/api/threads/rename-target/name'
+    expect((await fetchLocal(port, renamePath, { method: 'POST', body: { name: 'New name' } })).status).toBe(401)
+    expect((await fetchLocal(port, renamePath, { cookie, method: 'POST', origin: config.publicOrigin.origin, body: { name: 'New name' } })).status).toBe(403)
+    expect(rename).not.toHaveBeenCalled()
+    expect((await fetchLocal(port, renamePath, { ...options, method: 'POST', body: { name: '  ' } })).status).toBe(400)
+    const renamed = await fetchLocal(port, renamePath, { ...options, method: 'POST', body: { name: '  Hội thoại mới  ' } })
+    expect(renamed.status).toBe(200)
+    expect(JSON.parse(renamed.body)).toEqual({ name: 'Hội thoại mới' })
+    expect(rename).toHaveBeenLastCalledWith('rename-target', '  Hội thoại mới  ')
+    const listing = await fetchLocal(port, `/api/files/list?path=${encodeURIComponent(workspaceRoot)}`, { cookie })
+    expect(listing.status).toBe(200)
+    expect(JSON.parse(listing.body).entries).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'notes.md', kind: 'file' })]))
+    expect((await fetchLocal(port, `/api/files/list?path=${encodeURIComponent(outsideRoot)}`, { cookie })).status).toBe(403)
+    const fileInfo = await fetchLocal(port, `/api/files/info?path=${encodeURIComponent(textPath)}`, { cookie })
+    expect(fileInfo.status).toBe(200)
+    expect(JSON.parse(fileInfo.body)).toMatchObject({
+      name: 'notes.md',
+      extension: '.md',
+      kind: 'text',
+      previewable: true,
+      createdAt: expect.any(String),
+      modifiedAt: expect.any(String),
+    })
+    const textFile = await fetchLocal(port, `/api/files/content?path=${encodeURIComponent(textPath)}`, { cookie })
+    expect(textFile).toMatchObject({ status: 200, body: 'first line\nsecond line\n' })
+    expect(textFile.headers['content-type']).toBe('text/plain; charset=utf-8')
+    expect(textFile.headers['cache-control']).toBe('private, no-store')
+    const ranged = await fetchLocal(port, `/api/files/content?path=${encodeURIComponent(textPath)}`, { cookie, range: 'bytes=0-4' })
+    expect(ranged).toMatchObject({ status: 206, body: 'first' })
+    expect(ranged.headers['content-range']).toBe(`bytes 0-4/${Buffer.byteLength('first line\nsecond line\n')}`)
+    const pdf = await fetchLocal(port, `/api/files/content?path=${encodeURIComponent(pdfPath)}`, { cookie })
+    expect(pdf.status).toBe(200)
+    expect(pdf.headers['content-type']).toBe('application/pdf')
+    expect(pdf.headers['x-frame-options']).toBe('SAMEORIGIN')
+    const binaryInfo = JSON.parse((await fetchLocal(port, `/api/files/info?path=${encodeURIComponent(binaryPath)}`, { cookie })).body)
+    expect(binaryInfo).toMatchObject({ kind: 'download', previewable: false })
+    expect((await fetchLocal(port, `/api/files/content?path=${encodeURIComponent(binaryPath)}`, { cookie })).status).toBe(415)
+    const download = await fetchLocal(port, `/api/files/content?path=${encodeURIComponent(binaryPath)}&download=1`, { cookie })
+    expect(download.status).toBe(200)
+    expect(download.headers['content-disposition']).toContain('attachment;')
+    const docxInfo = JSON.parse((await fetchLocal(port, `/api/files/info?path=${encodeURIComponent(docxPath)}`, { cookie })).body)
+    expect(docxInfo).toMatchObject({
+      extension: '.docx',
+      contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      kind: 'docx',
+      previewable: true,
+    })
+    const docxFrame = await fetchLocal(port, '/api/files/docx-frame', { cookie })
+    expect(docxFrame.status).toBe(200)
+    expect(docxFrame.headers['content-security-policy']).toContain("default-src 'none'")
+    expect(docxFrame.headers['content-security-policy']).toContain('sandbox allow-same-origin')
+    expect(docxFrame.headers['content-security-policy']).not.toContain('allow-scripts')
+    expect(docxFrame.headers['x-frame-options']).toBe('SAMEORIGIN')
+    expect(docxFrame.headers['cache-control']).toBe('private, no-store')
+    // Fixed-layout Word pages must not inherit mobile text inflation. Keep
+    // native user zoom available as well as the viewer's zoom controls.
+    expect(docxFrame.body).toContain('-webkit-text-size-adjust: none')
+    expect(docxFrame.body).toContain('text-size-adjust: none')
+    expect(docxFrame.body).not.toMatch(/user-scalable\s*=\s*no|maximum-scale\s*=/)
+    const docxContent = await fetchLocal(port, `/api/files/content?path=${encodeURIComponent(docxPath)}`, { cookie })
+    expect(docxContent.status).toBe(200)
+    expect(docxContent.headers['content-type']).toBe(docxInfo.contentType)
+    await fs.truncate(docxPath, 20 * 1024 * 1024 + 1)
+    expect(JSON.parse((await fetchLocal(port, `/api/files/info?path=${encodeURIComponent(docxPath)}`, { cookie })).body)).toMatchObject({ kind: 'docx', previewable: false })
+    expect((await fetchLocal(port, `/api/files/content?path=${encodeURIComponent(docxPath)}`, { cookie })).status).toBe(415)
+    const docxDownload = await fetchLocal(port, `/api/files/content?path=${encodeURIComponent(docxPath)}&download=1`, { cookie })
+    expect(docxDownload.headers['content-type']).toBe('application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+    const pptxPath = join(workspaceRoot, 'slides.pptx')
+    await fs.writeFile(pptxPath, Buffer.from([0x50, 0x4b, 0x03, 0x04, 1, 2, 3]))
+    expect(JSON.parse((await fetchLocal(port, `/api/files/info?path=${encodeURIComponent(pptxPath)}`, { cookie })).body)).toMatchObject({ kind: 'pptx', previewable: true })
+    const preview = vi.spyOn(PptxPreviewCache.prototype, 'get').mockResolvedValueOnce(Buffer.from('%PDF-preview'))
+    const slides = await fetchLocal(port, `/api/files/pptx-preview?path=${encodeURIComponent(pptxPath)}`, { cookie })
+    expect(slides.status).toBe(200)
+    expect(slides.headers['content-type']).toBe('application/pdf')
+    expect(slides.headers['cache-control']).toBe('private, no-store')
+    expect(slides.body).toBe('%PDF-preview')
+    preview.mockRestore()
+    expect((await fetchLocal(port, `/api/files/pptx-preview?path=${encodeURIComponent(textPath)}`, { cookie })).status).toBe(415)
+    expect((await fetchLocal(port, `/api/files/pptx-preview?path=${encodeURIComponent(outsidePath)}`, { cookie })).status).toBe(403)
+    expect((await fetchLocal(port, `/api/files/pptx-preview?path=${encodeURIComponent(join(workspaceRoot, 'escape.txt'))}`, { cookie })).status).toBe(403)
+    await fs.truncate(pptxPath, 20 * 1024 * 1024 + 1)
+    expect((await fetchLocal(port, `/api/files/pptx-preview?path=${encodeURIComponent(pptxPath)}`, { cookie })).status).toBe(413)
+    expect(JSON.parse((await fetchLocal(port, `/api/files/info?path=${encodeURIComponent(pptxPath)}`, { cookie })).body)).toMatchObject({ kind: 'pptx', previewable: false })
+    const originalPptx = await fetchLocal(port, `/api/files/content?path=${encodeURIComponent(pptxPath)}&download=1`, { cookie })
+    expect(originalPptx.status).toBe(200)
+    expect(originalPptx.headers['content-type']).toBe('application/vnd.openxmlformats-officedocument.presentationml.presentation')
+    expect((await fetchLocal(port, `/api/files/info?path=${encodeURIComponent(outsidePath)}`, { cookie })).status).toBe(403)
+    expect((await fetchLocal(port, `/api/files/info?path=${encodeURIComponent(join(workspaceRoot, 'escape.txt'))}`, { cookie })).status).toBe(403)
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
     expect((await fetchLocal(port, '/api/attachments', { ...options, csrf: undefined, method: 'POST', rawBody: png, contentType: 'image/png' })).status).toBe(403)
     expect((await fetchLocal(port, '/api/attachments', { ...options, method: 'POST', rawBody: Buffer.from('not png'), contentType: 'image/png' })).status).toBe(400)
@@ -139,6 +259,8 @@ describe('Codex Remote HTTP boundary', () => {
     expect((await fetchLocal(port, '/api/push/subscription', { ...options, origin: 'https://evil.test', method: 'POST', body: subscription })).status).toBe(403)
     expect((await fetchLocal(port, '/api/push/subscription', { ...options, method: 'POST', body: { ...subscription, endpoint: 'http://localhost/private' } })).status).toBe(400)
     expect((await fetchLocal(port, '/api/push/subscription', { ...options, method: 'POST', body: subscription })).status).toBe(201)
+    expect((await fetchLocal(port, '/api/push/visibility', { ...options, method: 'POST', body: { endpoint: subscription.endpoint, visible: true } })).status).toBe(200)
+    expect((await fetchLocal(port, '/api/push/visibility', { ...options, method: 'POST', body: { endpoint: subscription.endpoint, visible: 'yes' } })).status).toBe(400)
     const status = async () => JSON.parse((await fetchLocal(port, '/api/push/status', { ...options, method: 'POST', body: { endpoint: subscription.endpoint } })).body).enabled
     expect(await status()).toBe(true)
     expect((await fetchLocal(port, '/api/push/subscription', { ...options, method: 'DELETE', body: {} })).status).toBe(200)
@@ -162,5 +284,5 @@ describe('Codex Remote HTTP boundary', () => {
     })
     expect(lockedLogin.status).toBe(429)
     expect(JSON.parse(lockedLogin.body)).toEqual({ error: 'Too many login attempts. Try again later.' })
-  })
+  }, 30_000)
 })

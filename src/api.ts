@@ -1,5 +1,5 @@
+import type { DirectoryListing, ModelList, PendingRequest, RateLimitsResponse, ServerFileInfo, Session, ThreadList, ThreadResponse, TurnResponse } from './types'
 import { limitConversation } from '../server/conversation-size'
-import type { ModelList, PendingRequest, RateLimitsResponse, Session, ThreadList, ThreadResponse, TurnResponse } from './types'
 
 export class ApiError extends Error {
   readonly status: number
@@ -21,7 +21,36 @@ async function request<T>(path: string, init: RequestInit = {}, csrf?: string): 
   return body as T
 }
 
+export function serverFileUrl(path: string, download = false): string {
+  const query = new URLSearchParams({ path })
+  if (download) query.set('download', '1')
+  return `/api/files/content?${query}`
+}
+
+async function requestText(path: string): Promise<string> {
+  const response = await fetch(path, { credentials: 'same-origin' })
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { error?: string }
+    throw new ApiError(response.status, body.error ?? `Request failed (${response.status})`)
+  }
+  return response.text()
+}
+
+async function requestBlob(path: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await fetch(path, { credentials: 'same-origin', signal })
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { error?: string }
+    throw new ApiError(response.status, body.error ?? `Request failed (${response.status})`)
+  }
+  return response.blob()
+}
+
 export const api = {
+  directory: (path: string, options: { search: string; hidden: boolean; offset: number }, signal?: AbortSignal) => request<DirectoryListing>(`/api/files/list?${new URLSearchParams({ path, search: options.search, hidden: options.hidden ? '1' : '0', offset: String(options.offset) })}`, { signal }),
+  fileInfo: (path: string) => request<ServerFileInfo>(`/api/files/info?${new URLSearchParams({ path })}`),
+  fileText: (path: string) => requestText(serverFileUrl(path)),
+  fileBlob: (path: string) => requestBlob(serverFileUrl(path, true)),
+  pptxPreview: (path: string, signal: AbortSignal) => requestBlob(`/api/files/pptx-preview?${new URLSearchParams({ path })}`, signal),
   uploadAttachment: (file: File, csrf: string) => request<{ id: string; size: number; contentType: string }>('/api/attachments', {
     method: 'POST',
     headers: { 'Content-Type': file.type },

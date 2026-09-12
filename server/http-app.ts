@@ -14,12 +14,17 @@ import { ThreadNameError, type RemoteController } from './controller.js'
 import { LoginRateLimiter } from './login-rate-limit.js'
 import { validateSubscription, type PushService } from './push.js'
 import { AttachmentError, AttachmentStore, MAX_IMAGE_BYTES } from './attachments.js'
+import { inspectServerFile, ServerFileError, serveServerFile } from './server-files.js'
+import { PptxPreviewCache } from './pptx-preview.js'
+import { DOCX_FRAME_CSP, DOCX_FRAME_HTML } from './docx-frame.js'
+import { listDirectory } from './directory-listing.js'
 
 const MAX_BODY_BYTES = 128 * 1024
 const MIME_TYPES: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.map': 'application/json; charset=utf-8',
   '.png': 'image/png',
@@ -98,7 +103,7 @@ function requestIp(req: IncomingMessage): string {
 function securityHeaders(config: RemoteConfig): Record<string, string> {
   const script = config.production ? "script-src 'self'" : "script-src 'self' 'unsafe-eval'"
   return {
-    'Content-Security-Policy': `default-src 'self'; ${script}; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' ws: wss:; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`,
+    'Content-Security-Policy': `default-src 'self'; ${script}; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' ws: wss:; frame-src 'self' https: http:; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`,
     'Cross-Origin-Opener-Policy': 'same-origin',
     'Referrer-Policy': 'no-referrer',
     'X-Content-Type-Options': 'nosniff',
@@ -155,6 +160,7 @@ async function serveStatic(res: ServerResponse, distRoot: string, pathname: stri
       'Content-Type': MIME_TYPES[extname(candidate)] ?? 'application/octet-stream',
       'Content-Length': finalMetadata.size,
       'Cache-Control': cacheControl,
+      ...(cacheControl === 'no-cache' ? { 'CDN-Cache-Control': 'no-store' } : {}),
     })
     createReadStream(candidate).pipe(res)
     return true
@@ -174,6 +180,7 @@ export function createRemoteHttpServer(
   push?: PushService,
   attachments?: AttachmentStore,
 ) {
+  const pptxPreviews = new PptxPreviewCache()
   const loginRateLimiter = new LoginRateLimiter()
   const headers = securityHeaders(config)
   const secureCookie = config.publicOrigin.protocol === 'https:'
@@ -251,6 +258,37 @@ export function createRemoteHttpServer(
         attachments?.clear(session)
         clearSessionCookie(res, secureCookie)
         json(res, 200, { ok: true })
+        return
+      }
+      if (url.pathname === '/api/files/docx-frame' && method === 'GET') {
+        res.setHeader('Content-Type', 'text/html; charset=utf-8')
+        res.setHeader('Cache-Control', 'private, no-store')
+        res.setHeader('Content-Security-Policy', DOCX_FRAME_CSP)
+        res.setHeader('X-Frame-Options', 'SAMEORIGIN')
+        res.end(DOCX_FRAME_HTML)
+        return
+      }
+      if (url.pathname === '/api/files/list' && method === 'GET') {
+        json(res, 200, await listDirectory(url.searchParams, config.workspaceRoots))
+        return
+      }
+      if (url.pathname === '/api/files/info' && method === 'GET') {
+        json(res, 200, await inspectServerFile(url.searchParams.get('path'), config.workspaceRoots))
+        return
+      }
+      if (url.pathname === '/api/files/pptx-preview' && method === 'GET') {
+        const file = await inspectServerFile(url.searchParams.get('path'), config.workspaceRoots)
+        const pdf = await pptxPreviews.get(file)
+        res.setHeader('Content-Type', 'application/pdf')
+        res.setHeader('Cache-Control', 'private, no-store')
+        res.setHeader('Content-Length', pdf.length)
+        res.setHeader('Content-Disposition', 'inline; filename="slides.pdf"')
+        res.end(pdf)
+        return
+      }
+      if (url.pathname === '/api/files/content' && (method === 'GET' || method === 'HEAD')) {
+        const file = await inspectServerFile(url.searchParams.get('path'), config.workspaceRoots)
+        serveServerFile(req, res, file, url.searchParams.get('download') === '1')
         return
       }
       if (url.pathname === '/api/attachments' && method === 'POST') {
@@ -386,7 +424,7 @@ export function createRemoteHttpServer(
         res.destroy(error instanceof Error ? error : undefined)
         return
       }
-      const status = error instanceof HttpError || error instanceof AttachmentError || error instanceof ThreadNameError ? error.status : 500
+      const status = error instanceof HttpError || error instanceof AttachmentError || error instanceof ServerFileError || error instanceof ThreadNameError ? error.status : 500
       const message = error instanceof Error ? error.message : 'Unexpected server error'
       json(res, status, { error: status === 500 ? 'Unexpected server error' : message })
       if (status === 500) {
