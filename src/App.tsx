@@ -2,6 +2,7 @@ import { ChangeEvent, Fragment, FormEvent, memo, useCallback, useEffect, useMemo
 import { useThreadState } from './useThreadState'
 import { useUnreadMessages } from './useUnreadMessages'
 import { RenameConversation } from './RenameConversation'
+import { ConversationActions } from './ConversationActions'
 import { ThreadHistoryCache } from './threadHistoryCache'
 import { clearScreenState, flushScreenState, useScreenState } from './screenState'
 import { useInterrupt, turnHasEnded } from './useInterrupt'
@@ -133,6 +134,8 @@ function ThreadSidebar({
   onToggleNotifications,
   onSelect,
   onRename,
+  onArchive,
+  canArchive,
   workspaceLabel,
 }: {
   threads: Thread[]
@@ -148,6 +151,8 @@ function ThreadSidebar({
   onToggleNotifications: () => void
   onSelect: (thread: Thread) => void
   onRename: (thread: Thread) => void
+  onArchive: (thread: Thread) => void
+  canArchive: (thread: Thread) => boolean
   workspaceLabel: string
 }) {
   const [query, setQuery] = useState('')
@@ -245,7 +250,8 @@ function ThreadSidebar({
                 {shortWorkspace(thread.cwd)} · {formatTime(thread.updatedAt)}
               </span>
             </button>
-            <button type="button" className="thread-rename-button" onClick={() => onRename(thread)} aria-label={`Rename ${threadTitle(thread)}`} title="Rename conversation">✎</button>
+            <ConversationActions title={threadTitle(thread)} archiveDisabled={!canArchive(thread)}
+              onRename={() => onRename(thread)} onArchive={() => onArchive(thread)} />
             </div>
           ))}
         </div>
@@ -542,7 +548,7 @@ export function App() {
   const [yoloMode, setYoloMode, yoloSaveError] = useYoloPreference()
   const [commandNotice, setCommandNotice] = useScreenState<CommandNotice | null>('command-notice', null)
   const [slashIndex, setSlashIndex] = useState(0)
-  const [activeTurnId, , setThreadTurn, clearThreadTurns] = useThreadState<string | null>(selectedId, null)
+  const [activeTurnId, , setThreadTurn, clearThreadTurns, activeTurns] = useThreadState<string | null>(selectedId, null)
   const [composer, setComposer, , clearDrafts] = useThreadState(selectedId, '', 'drafts')
   const [drawerOpen, setDrawerOpen] = useScreenState('drawer', false)
   const [connected, setConnected] = useState(false)
@@ -1384,14 +1390,18 @@ export function App() {
     await stopTurn(thread.id, activeTurnId)
   }
 
-  async function archive() {
-    if (!session || !thread || busy) return
+  function canArchive(target: Thread) {
+    return Boolean(session?.csrf) && online && !busy && !sending[target.id] && !activeTurns[target.id] && object(target.status).type !== 'active'
+  }
+
+  async function archive(target = thread) {
+    if (!session || !target || !canArchive(target)) return
     setBusy(true)
     try {
-      await api.archiveThread(thread.id, session.csrf)
-      threadCache.current.delete(thread.id)
-      const remaining = (await refreshThreads()).filter((item) => item.id !== thread.id)
-      if (selectedRef.current !== thread.id) return
+      await api.archiveThread(target.id, session.csrf)
+      threadCache.current.delete(target.id)
+      const remaining = (await refreshThreads()).filter((item) => item.id !== target.id)
+      if (selectedRef.current !== target.id) return
       setThread(null)
       setSelectedId(null)
       selectedRef.current = null
@@ -1518,6 +1528,8 @@ export function App() {
         onToggleNotifications={() => void toggleNotifications()}
         onSelect={(target) => void openThread(target).catch((requestError) => setError(errorMessage(requestError)))}
         onRename={setRenamingThread}
+        onArchive={target => void archive(target)}
+        canArchive={canArchive}
         workspaceLabel={session.workspaces[0]?.label || shortWorkspace(session.workspaces[0]?.path ?? '') || 'Workspace'}
       />
 
@@ -1546,7 +1558,6 @@ export function App() {
             </div>
             {pending.length > 0 && <span className="pending-badge" title={`${pending.length} action${pending.length === 1 ? '' : 's'} needed`}>{pending.length}</span>}
             {installPrompt && <button className="quiet-button install-button" onClick={() => void installApp()}>Install</button>}
-            {thread && <button className="quiet-button archive-button" onClick={() => void archive()} disabled={busy || Boolean(activeTurnId)}>Archive</button>}
           </div>
         </header>
 
