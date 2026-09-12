@@ -196,6 +196,23 @@ export class RemoteController {
     return result
   }
 
+  async readMessageIds(threadId: string): Promise<unknown> {
+    const result = await this.appServer.request('thread/read', { threadId, includeTurns: true })
+    this.#assertAllowedThread(result)
+    const thread = threadFromResult(result)
+    const turns = Array.isArray(thread.turns) ? thread.turns : []
+    const ids = turns.flatMap((value) => {
+      const turn = asObject(value)
+      return (Array.isArray(turn.items) ? turn.items : []).flatMap((value) => {
+        const item = asObject(value)
+        return item.type === 'agentMessage' && typeof item.id === 'string' &&
+          typeof item.text === 'string' && item.text.trim()
+          ? [`${String(turn.id)}:${item.id}`] : []
+      })
+    })
+    return { ids: [...new Set(ids)] }
+  }
+
   async readThread(threadId: string): Promise<unknown> {
     try {
       const result = await this.appServer.request('thread/read', { threadId, includeTurns: true })

@@ -329,6 +329,11 @@ export function createRemoteHttpServer(
         return
       }
 
+      const messageIdsThreadId = routeThread(url.pathname, '/message-ids')
+      if (messageIdsThreadId && method === 'GET') {
+        json(res, 200, await controller.readMessageIds(messageIdsThreadId))
+        return
+      }
       const readThreadId = routeThread(url.pathname, '')
       if (readThreadId && method === 'GET') {
         json(res, 200, await controller.readThread(readThreadId))

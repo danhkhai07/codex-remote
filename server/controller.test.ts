@@ -145,6 +145,21 @@ describe('RemoteController', () => {
     await expect(controller.interruptTurn('thread-new', 'target')).resolves.toEqual({})
     expect(request).toHaveBeenCalledTimes(2)
   })
+  it('returns only distinct assistant message IDs, including history beyond the display cap', async () => {
+    const appServer = new StubAppServer()
+    const source = { thread: { id: 'messages', cwd: '/workspace', turns: [{ id: 't1', items: [
+      { id: 'user', type: 'userMessage', text: 'Hi' },
+      { id: 'tool', type: 'commandExecution', text: 'x'.repeat(6_000_000) },
+      { id: 'reply', type: 'agentMessage', text: 'Hello' },
+      { id: 'reply', type: 'agentMessage', text: 'Hello' },
+      { id: 'blank', type: 'agentMessage', text: ' ' },
+    ] }, { id: 't2', items: [{ id: 'reply', type: 'agentMessage', text: 'Another reply' }] }] } }
+    vi.spyOn(appServer, 'request').mockResolvedValue(source)
+    const controller = new RemoteController(config, appServer)
+    expect(await controller.readMessageIds('messages')).toEqual({ ids: ['t1:reply', 't2:reply'] })
+    source.thread.cwd = '/outside'
+    await expect(controller.readMessageIds('messages')).rejects.toThrow()
+  })
   it('dispatches completion without browser clients only for allowed loaded threads', async () => {
     const appServer = new StubAppServer()
     const controller = new RemoteController(config, appServer)
