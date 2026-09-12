@@ -3,7 +3,11 @@ import { createRoot } from 'react-dom/client'
 import { App } from './App'
 import { AppRecovery } from './AppRecovery'
 import { flushScreenState } from './screenState'
+import { installPwaZoomLock } from './pwaZoom'
 import './styles.css'
+
+const removeZoomLock = installPwaZoomLock()
+if (import.meta.hot) import.meta.hot.dispose(removeZoomLock)
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

@@ -31,6 +31,12 @@
   box-sizing: border-box;
 }
 
+/* Apply at nested scroll containers too; keep normal one-finger scrolling. */
+html.pwa-zoom-locked,
+html.pwa-zoom-locked * {
+  touch-action: pan-x pan-y;
+}
+
 html,
 body,
 #root {
