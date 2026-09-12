@@ -1,6 +1,38 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
+export type LocalFileReference = { path: string; line?: number }
+export type WebLinkReference = { url: string; label?: string }
+
+export function parseLocalFileReference(href: string | undefined): LocalFileReference | null {
+  if (!href) return null
+  let value: string
+  try {
+    if (href.startsWith('file://')) {
+      const url = new URL(href)
+      if (url.hostname && url.hostname !== 'localhost') return null
+      value = `${decodeURIComponent(url.pathname)}${decodeURIComponent(url.hash)}`
+    } else value = decodeURIComponent(href)
+  } catch {
+    return null
+  }
+  if (!value.startsWith('/') || value.startsWith('/api/')) return null
+
+  let line: number | undefined
+  const hash = value.match(/#L(\d+)(?:C\d+)?$/i)
+  if (hash) {
+    line = Number(hash[1])
+    value = value.slice(0, -hash[0].length)
+  } else {
+    const suffix = value.match(/:(\d+)(?::\d+)?$/)
+    if (suffix) {
+      line = Number(suffix[1])
+      value = value.slice(0, -suffix[0].length)
+    }
+  }
+  return { path: value, ...(line && line > 0 ? { line } : {}) }
+}
+
 function countUnescaped(value: string, token: string): number {
   let count = 0
   for (let index = 0; index <= value.length - token.length; index += 1) {
@@ -26,7 +58,12 @@ export function stabilizeStreamingMarkdown(value: string): string {
   return stable
 }
 
-export function MarkdownMessage({ children, streaming = false }: { children: string; streaming?: boolean }) {
+export function MarkdownMessage({ children, streaming = false, onOpenFile, onOpenLink }: {
+  children: string
+  streaming?: boolean
+  onOpenFile?: (reference: LocalFileReference) => void
+  onOpenLink?: (reference: WebLinkReference) => void
+}) {
   return (
     <div className={`message-markdown ${streaming ? 'is-streaming' : ''}`} aria-busy={streaming || undefined}>
       <ReactMarkdown
@@ -35,12 +72,26 @@ export function MarkdownMessage({ children, streaming = false }: { children: str
         components={{
           a: ({ children: linkChildren, href, title }) => {
             const external = href?.startsWith('http://') || href?.startsWith('https://')
+            const localFile = parseLocalFileReference(href)
+            const label = typeof linkChildren === 'string' ? linkChildren : undefined
             return (
               <a
                 href={href}
                 title={title}
                 target={external ? '_blank' : undefined}
                 rel={external ? 'noreferrer' : undefined}
+                data-local-file={localFile ? 'true' : undefined}
+                onClick={localFile && onOpenFile
+                  ? (event) => {
+                    event.preventDefault()
+                    onOpenFile(localFile)
+                  }
+                  : external && href && onOpenLink
+                    ? (event) => {
+                      event.preventDefault()
+                      onOpenLink({ url: href, label })
+                    }
+                    : undefined}
               >
                 {linkChildren}
               </a>
