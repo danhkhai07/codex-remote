@@ -1,9 +1,19 @@
-import { ChangeEvent, Fragment, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { conversationItems, updateTranscript, type TranscriptItem } from './transcript'
+import { ChangeEvent, Fragment, FormEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useThreadState } from './useThreadState'
+import { useUnreadMessages } from './useUnreadMessages'
+import { RenameConversation } from './RenameConversation'
+import { ThreadHistoryCache } from './threadHistoryCache'
+import { clearScreenState, flushScreenState, useScreenState } from './screenState'
+import { useInterrupt, turnHasEnded } from './useInterrupt'
+import { useDraftImages, type ComposerImage } from './useDraftImages'
+import { conversationItems, reconcileTranscript, updateTranscript, type TranscriptItem } from './transcript'
 import { api, ApiError } from './api'
 import { useYoloPreference } from './useYoloPreference'
 import { enablePush, disablePush, reportPushVisibility, restorePush } from './push'
-import { MarkdownMessage } from './MarkdownMessage'
+import { MarkdownMessage, type LocalFileReference, type WebLinkReference } from './MarkdownMessage'
+import { FileViewer } from './FileViewer'
+import { FileBrowser } from './FileBrowser'
+import { LinkViewer } from './LinkViewer'
 import { EventAssembler, shouldKeepEventStream } from './eventStream'
 import { TranscriptViewport, type ReadingPosition } from './TranscriptViewport'
 import { matchingSlashCommands, parseSlashCommand, slashCommands } from './slashCommands'
@@ -11,7 +21,6 @@ import { clearConversationSnapshot, loadConversationSnapshot, saveConversationSn
 import {
   commandText,
   commandSummary,
-  compactOutputEvents,
   eventMethod,
   eventThreadId,
   filterThreads,
@@ -38,8 +47,8 @@ const NOTIFICATION_PREFERENCE = 'codex-remote:completion-notifications'
 const MAX_COMPOSER_IMAGES = 4
 const MAX_COMPOSER_IMAGE_BYTES = 10 * 1024 * 1024
 
-type ComposerImage = { key: string; file: File; previewUrl: string }
 type SentMessage = { text: string; turnId?: string; images?: Array<{ name: string; previewUrl: string }> }
+const EMPTY_ITEMS: TranscriptItem[] = []
 
 function savedNotificationPreference(): boolean {
   try {
@@ -112,27 +121,62 @@ function Login({ installPrompt, offline, onInstall, onLogin }: {
 
 function ThreadSidebar({
   threads,
+  unreadCounts,
   selectedId,
   open,
   busy,
   onClose,
   onCreate,
-  onRefresh,
+  onLock,
+  notificationsEnabled,
+  notificationBusy,
+  onToggleNotifications,
   onSelect,
+  onRename,
   workspaceLabel,
 }: {
   threads: Thread[]
+  unreadCounts: Record<string, number>
   selectedId: string | null
   open: boolean
   busy: boolean
   onClose: () => void
   onCreate: () => void
-  onRefresh: () => void
+  onLock: () => void
+  notificationsEnabled: boolean
+  notificationBusy: boolean
+  onToggleNotifications: () => void
   onSelect: (thread: Thread) => void
+  onRename: (thread: Thread) => void
   workspaceLabel: string
 }) {
   const [query, setQuery] = useState('')
+  const actionsRef = useRef<HTMLDetailsElement>(null)
   const visibleThreads = useMemo(() => filterThreads(threads, query), [threads, query])
+
+  useEffect(() => {
+    actionsRef.current?.removeAttribute('open')
+  }, [open, selectedId])
+
+  useEffect(() => {
+    const dismissOutside = (event: PointerEvent) => {
+      if (event.target instanceof Node && !actionsRef.current?.contains(event.target)) {
+        actionsRef.current?.removeAttribute('open')
+      }
+    }
+    const dismissEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || !actionsRef.current?.open) return
+      actionsRef.current.removeAttribute('open')
+      actionsRef.current.querySelector('summary')?.focus()
+      event.preventDefault()
+    }
+    document.addEventListener('pointerdown', dismissOutside)
+    document.addEventListener('keydown', dismissEscape)
+    return () => {
+      document.removeEventListener('pointerdown', dismissOutside)
+      document.removeEventListener('keydown', dismissEscape)
+    }
+  }, [])
 
   return (
     <>
@@ -146,7 +190,32 @@ function ThreadSidebar({
               <h2>{workspaceLabel}</h2>
             </div>
           </div>
-          <button className="icon-button mobile-only" onClick={onClose} aria-label="Close">×</button>
+          <details className="sidebar-actions" ref={actionsRef}>
+            <summary className="icon-button" aria-label="Settings" title="Settings">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="m9 3-.5 2.4-2 .9-2.1-.7-2 3.4 1.6 1.7v2.6L2.4 15l2 3.4 2.1-.7 2 .9L9 21h4l.5-2.4 2-.9 2.1.7 2-3.4-1.6-1.7v-2.6L19.6 9l-2-3.4-2.1.7-2-.9L13 3Z" transform="translate(1 0)" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+            </summary>
+            <div className="sidebar-actions-popover">
+              <button
+                className={`quiet-button notification-button ${notificationsEnabled ? 'is-enabled' : ''}`}
+                type="button"
+                disabled={notificationBusy}
+                onClick={onToggleNotifications}
+                aria-label={notificationsEnabled ? 'Disable completion notifications' : 'Enable completion notifications'}
+                aria-pressed={notificationsEnabled}
+                aria-busy={notificationBusy}
+              >
+                <span>Notifications</span>
+                <span className="notification-state">{notificationBusy ? 'Saving…' : notificationsEnabled ? 'On' : 'Off'}</span>
+              </button>
+              <button className="quiet-button" type="button" onClick={() => {
+                actionsRef.current?.removeAttribute('open')
+                onLock()
+              }}>Lock app</button>
+            </div>
+          </details>
         </div>
         <button className="primary-button new-thread-button" onClick={onCreate} disabled={busy}>＋ New conversation</button>
         <label className="thread-search">
@@ -163,19 +232,23 @@ function ThreadSidebar({
           {threads.length === 0 && <p className="empty-copy">No conversations in this workspace yet.</p>}
           {threads.length > 0 && visibleThreads.length === 0 && <p className="empty-copy">No conversations match “{query}”.</p>}
           {visibleThreads.map((thread) => (
+            <div className={`thread-row-entry ${selectedId === thread.id ? 'is-selected' : ''}`} key={thread.id}>
             <button
-              key={thread.id}
-              className={`thread-row ${selectedId === thread.id ? 'is-selected' : ''}`}
+              className="thread-row"
               onClick={() => onSelect(thread)}
             >
-              <span className="thread-row-title">{threadTitle(thread)}</span>
+              <span className="thread-row-heading">
+                <span className="thread-row-title">{threadTitle(thread)}</span>
+                {(unreadCounts[thread.id] ?? 0) > 0 && <span className="thread-unread-badge" aria-label={`${unreadCounts[thread.id]} unread messages`}>{unreadCounts[thread.id] > 99 ? '99+' : unreadCounts[thread.id]}</span>}
+              </span>
               <span className="thread-row-meta">
                 {shortWorkspace(thread.cwd)} · {formatTime(thread.updatedAt)}
               </span>
             </button>
+            <button type="button" className="thread-rename-button" onClick={() => onRename(thread)} aria-label={`Rename ${threadTitle(thread)}`} title="Rename conversation">✎</button>
+            </div>
           ))}
         </div>
-        <button className="quiet-button sidebar-refresh" onClick={onRefresh} disabled={busy}>↻ Refresh list</button>
       </aside>
     </>
   )
@@ -190,7 +263,11 @@ function JsonDetails({ value, label = 'Raw data' }: { value: unknown; label?: st
   )
 }
 
-function HistoryItem({ item }: { item: ThreadItem }) {
+const HistoryItem = memo(function HistoryItem({ item, onOpenFile, onOpenLink }: {
+  item: ThreadItem
+  onOpenFile?: (reference: LocalFileReference) => void
+  onOpenLink?: (reference: WebLinkReference) => void
+}) {
   const text = itemText(item)
   const command = commandText(item)
   const changes = Array.isArray(item.changes) ? item.changes : []
@@ -208,7 +285,7 @@ function HistoryItem({ item }: { item: ThreadItem }) {
     return (
       <article className={`message ${item.type === 'userMessage' ? 'message-user' : 'message-agent'}`}>
         <span className="message-author">{itemLabel(item)}</span>
-        {text && <MarkdownMessage streaming={item.type === 'agentMessage' && item.streaming === true}>{text}</MarkdownMessage>}
+        {text && <MarkdownMessage streaming={item.type === 'agentMessage' && item.streaming === true} onOpenFile={onOpenFile} onOpenLink={onOpenLink}>{text}</MarkdownMessage>}
         {attachmentPreviews.length > 0 && <div className="message-images">
           {attachmentPreviews.map(image => <img src={image.previewUrl} alt={image.name} key={image.previewUrl} />)}
         </div>}
@@ -244,7 +321,9 @@ function HistoryItem({ item }: { item: ThreadItem }) {
       </div>
     </details>
   )
-}
+}, (previous, next) => previous.onOpenFile === next.onOpenFile && previous.onOpenLink === next.onOpenLink
+  && Object.keys(previous.item).length === Object.keys(next.item).length
+  && Object.keys(previous.item).every(key => Object.is(previous.item[key], next.item[key])))
 
 const starterPrompts = [
   'Summarize the current repository state',
@@ -252,15 +331,17 @@ const starterPrompts = [
   'Review the latest changes',
 ]
 
-export function Conversation({ thread, activeTurnId, items, pendingMessage, yoloMode, onSuggestion }: {
+export const Conversation = memo(function Conversation({ thread, activeTurnId, items, pendingMessage, yoloMode, onSuggestion, onOpenFile, onOpenLink }: {
   thread: Thread
   activeTurnId: string | null
   items: TranscriptItem[]
   pendingMessage?: SentMessage
   yoloMode: boolean
   onSuggestion: (prompt: string) => void
+  onOpenFile?: (reference: LocalFileReference) => void
+  onOpenLink?: (reference: WebLinkReference) => void
 }) {
-  const rows = conversationItems(thread, items)
+  const rows = useMemo(() => conversationItems(thread, items), [thread, items])
   const pendingMatch = pendingMessage ? rows.findIndex(item => item.type === 'userMessage'
     && Boolean(pendingMessage.turnId) && item.turnId === pendingMessage.turnId
     && itemText(item) === pendingMessage.text) : -1
@@ -272,6 +353,7 @@ export function Conversation({ thread, activeTurnId, items, pendingMessage, yolo
   } : null
   return (
     <section className={`conversation-stream${rows.length === 0 && !pendingMessage && !activeTurnId ? ' is-empty' : ''}`} aria-live="polite">
+      {!thread.historyCacheTruncated && rows.some(item => item.historyItemTruncated) && <p className="history-note">Phần cuối nội dung đã được rút gọn để giữ bản xem trong giới hạn 5 MB. Lịch sử gốc vẫn giữ nguyên.</p>}
       {rows.length === 0 && !pendingMessage && !activeTurnId && (
         <div className="empty-state">
           <h2>What should Codex work on?</h2>
@@ -284,64 +366,17 @@ export function Conversation({ thread, activeTurnId, items, pendingMessage, yolo
       {rows.map((item, index) => (
         <Fragment key={item.id ? `${item.turnId}-${item.id}` : `${item.turnId}-${index}`}>
           {showPending && pendingMessage?.turnId === item.turnId && (index === 0 || rows[index - 1].turnId !== item.turnId) &&
-            <HistoryItem item={pendingItem!} />}
-          <HistoryItem item={index === pendingMatch ? pendingItem! : item} />
+            <HistoryItem item={pendingItem!} onOpenFile={onOpenFile} onOpenLink={onOpenLink} />}
+          <HistoryItem item={index === pendingMatch ? pendingItem! : item} onOpenFile={onOpenFile} onOpenLink={onOpenLink} />
         </Fragment>
       ))}
       {showPending && !rows.some(item => item.turnId === pendingMessage?.turnId) &&
-        <HistoryItem item={pendingItem!} />}
+        <HistoryItem item={pendingItem!} onOpenFile={onOpenFile} onOpenLink={onOpenLink} />}
       {(activeTurnId || (showPending && !pendingMessage?.turnId)) &&
         <div className="working-line"><span className="pulse-dot" />{activeTurnId ? 'Codex is working' : 'Sending…'}</div>}
     </section>
   )
-}
-
-function OutputFeed({ events }: { events: RemoteEvent[] }) {
-  const [filter, setFilter] = useState<'all' | 'agent' | 'commands' | 'requests' | 'system'>('all')
-  const [query, setQuery] = useState('')
-  const rows = useMemo(() => {
-    const normalized = query.trim().toLocaleLowerCase()
-    return compactOutputEvents(events).filter((entry) => {
-      if (filter !== 'all' && entry.category !== filter) return false
-      return !normalized || `${entry.method} ${entry.preview}`.toLocaleLowerCase().includes(normalized)
-    })
-  }, [events, filter, query])
-
-  return (
-    <section className="output-view">
-      <div className="output-toolbar">
-        <label className="output-search"><span aria-hidden="true">⌕</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find output" aria-label="Find output" /></label>
-        <select value={filter} onChange={(event) => setFilter(event.target.value as typeof filter)} aria-label="Filter output">
-          <option value="all">All types</option>
-          <option value="agent">Agent</option>
-          <option value="commands">Commands</option>
-          <option value="requests">Requests</option>
-          <option value="system">System</option>
-        </select>
-        <span className="output-count">{rows.length} rows · {events.length} events</span>
-      </div>
-      <div className="event-feed">
-        {events.length === 0 && <p className="empty-copy">Live output will appear here.</p>}
-        {events.length > 0 && rows.length === 0 && <p className="empty-copy">No output matches this filter.</p>}
-        {rows.map((entry) => (
-          <details className={`event-row event-${entry.category}`} key={`${entry.method}-${entry.id}`}>
-            <summary>
-              <time>{new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</time>
-              <code>{entry.method}</code>
-              <span className="event-preview">{commandSummary(entry.preview || 'No text payload', 120)}</span>
-              {entry.count > 1 && <span className="event-count">{entry.count}×</span>}
-              <span className="details-chevron" aria-hidden="true">⌄</span>
-            </summary>
-            <div className="event-body">
-              {entry.preview && <pre>{entry.preview}</pre>}
-              <JsonDetails value={entry.events.map((event) => event.payload)} label={entry.count > 1 ? `${entry.count} complete events` : 'Complete event'} />
-            </div>
-          </details>
-        ))}
-      </div>
-    </section>
-  )
-}
+})
 
 function RequestCard({ request, csrf, onResolved }: {
   request: PendingRequest
@@ -487,22 +522,29 @@ export function App() {
   const [threads, setThreads] = useState<Thread[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [thread, setThread] = useState<Thread | null>(null)
-  const [events, setEvents] = useState<RemoteEvent[]>([])
+  const [historyReady, setHistoryReady] = useState(false)
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const threadCache = useRef(new ThreadHistoryCache())
+  const currentView = useRef({ thread, ready: historyReady })
+  currentView.current = { thread, ready: historyReady }
+  const historyRequest = useRef<AbortController | null>(null)
+  const cacheHydrated = useRef(false)
   const [transcripts, setTranscripts] = useState<Record<string, TranscriptItem[]>>({})
   const [sentMessages, setSentMessages] = useState<Record<string, SentMessage>>({})
-  const [attachments, setAttachments] = useState<ComposerImage[]>([])
-  const [uploadStatus, setUploadStatus] = useState('')
+  const previewUrls = useRef(new Set<string>())
+  const [attachments, setAttachments, clearAttachments, imagesReady] = useDraftImages(selectedId, previewUrls)
+  const [uploadStatus, setUploadStatus, , clearUploadStatus] = useThreadState(selectedId, '')
+  const [sendError, setSendError, , clearSendErrors] = useThreadState(selectedId, '')
   const [pending, setPending] = useState<PendingRequest[]>([])
   const [models, setModels] = useState<ModelOption[]>([])
-  const [selectedModel, setSelectedModel] = useState<string | null>(null)
-  const [selectedEffort, setSelectedEffort] = useState<string | null>(null)
+  const [selectedModel, setSelectedModel] = useScreenState<string | null>('model', null)
+  const [selectedEffort, setSelectedEffort] = useScreenState<string | null>('effort', null)
   const [yoloMode, setYoloMode, yoloSaveError] = useYoloPreference()
-  const [commandNotice, setCommandNotice] = useState<CommandNotice | null>(null)
+  const [commandNotice, setCommandNotice] = useScreenState<CommandNotice | null>('command-notice', null)
   const [slashIndex, setSlashIndex] = useState(0)
-  const [activeTurnId, setActiveTurnId] = useState<string | null>(null)
-  const [composer, setComposer] = useState('')
-  const [tab, setTab] = useState<'conversation' | 'output'>('conversation')
-  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [activeTurnId, , setThreadTurn, clearThreadTurns] = useThreadState<string | null>(selectedId, null)
+  const [composer, setComposer, , clearDrafts] = useThreadState(selectedId, '', 'drafts')
+  const [drawerOpen, setDrawerOpen] = useScreenState('drawer', false)
   const [connected, setConnected] = useState(false)
   const [cacheReady, setCacheReady] = useState(false)
   const [pageVisible, setPageVisible] = useState(() => document.visibilityState !== 'hidden')
@@ -511,15 +553,66 @@ export function App() {
   const [updateWorker, setUpdateWorker] = useState<ServiceWorker | null>(null)
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
   const [notificationBusy, setNotificationBusy] = useState(false)
-  const [busy, setBusy] = useState(false)
+  const [operationBusy, setBusy] = useState(false)
+  const [sending, setSending] = useState<Record<string, boolean>>({})
+  const busy = operationBusy || !imagesReady || Boolean(selectedId && sending[selectedId])
   const [error, setError] = useState('')
+  const [fileViewer, setFileViewer] = useScreenState<LocalFileReference | null>('file-viewer', null)
+  const [fileBrowserPath, setFileBrowserPath] = useScreenState<string | null>('file-browser', null)
+  const [linkViewer, setLinkViewer] = useScreenState<WebLinkReference | null>('link-viewer', null)
+  const [renamingThread, setRenamingThread] = useState<Thread | null>(null)
+  const { counts: unreadCounts, observe: observeUnread, clear: clearUnread } = useUnreadMessages(
+    threads,
+    session && pageVisible && historyReady && thread?.id === selectedId && !drawerOpen &&
+      !fileViewer && !fileBrowserPath && !linkViewer && !renamingThread ? selectedId : null,
+    Boolean(session?.csrf && online && pageVisible && cacheReady),
+  )
+  const closeRename = useCallback(() => setRenamingThread(null), [])
+  const applyThreadName = useCallback((id: string, name: string | null) => {
+    setThreads(current => current.map(item => item.id === id && item.name !== name ? { ...item, name } : item))
+    setThread(current => current?.id === id && current.name !== name ? { ...current, name } : current)
+  }, [])
   const selectedRef = useRef<string | null>(null)
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
   const attachmentInputRef = useRef<HTMLInputElement | null>(null)
-  const previewUrls = useRef(new Set<string>())
   const readingPositions = useRef(new Map<string, ReadingPosition>())
   const notificationOperation = useRef(false)
   const eventCursor = useRef(0)
+  const eventEpoch = useRef('')
+  const openSequence = useRef(0)
+  const turnVersions = useRef(new Map<string, number>())
+  const completedTurns = useRef(new Set<string>())
+  const sendingLocks = useRef(new Set<string>())
+  const sessionEpoch = useRef(0)
+  const confirmStopped = useCallback((id: string, turnId: string) => {
+    completedTurns.current.add(turnId)
+    setThreadTurn(id, current => current === turnId ? null : current)
+    setSentMessages(current => {
+      if (current[id]?.turnId !== turnId) return current
+      for (const image of current[id].images ?? []) {
+        URL.revokeObjectURL(image.previewUrl)
+        previewUrls.current.delete(image.previewUrl)
+      }
+      const next = { ...current }; delete next[id]; return next
+    })
+  }, [setThreadTurn])
+  const { states: stopStates, stop: stopTurn, confirm: confirmStop } = useInterrupt(session?.csrf, confirmStopped)
+  const stopState = selectedId && stopStates[selectedId]?.turnId === activeTurnId ? stopStates[selectedId] : undefined
+  const closeFileViewer = useCallback(() => setFileViewer(null), [])
+  const closeFileBrowser = useCallback(() => setFileBrowserPath(null), [])
+  const closeLinkViewer = useCallback(() => setLinkViewer(null), [])
+  const openFile = useCallback((reference: LocalFileReference) => {
+    setLinkViewer(null)
+    setFileViewer(reference)
+  }, [])
+  const openLink = useCallback((reference: WebLinkReference) => {
+    setFileViewer(null)
+    setLinkViewer(reference)
+  }, [])
+  const suggestPrompt = useCallback((prompt: string) => {
+    setComposer(prompt)
+    requestAnimationFrame(() => composerRef.current?.focus())
+  }, [setComposer])
 
   useEffect(() => () => {
     for (const url of previewUrls.current) URL.revokeObjectURL(url)
@@ -530,7 +623,7 @@ export function App() {
     let cancelled = false
     let retry: ReturnType<typeof setTimeout> | undefined
     setNotificationsEnabled(false)
-    if (!session) return
+    if (!session?.csrf) return
     const restore = async () => {
       if (cancelled) return
       if (notificationOperation.current) {
@@ -548,11 +641,9 @@ export function App() {
       try {
         const enabled = await restorePush(session.csrf)
         if (!cancelled) setNotificationsEnabled(enabled)
-      } catch (requestError) {
-        if (!cancelled) {
-          setNotificationsEnabled(false)
-          setError(`Could not restore notifications: ${errorMessage(requestError)}`)
-        }
+      } catch {
+        // Restoration retries on focus/online; a transient failure must not
+        // replace the current screen or imply the subscription was removed.
       } finally {
         notificationOperation.current = false
         if (!cancelled) setNotificationBusy(false)
@@ -570,9 +661,38 @@ export function App() {
   }, [session])
 
   useEffect(() => {
-    api.session().then(setSession).catch((requestError) => {
-      if (!(requestError instanceof ApiError) || requestError.status !== 401) setError(errorMessage(requestError))
-    }).finally(() => setAuthLoading(false))
+    let cancelled = false
+    let retry: ReturnType<typeof setTimeout> | undefined
+    let checking = false
+    let authenticated = false
+    const check = async () => {
+      if (cancelled || checking || authenticated) return
+      checking = true
+      try {
+        const verified = await api.session(AbortSignal.timeout(8_000))
+        if (!cancelled) { authenticated = true; setSession(verified); setAuthLoading(false) }
+      } catch (requestError) {
+        if (cancelled) return
+        if (requestError instanceof ApiError && requestError.status === 401) {
+          setSession(null)
+          setAuthLoading(false)
+        } else {
+          // A connection failure is not a logout. Never retry user instructions.
+          retry = setTimeout(() => void check(), 3_000)
+        }
+      } finally { checking = false }
+    }
+    void loadConversationSnapshot().then(cached => {
+      if (cancelled) return
+      if (cached?.session && cached.session.expiresAt * 1_000 > Date.now()) {
+        setSession({ ...cached.session, csrf: '' })
+        setAuthLoading(false)
+      }
+      void check()
+    })
+    const reconnect = () => { clearTimeout(retry); void check() }
+    window.addEventListener('online', reconnect)
+    return () => { cancelled = true; clearTimeout(retry); window.removeEventListener('online', reconnect) }
   }, [])
 
   useEffect(() => {
@@ -610,32 +730,75 @@ export function App() {
     return () => document.removeEventListener('visibilitychange', handleVisibility)
   }, [])
 
+  useEffect(() => {
+    if (!session?.csrf || !notificationsEnabled) return
+    const report = () => void reportPushVisibility(session.csrf, pageVisible).catch(() => undefined)
+    report()
+    if (!pageVisible) return
+    const heartbeat = window.setInterval(report, 15_000)
+    return () => window.clearInterval(heartbeat)
+  }, [notificationsEnabled, pageVisible, session])
+
   const refreshThreads = useCallback(async () => {
     const response = await api.threads()
     setThreads(response.data)
     return response.data
   }, [])
 
+  useEffect(() => {
+    if (thread && historyReady) threadCache.current.remember(thread)
+  }, [thread, historyReady])
+
+  useEffect(() => () => historyRequest.current?.abort(), [])
+
   const openThread = useCallback(async (target: Thread, csrf = session?.csrf, preserveVisibleCache = false) => {
-    if (!csrf) return
+    const previous = currentView.current
+    if (previous.thread && previous.ready) threadCache.current.remember(previous.thread)
+    const cached = threadCache.current.get(target.id)
+    const sequence = ++openSequence.current
+    const epoch = sessionEpoch.current
+    const version = turnVersions.current.get(target.id)
+    historyRequest.current?.abort()
+    const request = new AbortController()
+    historyRequest.current = request
     setSelectedId(target.id)
     selectedRef.current = target.id
-    setDrawerOpen(false)
+    if (!preserveVisibleCache) setDrawerOpen(false)
     setError('')
-    setCommandNotice(null)
-    if (!preserveVisibleCache) setThread(null)
-    const history = await api.thread(target.id)
-    await api.resumeThread(target.id, csrf)
-    setThread((current) => history.thread.historyUnavailable && preserveVisibleCache && current?.id === target.id
-      ? { ...current, ...history.thread, turns: current.turns }
-      : history.thread)
-    setSelectedModel(history.thread.model ?? null)
-    setSelectedEffort(null)
-    if (!history.thread.historyUnavailable || !preserveVisibleCache) {
-      const running = [...(history.thread.turns ?? [])].reverse().find((turn) => turn.status === 'inProgress')
-      setActiveTurnId(running?.id ?? null)
+    if (!preserveVisibleCache) setCommandNotice(null)
+    setThread(cached ? { ...target, ...cached, name: target.name ?? cached.name } : { ...target, turns: [], historyUnavailable: true })
+    setHistoryReady(Boolean(cached))
+    if (!preserveVisibleCache) {
+      setSelectedModel(cached?.model ?? target.model ?? null)
+      setSelectedEffort(null)
     }
-  }, [session?.csrf])
+    if (!csrf || !navigator.onLine) { setHistoryLoading(false); return }
+    setHistoryLoading(true)
+    // Resuming subscribes the runtime, but must never block painting history.
+    void api.resumeThread(target.id, csrf).catch(() => undefined)
+    try {
+      const history = await api.thread(target.id, AbortSignal.any([request.signal, AbortSignal.timeout(10_000)]))
+      if (request.signal.aborted || sequence !== openSequence.current || selectedRef.current !== target.id || epoch !== sessionEpoch.current) return
+      threadCache.current.remember(history.thread)
+      setThread((current) => history.thread.historyUnavailable && cached && current?.id === target.id
+        ? { ...current, ...history.thread, turns: current.turns }
+        : history.thread)
+      setHistoryReady(true)
+      setTranscripts(current => {
+        const before = current[target.id] ?? EMPTY_ITEMS
+        const after = reconcileTranscript(before, history.thread)
+        return before === after ? current : { ...current, [target.id]: after }
+      })
+      if (!history.thread.historyUnavailable && version === turnVersions.current.get(target.id)) {
+        const running = history.thread.latestTurn?.status === 'inProgress' ? history.thread.latestTurn : [...(history.thread.turns ?? [])].reverse().find((turn) => turn.status === 'inProgress')
+        setThreadTurn(target.id, running?.id ?? null)
+      }
+    } catch (requestError) {
+      if (!request.signal.aborted && sequence === openSequence.current && selectedRef.current === target.id && !cached) throw requestError
+    } finally {
+      if (sequence === openSequence.current && epoch === sessionEpoch.current) setHistoryLoading(false)
+    }
+  }, [session?.csrf, setThreadTurn])
 
   useEffect(() => {
     if (!session) {
@@ -646,16 +809,23 @@ export function App() {
     void (async () => {
       const cached = await loadConversationSnapshot()
       if (cancelled) return
-      if (cached) {
+      if (cached && !cacheHydrated.current) {
+        threadCache.current.restore(cached.histories)
+        if (cached.thread) threadCache.current.remember(cached.thread)
         setThreads(cached.threads)
         setSelectedId(cached.selectedId)
         selectedRef.current = cached.selectedId
         setThread(cached.thread)
+        setHistoryReady(Boolean(cached.thread))
         setTranscripts(cached.transcripts)
-        setActiveTurnId(cached.activeTurnId)
+        setThreadTurn(cached.selectedId, cached.activeTurnId)
         eventCursor.current = cached.lastEventId
+        eventEpoch.current = cached.eventEpoch ?? ''
       }
+      cacheHydrated.current = true
       setCacheReady(true)
+
+      if (!session.csrf) return
 
       try {
         const [items, pendingResponse, modelResponse] = await Promise.all([refreshThreads(), api.pending(), api.models()])
@@ -663,62 +833,127 @@ export function App() {
         setPending(pendingResponse.data)
         setModels(modelResponse.data)
         const preferred = items.find((item) => item.id === cached?.selectedId) ?? items[0]
-        if (preferred) await openThread(preferred, session.csrf, preferred.id === cached?.selectedId)
+        if (preferred && (!selectedRef.current || selectedRef.current === cached?.selectedId)) await openThread(preferred, session.csrf, preferred.id === cached?.selectedId)
       } catch (requestError) {
-        if (!cancelled) setError(errorMessage(requestError))
+        if (!cancelled && !cached) setError(errorMessage(requestError))
       }
     })()
     return () => { cancelled = true }
-  }, [session, refreshThreads, openThread])
+  }, [session, refreshThreads, openThread, setThreadTurn])
 
   useEffect(() => {
-    if (!session || !cacheReady || (thread && thread.id !== selectedId)) return
-    const timer = setTimeout(() => {
+    if (!session || !cacheReady || !historyReady || (thread && thread.id !== selectedId)) return
+    const save = () => {
       void saveConversationSnapshot({
         threads,
         selectedId,
         thread,
+        histories: threadCache.current.snapshot(),
         transcripts,
         activeTurnId,
         lastEventId: eventCursor.current,
+        eventEpoch: eventEpoch.current,
+        session: { expiresAt: session.expiresAt, workspaces: session.workspaces },
       })
-    }, 150)
-    return () => clearTimeout(timer)
-  }, [activeTurnId, cacheReady, selectedId, session, thread, threads, transcripts])
-
-  useEffect(() => {
-    if (!session || !pageVisible) return
-    void refreshThreads().catch(() => undefined)
-    const id = selectedRef.current
-    if (id) {
-      void api.thread(id).then((response) => setThread((current) => (
-        response.thread.historyUnavailable && current?.id === id
-          ? { ...current, ...response.thread, turns: current.turns }
-          : response.thread
-      ))).catch(() => undefined)
     }
-  }, [pageVisible, session, refreshThreads])
+    const timer = setTimeout(save, 150)
+    const hidden = () => { if (document.visibilityState === 'hidden') save() }
+    window.addEventListener('pagehide', save)
+    document.addEventListener('visibilitychange', hidden)
+    return () => {
+      clearTimeout(timer)
+      window.removeEventListener('pagehide', save)
+      document.removeEventListener('visibilitychange', hidden)
+    }
+  }, [activeTurnId, cacheReady, historyReady, selectedId, session, thread, threads, transcripts])
 
   useEffect(() => {
-    if (!session?.csrf || !notificationsEnabled) return
-    const report = () => void reportPushVisibility(session.csrf, pageVisible).catch(() => undefined)
-    report()
-    if (!pageVisible) return
-    const heartbeat = window.setInterval(report, 15_000)
-    return () => window.clearInterval(heartbeat)
-  }, [notificationsEnabled, pageVisible, session])
+    if (!session?.csrf || !pageVisible || !online) return
+    let cancelled = false
+    let syncing = false
+    let optionsLoaded = false
+    const sync = async () => {
+      if (syncing || cancelled) return
+      syncing = true
+      const id = selectedRef.current
+      const sequence = openSequence.current
+      const version = id ? turnVersions.current.get(id) : undefined
+      void refreshThreads().catch(() => undefined)
+      if (!optionsLoaded) void Promise.all([api.pending(), api.models()]).then(([requests, modelList]) => {
+        if (cancelled) return
+        setPending(requests.data)
+        setModels(modelList.data)
+        optionsLoaded = true
+      }).catch(() => undefined)
+      if (!id) { syncing = false; return }
+      try {
+        const response = await api.thread(id, AbortSignal.timeout(8_000))
+        if (cancelled || sequence !== openSequence.current || selectedRef.current !== id || version !== turnVersions.current.get(id)) return
+        threadCache.current.remember(response.thread)
+        setThread(current => current?.id !== id ? current : response.thread.historyUnavailable
+          ? { ...current, ...response.thread, turns: current.turns } : response.thread)
+        setHistoryReady(true)
+        setTranscripts(current => {
+          const before = current[id] ?? EMPTY_ITEMS
+          const after = reconcileTranscript(before, response.thread)
+          return before === after ? current : { ...current, [id]: after }
+        })
+        if (!response.thread.historyUnavailable) {
+          const running = response.thread.latestTurn?.status === 'inProgress' ? response.thread.latestTurn : [...(response.thread.turns ?? [])].reverse().find(turn => turn.status === 'inProgress')
+          if (running) setThreadTurn(id, running.id)
+          else setThreadTurn(id, current => current && !turnHasEnded(response.thread, current) ? current : null)
+        }
+      } catch { /* Reconnect is background work; don't replace the screen. */ }
+      finally { syncing = false }
+    }
+    void sync()
+    const retry = setInterval(() => void sync(), 15_000)
+    return () => { cancelled = true; clearInterval(retry) }
+  }, [pageVisible, online, session, refreshThreads, setThreadTurn])
 
   const keepLive = shouldKeepEventStream(pageVisible, activeTurnId)
 
   useEffect(() => {
-    if (!session || !keepLive) {
+    if (!session?.csrf || !cacheReady || !keepLive || !online) {
       setConnected(false)
       return
     }
-    const source = new EventSource(`/api/events?after=${eventCursor.current}`)
+    const source = new EventSource(`/api/events?${new URLSearchParams({ after: String(eventCursor.current), epoch: eventEpoch.current })}`)
     const assembler = new EventAssembler()
+    const epoch = sessionEpoch.current
+    let queued: RemoteEvent[] = []
+    let flushTimer: ReturnType<typeof setTimeout> | undefined
+    const flush = () => {
+      flushTimer = undefined
+      const batch = queued
+      queued = []
+      if (!batch.length || epoch !== sessionEpoch.current) return
+      setTranscripts(current => {
+        let next = current
+        for (const event of batch) {
+          if (event.replayed) continue
+          const id = eventThreadId(event)
+          if (!id) continue
+          const before = next[id] ?? EMPTY_ITEMS
+          const after = updateTranscript(before, event)
+          if (before === after) continue
+          if (next === current) next = { ...current }
+          next[id] = after
+        }
+        return next
+      })
+      for (const event of batch) handleEvent(event)
+    }
     source.onopen = () => setConnected(true)
     source.onerror = () => { assembler.reset(); setConnected(false) }
+    source.addEventListener('stream-state', message => {
+      try {
+        const state = JSON.parse((message as MessageEvent<string>).data) as { epoch: string; reset: boolean }
+        if (typeof state.epoch !== 'string') return
+        if (state.reset || (eventEpoch.current && eventEpoch.current !== state.epoch)) eventCursor.current = 0
+        eventEpoch.current = state.epoch
+      } catch { /* Old gateways need not send this handshake. */ }
+    })
     const receive = (data: string) => {
       let event: RemoteEvent
       try {
@@ -726,9 +961,14 @@ export function App() {
       } catch {
         return
       }
-      eventCursor.current = Math.max(eventCursor.current, event.id)
-      setEvents((current) => [...current, event].slice(-600))
-
+      if (!Number.isSafeInteger(event.id)) return
+      if (event.replayed && event.id < eventCursor.current && !eventEpoch.current) eventCursor.current = 0
+      if (event.id <= eventCursor.current) return
+      eventCursor.current = event.id
+      queued.push(event)
+      if (flushTimer === undefined) flushTimer = setTimeout(flush, 50)
+    }
+    const handleEvent = (event: RemoteEvent) => {
       if (event.type === 'request') {
         const incoming = event.payload as unknown as PendingRequest
         setPending((current) => current.some((item) => item.key === incoming.key) ? current : [...current, incoming])
@@ -741,15 +981,40 @@ export function App() {
       const method = eventMethod(event)
       const params = object(object(event.payload).params)
       const eventThread = eventThreadId(event)
-      if (eventThread) setTranscripts(current => ({ ...current, [eventThread]: updateTranscript(current[eventThread] ?? [], event) }))
-      if (method === 'turn/started' && eventThread === selectedRef.current) {
+      if (method === 'thread/name/updated' && eventThread && (typeof params.threadName === 'string' || params.threadName === null)) {
+        applyThreadName(eventThread, params.threadName)
+      }
+      if (event.replayed && event.type === 'codex') {
+        // Recover runtime status even when Codex cannot return persisted turns,
+        // but never append overlapping backlog deltas or trigger a refresh storm.
+        const turnId = object(params.turn).id ?? params.turnId
+        if (eventThread && typeof turnId === 'string') {
+          if (method === 'turn/completed') confirmStop(eventThread, turnId)
+          else if (!completedTurns.current.has(turnId)) setThreadTurn(eventThread, current => current ?? turnId)
+        }
+        return
+      }
+      if (method === 'item/completed' && eventThread && typeof params.turnId === 'string') {
+        const item = object(params.item)
+        if (item.type === 'agentMessage' && typeof item.id === 'string' && typeof item.text === 'string' && item.text.trim()) {
+          observeUnread(eventThread, [`${params.turnId}:${item.id}`])
+        }
+      }
+      if (eventThread && ['turn/started', 'turn/completed'].includes(method)) {
+        turnVersions.current.set(eventThread, (turnVersions.current.get(eventThread) ?? 0) + 1)
+      }
+      if (method === 'turn/started' && eventThread) {
         const turn = object(params.turn)
-        if (typeof turn.id === 'string') setActiveTurnId(turn.id)
+        if (typeof turn.id === 'string') setThreadTurn(eventThread, turn.id)
       }
       if (method === 'turn/completed') {
+        const completed = object(params.turn).id
+        if (typeof completed === 'string') completedTurns.current.add(completed)
+        if (eventThread && typeof completed === 'string') confirmStop(eventThread, completed)
         if (eventThread) setSentMessages(current => {
           const sent = current[eventThread]
           if (!sent) return current
+          if (sent.turnId && sent.turnId !== completed) return current
           for (const image of sent.images ?? []) {
             URL.revokeObjectURL(image.previewUrl)
             previewUrls.current.delete(image.previewUrl)
@@ -759,11 +1024,10 @@ export function App() {
           return next
         })
         if (eventThread === selectedRef.current) {
-          setActiveTurnId(null)
           setTimeout(() => {
-            const id = selectedRef.current
-            if (id) api.thread(id).then((response) => setThread((current) => (
-              response.thread.historyUnavailable && current?.id === id
+            const id = eventThread
+            if (id && selectedRef.current === id) api.thread(id).then((response) => setThread((current) => (
+              selectedRef.current !== id || current?.id !== id ? current : response.thread.historyUnavailable
                 ? { ...current, ...response.thread, turns: current.turns }
                 : response.thread
             ))).catch(() => undefined)
@@ -781,15 +1045,13 @@ export function App() {
       if (data !== null) receive(data)
     })
     return () => {
+      clearTimeout(flushTimer)
+      flush()
       source.close()
       setConnected(false)
     }
-  }, [keepLive, pageVisible, session, refreshThreads])
+  }, [keepLive, online, cacheReady, session, refreshThreads, setThreadTurn, confirmStop, applyThreadName, observeUnread])
 
-  const selectedEvents = useMemo(() => events.filter((event) => {
-    const id = eventThreadId(event)
-    return id === null || id === selectedId
-  }), [events, selectedId])
   const selectedPending = useMemo(() => pending.filter((request) => {
     const id = request.params.threadId
     return !selectedId || typeof id !== 'string' || id === selectedId
@@ -850,9 +1112,12 @@ export function App() {
   useEffect(() => {
     const textarea = composerRef.current
     if (!textarea) return
-    textarea.style.height = 'auto'
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`
-  }, [composer])
+    const frame = requestAnimationFrame(() => {
+      textarea.style.height = 'auto'
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [composer, thread?.id])
 
   async function createThread() {
     if (!session || busy) return
@@ -902,7 +1167,6 @@ export function App() {
           { label: 'Thread', value: activeTurnId ? 'Working' : typeof runtimeStatus === 'string' ? runtimeStatus : 'Idle' },
           { label: 'Approvals', value: 'Disabled' },
           { label: 'Sandbox', value: yoloMode ? 'Host access (YOLO)' : 'Workspace only' },
-          { label: 'Buffered events', value: String(selectedEvents.length) },
           ...usageLines,
         ])
         return
@@ -1009,22 +1273,28 @@ export function App() {
   async function submitInstruction(event: FormEvent) {
     event.preventDefault()
     if (!session || !thread || (!composer.trim() && attachments.length === 0)) return
+    if (!historyReady) { setSendError('Wait for this conversation to load. Your draft is kept.'); return }
+    if (!online || !session.csrf) { setSendError('Reconnecting… Your draft is kept. Send it when the connection returns.'); return }
     const instruction = composer.trim()
     const slashCommand = parseSlashCommand(instruction)
     if (slashCommand) {
       await executeSlashCommand(slashCommand.name, slashCommand.argument)
       return
     }
-    if (busy) return
+    if (busy || sendingLocks.current.has(thread.id)) return
     if (activeTurnId) {
       setError('Your draft is saved here. Send it when this turn finishes, or stop the turn first.')
       return
     }
-    setBusy(true)
+    sendingLocks.current.add(thread.id)
+    setSendError('')
+    setSending(current => ({ ...current, [thread.id]: true }))
     setComposer('')
     setError('')
     const sendingThreadId = thread.id
+    const epoch = sessionEpoch.current
     const sendingImages = attachments
+    setAttachments([])
     const sent: SentMessage = {
       text: instruction,
       images: sendingImages.map(image => ({ name: image.file.name, previewUrl: image.previewUrl })),
@@ -1035,6 +1305,7 @@ export function App() {
       for (const [index, image] of sendingImages.entries()) {
         setUploadStatus(`Uploading image ${index + 1} of ${sendingImages.length} · ${image.file.name}`)
         uploadedIds.push((await api.uploadAttachment(image.file, session.csrf)).id)
+        if (epoch !== sessionEpoch.current) return
       }
       setUploadStatus('Starting Codex…')
       const response = await api.startTurn(thread.id, instruction, session.csrf, {
@@ -1043,17 +1314,24 @@ export function App() {
         fullAccess: yoloMode,
         attachmentIds: uploadedIds,
       })
-      setAttachments([])
-      setSentMessages(current => ({ ...current, [sendingThreadId]: { ...sent, turnId: response.turn.id } }))
-      if (selectedRef.current === sendingThreadId) setActiveTurnId(response.turn.id)
+      if (epoch !== sessionEpoch.current) return
+      if (!completedTurns.current.has(response.turn.id)) {
+        setSentMessages(current => ({ ...current, [sendingThreadId]: { ...sent, turnId: response.turn.id } }))
+        setThreadTurn(sendingThreadId, response.turn.id)
+      }
     } catch (requestError) {
       await Promise.allSettled(uploadedIds.map(id => api.deleteAttachment(id, session.csrf)))
+      if (epoch !== sessionEpoch.current) return
       setSentMessages(current => { const next = { ...current }; delete next[sendingThreadId]; return next })
-      setComposer(instruction)
-      setError(errorMessage(requestError))
+      setComposer(current => current ? `${instruction}\n${current}` : instruction)
+      setAttachments(current => [...sendingImages, ...current])
+      setSendError(errorMessage(requestError))
     } finally {
-      setUploadStatus('')
-      setBusy(false)
+      if (epoch === sessionEpoch.current) {
+        setUploadStatus('')
+        sendingLocks.current.delete(sendingThreadId)
+        setSending(current => { const next = { ...current }; delete next[sendingThreadId]; return next })
+      }
     }
   }
 
@@ -1102,15 +1380,8 @@ export function App() {
   }
 
   async function interrupt() {
-    if (!session || !thread || !activeTurnId) return
-    setBusy(true)
-    try {
-      await api.interrupt(thread.id, activeTurnId, session.csrf)
-    } catch (requestError) {
-      setError(errorMessage(requestError))
-    } finally {
-      setBusy(false)
-    }
+    if (!thread || !activeTurnId) return
+    await stopTurn(thread.id, activeTurnId)
   }
 
   async function archive() {
@@ -1118,7 +1389,9 @@ export function App() {
     setBusy(true)
     try {
       await api.archiveThread(thread.id, session.csrf)
+      threadCache.current.delete(thread.id)
       const remaining = (await refreshThreads()).filter((item) => item.id !== thread.id)
+      if (selectedRef.current !== thread.id) return
       setThread(null)
       setSelectedId(null)
       selectedRef.current = null
@@ -1128,6 +1401,14 @@ export function App() {
     } finally {
       setBusy(false)
     }
+  }
+
+  async function renameConversation(id: string, name: string) {
+    if (!session?.csrf || !online) throw new Error('Reconnect before saving the conversation name')
+    const epoch = sessionEpoch.current
+    const response = await api.renameThread(id, name, session.csrf)
+    if (epoch !== sessionEpoch.current) return
+    applyThreadName(id, response.name)
   }
 
   async function logout() {
@@ -1143,16 +1424,37 @@ export function App() {
       return
     }
     await clearConversationSnapshot()
+    historyRequest.current?.abort()
+    threadCache.current.clear()
+    cacheHydrated.current = false
+    setHistoryReady(false)
+    setHistoryLoading(false)
+    clearUnread()
+    clearScreenState()
+    sessionEpoch.current += 1
+    sendingLocks.current.clear()
+    completedTurns.current.clear()
+    turnVersions.current.clear()
+    setSending({})
     eventCursor.current = 0
+    eventEpoch.current = ''
     selectedRef.current = null
     setSession(null)
     setThread(null)
     setThreads([])
     setSelectedId(null)
-    setActiveTurnId(null)
-    setEvents([])
+    openSequence.current += 1
+    clearThreadTurns()
+    clearDrafts()
+    clearAttachments()
+    clearUploadStatus()
+    clearSendErrors()
     setTranscripts({})
     setSentMessages({})
+    setFileViewer(null)
+    setLinkViewer(null)
+    setFileBrowserPath(null)
+    setRenamingThread(null)
     for (const url of previewUrls.current) URL.revokeObjectURL(url)
     previewUrls.current.clear()
     setAttachments([])
@@ -1197,20 +1499,25 @@ export function App() {
     }
   }
 
-  if (authLoading) return <main className="loading-shell"><span className="spinner" /><p>Connecting to Codex Remote…</p></main>
+  if (authLoading) return <main className="loading-shell"><span className="spinner" /><p>{online ? 'Reconnecting to Codex Remote…' : 'Offline — waiting for connection…'}</p></main>
   if (!session) return <Login installPrompt={installPrompt} offline={!online} onInstall={() => void installApp()} onLogin={setSession} />
 
   return (
     <div className="app-shell">
       <ThreadSidebar
         threads={threads}
+        unreadCounts={unreadCounts}
         selectedId={selectedId}
         open={drawerOpen}
         busy={busy}
         onClose={() => setDrawerOpen(false)}
         onCreate={() => void createThread()}
-        onRefresh={() => void refreshThreads().catch((requestError) => setError(errorMessage(requestError)))}
+        onLock={() => void logout()}
+        notificationsEnabled={notificationsEnabled}
+        notificationBusy={notificationBusy}
+        onToggleNotifications={() => void toggleNotifications()}
         onSelect={(target) => void openThread(target).catch((requestError) => setError(errorMessage(requestError)))}
+        onRename={setRenamingThread}
         workspaceLabel={session.workspaces[0]?.label || shortWorkspace(session.workspaces[0]?.path ?? '') || 'Workspace'}
       />
 
@@ -1218,45 +1525,45 @@ export function App() {
         <header className="workspace-header">
           <button className="icon-button mobile-only" onClick={() => setDrawerOpen(true)} aria-label="Open conversations">☰</button>
           <div className="workspace-title">
-            <h1>{thread ? threadTitle(thread) : 'Codex Remote'}</h1>
+            <div className="workspace-title-line">
+              <h1>{thread ? threadTitle(thread) : 'Codex Remote'}</h1>
+            </div>
             <p>
               {thread ? <>{shortWorkspace(thread.cwd)}{effectiveModel ? ` · ${effectiveModel}` : ''}{selectedEffort ? ` · ${selectedEffort}` : ''}</> : 'Private workspace agent'}
             </p>
           </div>
-          <div className={`connection-chip ${connected && online ? 'is-online' : ''} ${!online ? 'is-offline' : ''}`}>
-            <span className="connection-dot" />
-            {!online ? 'Offline' : connected ? 'Live' : activeTurnId ? 'Running' : 'Syncing'}
-          </div>
+          {yoloMode && <button className="yolo-chip" type="button" onClick={() => {
+            setYoloMode(false)
+            showCommandNotice('YOLO mode disabled', [
+              { label: 'Approval prompts', value: 'Always disabled' },
+              { label: 'Next turn sandbox', value: 'Workspace only' },
+            ])
+          }} title="Full VPS host access is enabled. Click to return future turns to the workspace sandbox.">YOLO</button>}
           <div className="header-actions">
-            {yoloMode && <button className="yolo-chip" type="button" onClick={() => {
-              setYoloMode(false)
-              showCommandNotice('YOLO mode disabled', [
-                { label: 'Approval prompts', value: 'Always disabled' },
-                { label: 'Next turn sandbox', value: 'Workspace only' },
-              ])
-            }} title="Full VPS host access is enabled. Click to return future turns to the workspace sandbox.">YOLO</button>}
+            <div className={`connection-chip ${connected && online ? 'is-online' : ''} ${!online ? 'is-offline' : ''}`}>
+              <span className="connection-dot" />
+              {!online ? 'Offline' : connected ? 'Live' : activeTurnId ? 'Running' : 'Syncing'}
+            </div>
             {pending.length > 0 && <span className="pending-badge" title={`${pending.length} action${pending.length === 1 ? '' : 's'} needed`}>{pending.length}</span>}
-            <button className={`quiet-button notification-button ${notificationsEnabled ? 'is-enabled' : ''}`} type="button" disabled={notificationBusy} onClick={() => void toggleNotifications()} title={notificationsEnabled ? 'Completion notifications are on' : 'Enable completion notifications'} aria-label={notificationsEnabled ? 'Disable completion notifications' : 'Enable completion notifications'}>🔔<span>{notificationBusy ? 'Saving…' : notificationsEnabled ? 'On' : 'Notify'}</span></button>
             {installPrompt && <button className="quiet-button install-button" onClick={() => void installApp()}>Install</button>}
             {thread && <button className="quiet-button archive-button" onClick={() => void archive()} disabled={busy || Boolean(activeTurnId)}>Archive</button>}
-            <button className="quiet-button" onClick={() => void logout()}>Lock</button>
           </div>
         </header>
 
         <nav className="view-tabs" aria-label="Conversation view">
-          <button className={tab === 'conversation' ? 'is-active' : ''} onClick={() => setTab('conversation')}>Conversation</button>
-          <button className={tab === 'output' ? 'is-active' : ''} onClick={() => setTab('output')}>All output <span>{selectedEvents.length}</span></button>
+          <span className="conversation-view-label">Conversation</span>
+          <button className="files-tab" type="button" disabled={!thread} onClick={() => thread && setFileBrowserPath(thread.cwd)}>Files</button>
         </nav>
 
-        <TranscriptViewport key={`${selectedId}-${tab}`} viewKey={`${selectedId}-${tab}`} ready={Boolean(thread)} positions={readingPositions.current}>
+        <TranscriptViewport key={`${selectedId}-conversation`} viewKey={`${selectedId}-conversation`} ready={Boolean(thread) && historyReady} positions={readingPositions.current}>
           {updateWorker && (
             <div className="update-banner" role="status">
               <div><strong>Update ready</strong><span>A fresher Codex Remote is available.</span></div>
-              <button className="primary-button" onClick={() => updateWorker.postMessage({ type: 'SKIP_WAITING' })}>Reload</button>
+              <button className="primary-button" onClick={() => { flushScreenState(); updateWorker.postMessage({ type: 'SKIP_WAITING' }) }}>Reload</button>
             </div>
           )}
-          {!online && <div className="offline-banner global-offline" role="status">You’re offline. Conversation history remains visible, but new actions need a connection.</div>}
           {error && <div className="error-banner global-error" role="alert"><span>{error}</span><button onClick={() => setError('')}>×</button></div>}
+          {sendError && <div className="error-banner global-error" role="alert"><span>{sendError}</span><button onClick={() => setSendError('')}>×</button></div>}
           {yoloSaveError && <p className="error-banner" role="alert">{yoloSaveError}</p>}
           {selectedPending.map((request) => (
             <RequestCard
@@ -1276,11 +1583,11 @@ export function App() {
             </div>
           )}
           {!thread && threads.length > 0 && <div className="loading-inline"><span className="spinner" /> Loading conversation…</div>}
-          {thread && tab === 'conversation' && <Conversation thread={thread} activeTurnId={activeTurnId} items={transcripts[thread.id] ?? []} pendingMessage={sentMessages[thread.id]} yoloMode={yoloMode} onSuggestion={(prompt) => {
-            setComposer(prompt)
-            requestAnimationFrame(() => composerRef.current?.focus())
-          }} />}
-          {thread && tab === 'output' && <OutputFeed events={selectedEvents} />}
+          {thread && !historyReady && <div className="loading-inline" role="status">
+            {historyLoading ? <><span className="spinner" />Loading conversation…</> : <><span>{online ? 'Conversation could not be loaded.' : 'This conversation is not cached on this device yet.'}</span><button type="button" className="quiet-button" disabled={!online} onClick={() => void openThread(thread).catch(reason => setError(errorMessage(reason)))}>Retry</button></>}
+          </div>}
+          {thread?.historyCacheTruncated && <p className="history-note">{thread.historyTruncation === 'tail' ? 'Hội thoại vượt giới hạn 5 MB: phần cuối đã được rút gọn trong bản xem/cache. Lịch sử gốc vẫn giữ nguyên.' : 'Showing recent cached messages. Full history refreshes when connected.'}</p>}
+          {thread && historyReady && <Conversation thread={thread} activeTurnId={activeTurnId} items={transcripts[thread.id] ?? EMPTY_ITEMS} pendingMessage={sentMessages[thread.id]} yoloMode={yoloMode} onOpenFile={openFile} onOpenLink={openLink} onSuggestion={suggestPrompt} />}
         </TranscriptViewport>
 
         {thread && (
@@ -1402,17 +1709,24 @@ export function App() {
                 maxLength={100_000}
               />
               {activeTurnId ? (
-                <button type="button" className="stop-button" onClick={() => void interrupt()} disabled={busy} aria-label="Stop Codex">■</button>
+                <button type="button" className="stop-button" onClick={() => void interrupt()} disabled={stopState?.phase === 'stopping' || !online || !session.csrf} aria-label={stopState?.phase === 'stopping' ? 'Stopping Codex' : stopState?.phase === 'error' ? 'Retry stop' : 'Stop Codex'} aria-busy={stopState?.phase === 'stopping'}>{stopState?.phase === 'stopping' ? <span className="spinner" /> : '■'}</button>
               ) : (
-                <button type="submit" className="send-button" disabled={busy || (!composer.trim() && attachments.length === 0)} aria-label="Send instruction">↑</button>
+                <button type="submit" className="send-button" disabled={busy || !historyReady || !online || !session.csrf || (!composer.trim() && attachments.length === 0)} aria-label="Send instruction">↑</button>
               )}
             </div>
             <div className="composer-meta">
-              <span>{activeTurnId ? <><i className="pulse-dot" /> Codex is working</> : 'Type / for commands · Enter to send'}</span>
+              <span role="status">{stopState ? stopState.message : activeTurnId ? <><i className="pulse-dot" /> Codex is working</> : 'Type / for commands · Enter to send'}</span>
               {!activeTurnId && (composer.length > 0 || attachments.length > 0) && <span>{attachments.length > 0 ? `${attachments.length} image${attachments.length === 1 ? '' : 's'} · ` : ''}{composer.length.toLocaleString()} / 100,000</span>}
             </div>
           </form>
         )}
+        {fileBrowserPath && <FileBrowser key={fileBrowserPath} initialPath={fileBrowserPath} covered={Boolean(fileViewer || linkViewer)} onClose={closeFileBrowser} onOpenFile={openFile} />}
+        {fileViewer && <FileViewer key={fileViewer.path} reference={fileViewer} onClose={closeFileViewer} onOpenFile={setFileViewer} onOpenLink={(reference) => {
+          setFileViewer(null)
+          setLinkViewer(reference)
+        }} />}
+        {linkViewer && <LinkViewer reference={linkViewer} onClose={closeLinkViewer} />}
+        {renamingThread && <RenameConversation key={renamingThread.id} thread={renamingThread} online={online && Boolean(session.csrf)} onSave={renameConversation} onClose={closeRename} />}
       </main>
     </div>
   )
