@@ -60,6 +60,7 @@ summary:focus-visible {
 }
 
 button:disabled,
+select:disabled,
 textarea:disabled {
   cursor: not-allowed;
   opacity: 0.55;
@@ -752,6 +753,10 @@ textarea:focus {
 
 .local-command-result dl {
   display: grid;
+  max-height: min(280px, 36dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   margin: 0;
   padding: 7px 13px 11px;
 }
@@ -1546,7 +1551,7 @@ textarea:focus {
 }
 
 .slash-options {
-  max-height: min(340px, 46dvh);
+  max-height: min(340px, 40dvh);
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 6px;
@@ -1725,9 +1730,10 @@ textarea:focus {
 
 .upload-status .spinner { width: 14px; height: 14px; flex-shrink: 0; }
 
-.composer-controls button {
+.composer-controls button,
+.composer-controls select {
   overflow: hidden;
-  max-width: 48%;
+  min-width: 0;
   min-height: 32px;
   padding: 5px 8px;
   color: #aeb9ae;
@@ -1739,7 +1745,27 @@ textarea:focus {
   font-size: 0.72rem;
 }
 
-.composer-controls button:hover {
+.composer-controls select {
+  cursor: pointer;
+}
+
+.composer-controls select option {
+  color: var(--text);
+  background: var(--panel);
+}
+
+.composer-controls .composer-model {
+  max-width: 240px;
+  flex: 1 1 150px;
+}
+
+.composer-controls .composer-effort {
+  max-width: 130px;
+  flex: 0 1 100px;
+}
+
+.composer-controls button:hover,
+.composer-controls select:hover:not(:disabled) {
   color: var(--text);
   background: var(--panel-soft);
 }
@@ -1927,6 +1953,14 @@ textarea:focus {
 
   .slash-menu-heading span:last-child {
     display: none;
+  }
+
+  .slash-options {
+    max-height: min(260px, 30dvh);
+  }
+
+  .composer .local-command-result dl {
+    max-height: min(180px, 24dvh);
   }
 
   .composer-surface textarea {

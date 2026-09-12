@@ -1298,14 +1298,47 @@ export function App() {
               addImages(images)
             }}>
             <div className="composer-controls" aria-label="Turn settings">
-              <button type="button" onClick={() => {
-                setComposer('/model ')
-                composerRef.current?.focus()
-              }}>{effectiveModel || 'Model'} <span aria-hidden="true">⌄</span></button>
-              <button type="button" onClick={() => {
-                setComposer('/effort ')
-                composerRef.current?.focus()
-              }}>{selectedEffort || effectiveModelOption?.defaultReasoningEffort || 'Effort'} <span aria-hidden="true">⌄</span></button>
+              <select
+                className="composer-model"
+                aria-label="Model for future turns"
+                value={effectiveModel ?? ''}
+                disabled={models.length === 0}
+                onChange={(event) => {
+                  const selected = models.find((model) => model.model === event.target.value)
+                  if (!selected) return
+                  setSelectedModel(selected.model)
+                  setSelectedEffort(selected.defaultReasoningEffort ?? null)
+                  setCommandNotice(null)
+                  setError('')
+                }}
+              >
+                {!effectiveModel && <option value="">Model</option>}
+                {effectiveModel && !models.some((model) => model.model === effectiveModel) && (
+                  <option value={effectiveModel}>{effectiveModel}</option>
+                )}
+                {models.map((model) => (
+                  <option value={model.model} key={model.id}>{model.displayName || model.model}</option>
+                ))}
+              </select>
+              <select
+                className="composer-effort"
+                aria-label="Reasoning effort for future turns"
+                value={selectedEffort || effectiveModelOption?.defaultReasoningEffort || ''}
+                disabled={!effectiveModel || effortOptions.length === 0}
+                onChange={(event) => {
+                  const selected = effortOptions.find((entry) => entry.reasoningEffort === event.target.value)
+                  if (!selected || !effectiveModel) return
+                  setSelectedModel(effectiveModel)
+                  setSelectedEffort(selected.reasoningEffort)
+                  setCommandNotice(null)
+                  setError('')
+                }}
+              >
+                {effortOptions.length === 0 && <option value="">Effort</option>}
+                {effortOptions.map((entry) => (
+                  <option value={entry.reasoningEffort} key={entry.reasoningEffort}>{entry.reasoningEffort}</option>
+                ))}
+              </select>
               <button type="button" className="composer-status" disabled={busy} onClick={() => void executeSlashCommand('status', '')}>Usage & status</button>
             </div>
             {commandNotice && <LocalCommandResult notice={commandNotice} onClose={() => setCommandNotice(null)} />}
@@ -1364,7 +1397,7 @@ export function App() {
                     event.currentTarget.form?.requestSubmit()
                   }
                 }}
-                placeholder={activeTurnId ? 'Draft your next message, or type / for commands…' : 'Message Codex…'}
+                placeholder={activeTurnId ? 'Draft your next message…' : 'Message Codex…'}
                 rows={1}
                 maxLength={100_000}
               />
