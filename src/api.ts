@@ -30,6 +30,7 @@ export const api = {
   }, csrf),
   pushKey: () => request<{ publicKey: string }>('/api/push/key'),
   pushStatus: (endpoint: string, csrf: string) => request<{ enabled: boolean }>('/api/push/status', { method: 'POST', body: JSON.stringify({ endpoint }) }, csrf),
+  pushVisibility: (endpoint: string, visible: boolean, csrf: string) => request<{ ok: boolean }>('/api/push/visibility', { method: 'POST', body: JSON.stringify({ endpoint, visible }) }, csrf),
   subscribePush: (subscription: PushSubscriptionJSON, csrf: string) => request<{ ok: boolean }>('/api/push/subscription', { method: 'POST', body: JSON.stringify(subscription) }, csrf),
   unsubscribePush: (csrf: string) => request<{ ok: boolean }>('/api/push/subscription', { method: 'DELETE', body: '{}' }, csrf),
   session: () => request<Session>('/api/session'),

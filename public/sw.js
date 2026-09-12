@@ -40,17 +40,23 @@ self.addEventListener('message', (event) => {
 
 self.addEventListener('push', (event) => {
   let tag = 'complete'
+  let body = 'Your Codex turn is complete.'
   try {
     const data = event.data?.json()
     if (typeof data?.tag === 'string' && /^[A-Za-z0-9_-]{1,32}$/.test(data.tag)) tag = data.tag
+    if (typeof data?.body === 'string' && data.body.trim()) body = data.body.trim().slice(0, 180)
   } catch { /* Still display a generic alert for malformed payloads. */ }
-  event.waitUntil(self.registration.showNotification('Codex finished', {
-    body: 'Your Codex turn is complete.',
-    icon: '/icon-192.png',
-    badge: '/icon-192.png',
-    tag: `codex-turn-${tag}`,
-    data: { url: '/' },
-  }))
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+    if (windows.some(client => client.visibilityState === 'visible' || client.focused === true)) return
+    await self.registration.showNotification('Codex finished', {
+      body,
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      tag: `codex-turn-${tag}`,
+      data: { url: '/' },
+    })
+  })())
 })
 
 self.addEventListener('notificationclick', (event) => {

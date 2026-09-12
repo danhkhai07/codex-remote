@@ -60,6 +60,14 @@ export async function enablePush(csrf: string): Promise<void> {
   await api.subscribePush(subscription.toJSON(), csrf)
 }
 
+export async function reportPushVisibility(csrf: string, visible: boolean): Promise<boolean> {
+  if (!pushSupported()) return false
+  const worker = await navigator.serviceWorker.getRegistration()
+  const subscription = await worker?.pushManager.getSubscription()
+  if (!subscription) return false
+  return (await api.pushVisibility(subscription.endpoint, visible, csrf)).ok
+}
+
 export async function disablePush(csrf: string): Promise<void> {
   // Remove server delivery first, so a browser unsubscribe failure cannot leave alerts enabled.
   await api.unsubscribePush(csrf)

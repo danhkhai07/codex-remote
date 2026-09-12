@@ -11,6 +11,8 @@ type PendingRequest = {
   createdAt: string
 }
 
+type AgentMessages = { order: string[]; text: Map<string, string> }
+
 const APPROVAL_DECISIONS = new Set(['accept', 'acceptForSession', 'decline', 'cancel'])
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -30,7 +32,8 @@ export class RemoteController {
   readonly #loadedThreads = new Map<string, Record<string, unknown>>()
   readonly #resumedThreads = new Set<string>()
   readonly #models = new Map<string, Record<string, unknown>>()
-  onTurnCompleted?: (threadId: string, turnId: string) => void
+  readonly #agentMessages = new Map<string, AgentMessages>()
+  onTurnCompleted?: (threadId: string, turnId: string, answer: string) => void
 
   constructor(config: RemoteConfig, appServer = new CodexAppServer(config.codexBin)) {
     this.#config = config
@@ -38,13 +41,17 @@ export class RemoteController {
 
     appServer.on('message', (message: AppServerMessage) => this.events.publish('codex', message))
     appServer.on('notification', (message: AppServerMessage) => {
+      this.#captureAgentMessage(message)
       if (message.method === 'serverRequest/resolved') this.#resolvePendingFromNotification(message.params)
       if (message.method === 'turn/completed') {
         const params = asObject(message.params)
         const turn = asObject(params.turn)
-        if (typeof params.threadId === 'string' && typeof turn.id === 'string' && this.#loadedThreads.has(params.threadId)) {
-          try { this.onTurnCompleted?.(params.threadId, turn.id) }
-          catch { console.error('Unable to queue completion notification') }
+        if (typeof params.threadId === 'string' && typeof turn.id === 'string') {
+          const answer = this.#completedAnswer(params.threadId, turn.id, turn)
+          if (this.#loadedThreads.has(params.threadId)) {
+            try { this.onTurnCompleted?.(params.threadId, turn.id, answer) }
+            catch { console.error('Unable to queue completion notification') }
+          }
         }
       }
     })
@@ -60,6 +67,48 @@ export class RemoteController {
 
   stop(): void {
     this.appServer.stop()
+  }
+
+  #captureAgentMessage(message: AppServerMessage): void {
+    if (message.method !== 'item/agentMessage/delta' && message.method !== 'item/completed') return
+    const params = asObject(message.params)
+    if (typeof params.threadId !== 'string' || typeof params.turnId !== 'string') return
+    const item = asObject(params.item)
+    const itemId = typeof params.itemId === 'string' ? params.itemId : typeof item.id === 'string' ? item.id : null
+    if (!itemId) return
+
+    const delta = message.method === 'item/agentMessage/delta' && typeof params.delta === 'string' ? params.delta : null
+    const completedText = message.method === 'item/completed' && item.type === 'agentMessage' && typeof item.text === 'string' ? item.text : null
+    if (delta === null && completedText === null) return
+
+    const key = `${params.threadId}:${params.turnId}`
+    let messages = this.#agentMessages.get(key)
+    if (!messages) {
+      if (this.#agentMessages.size >= 128) this.#agentMessages.delete(this.#agentMessages.keys().next().value as string)
+      messages = { order: [], text: new Map() }
+      this.#agentMessages.set(key, messages)
+    }
+    if (!messages.text.has(itemId)) messages.order.push(itemId)
+    const text = completedText ?? `${messages.text.get(itemId) ?? ''}${delta}`
+    messages.text.set(itemId, text.slice(0, 4_000))
+  }
+
+  #completedAnswer(threadId: string, turnId: string, turn: Record<string, unknown>): string {
+    const key = `${threadId}:${turnId}`
+    const tracked = this.#agentMessages.get(key)
+    this.#agentMessages.delete(key)
+    const items = Array.isArray(turn.items) ? turn.items.map(asObject) : []
+    for (let index = items.length - 1; index >= 0; index--) {
+      const item = items[index]
+      if (item.type === 'agentMessage' && typeof item.text === 'string' && item.text.trim()) return item.text
+    }
+    if (!tracked) return ''
+    for (let index = tracked.order.length - 1; index >= 0; index--) {
+      const itemId = tracked.order[index]
+      const text = tracked.text.get(itemId)
+      if (text?.trim()) return text
+    }
+    return ''
   }
 
   get workspaces(): Array<{ id: string; label: string; path: string }> {

@@ -1,14 +1,14 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { api } from './api'
-import { applicationServerKey, disablePush, enablePush, restorePush } from './push'
+import { applicationServerKey, disablePush, enablePush, reportPushVisibility, restorePush } from './push'
 
-vi.mock('./api', () => ({ api: { pushKey: vi.fn(), subscribePush: vi.fn(), unsubscribePush: vi.fn() } }))
+vi.mock('./api', () => ({ api: { pushKey: vi.fn(), pushVisibility: vi.fn(), subscribePush: vi.fn(), unsubscribePush: vi.fn() } }))
 afterEach(() => { vi.unstubAllGlobals(); vi.resetAllMocks() })
 
 function browser() {
   const key = Buffer.alloc(65, 4).toString('base64url')
   const payload = { endpoint: 'https://fcm.googleapis.com/test', keys: { auth: 'test', p256dh: 'test' } }
-  const subscription = { options: { applicationServerKey: applicationServerKey(key).buffer }, toJSON: () => payload, unsubscribe: vi.fn().mockResolvedValue(true) }
+  const subscription = { endpoint: payload.endpoint, options: { applicationServerKey: applicationServerKey(key).buffer }, toJSON: () => payload, unsubscribe: vi.fn().mockResolvedValue(true) }
   const pushManager = { getSubscription: vi.fn().mockResolvedValue(null), subscribe: vi.fn().mockResolvedValue(subscription) }
   const worker = { active: { postMessage: (_message: unknown, ports: MessagePort[]) => ports[0].postMessage({ push: true }) }, pushManager }
   const notification = { permission: 'default', requestPermission: vi.fn().mockResolvedValue('granted') }
@@ -17,6 +17,7 @@ function browser() {
   vi.stubGlobal('navigator', { serviceWorker: { getRegistration: vi.fn().mockResolvedValue(worker) } })
   vi.mocked(api.pushKey).mockResolvedValue({ publicKey: key })
   vi.mocked(api.subscribePush).mockResolvedValue({ ok: true })
+  vi.mocked(api.pushVisibility).mockResolvedValue({ ok: true })
   return { key, payload, subscription, pushManager, notification }
 }
 
@@ -59,4 +60,13 @@ it('replaces a subscription when server keys rotate and disables server delivery
   expect(pushManager.subscribe).toHaveBeenCalledTimes(1)
   await disablePush('csrf')
   expect(api.unsubscribePush).toHaveBeenCalledWith('csrf')
+})
+
+it('reports foreground visibility for the current device subscription', async () => {
+  const { subscription, pushManager } = browser()
+  pushManager.getSubscription.mockResolvedValue(subscription)
+  expect(await reportPushVisibility('csrf', true)).toBe(true)
+  expect(api.pushVisibility).toHaveBeenCalledWith(subscription.endpoint, true, 'csrf')
+  pushManager.getSubscription.mockResolvedValue(null)
+  expect(await reportPushVisibility('csrf', false)).toBe(false)
 })

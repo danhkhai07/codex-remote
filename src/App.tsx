@@ -2,7 +2,7 @@ import { ChangeEvent, Fragment, FormEvent, useCallback, useEffect, useMemo, useR
 import { conversationItems, updateTranscript, type TranscriptItem } from './transcript'
 import { api, ApiError } from './api'
 import { useYoloPreference } from './useYoloPreference'
-import { enablePush, disablePush, restorePush } from './push'
+import { enablePush, disablePush, reportPushVisibility, restorePush } from './push'
 import { MarkdownMessage } from './MarkdownMessage'
 import { EventAssembler, shouldKeepEventStream } from './eventStream'
 import { TranscriptViewport, type ReadingPosition } from './TranscriptViewport'
@@ -699,6 +699,15 @@ export function App() {
     }
   }, [pageVisible, session, refreshThreads])
 
+  useEffect(() => {
+    if (!session?.csrf || !notificationsEnabled) return
+    const report = () => void reportPushVisibility(session.csrf, pageVisible).catch(() => undefined)
+    report()
+    if (!pageVisible) return
+    const heartbeat = window.setInterval(report, 15_000)
+    return () => window.clearInterval(heartbeat)
+  }, [notificationsEnabled, pageVisible, session])
+
   const keepLive = shouldKeepEventStream(pageVisible, activeTurnId)
 
   useEffect(() => {
@@ -1176,8 +1185,8 @@ export function App() {
       if (enabled) setCommandNotice({
         title: 'Completion notifications enabled',
         lines: [
-          { label: 'Alert', value: 'Sent even when this app is closed, while your session is valid' },
-          { label: 'Privacy', value: 'Conversation content stays out of the notification' },
+          { label: 'Alert', value: 'Shown only when no Codex Remote window is visible' },
+          { label: 'Preview', value: 'Shows the first line of the completed response' },
         ],
       })
     } catch (requestError) {

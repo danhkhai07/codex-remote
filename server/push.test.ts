@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { PushService, validateSubscription } from './push.js'
+import { notificationBody, PushService, validateSubscription } from './push.js'
 
 const subscription = {
   endpoint: 'https://fcm.googleapis.com/fcm/send/test-device',
@@ -30,7 +30,7 @@ afterEach(() => {
 })
 
 describe('Web Push delivery without an SSE client', () => {
-  it('delivers a generic completion once and preserves keys/subscriptions across restart', async () => {
+  it('delivers a response preview once and preserves keys/subscriptions across restart', async () => {
     const first = setup()
     const session = owner()
     first.service.subscribe(subscription, session)
@@ -39,9 +39,9 @@ describe('Web Push delivery without an SSE client', () => {
     expect(next.service.publicKey).toBe(first.service.publicKey)
     expect(next.service.enabled(subscription.endpoint, session)).toBe(true)
     expect(statSync(first.path).mode & 0o777).toBe(0o600)
-    next.service.completed('private-thread', 'private-turn')
+    next.service.completed('private-thread', 'private-turn', '**Finished successfully.**\nMore detail.')
     await vi.waitFor(() => expect(next.send).toHaveBeenCalledTimes(1))
-    expect(JSON.parse(next.send.mock.calls[0][1])).toEqual({ tag: expect.any(String) })
+    expect(JSON.parse(next.send.mock.calls[0][1])).toEqual({ tag: expect.any(String), body: 'Finished successfully.' })
     expect(next.send.mock.calls[0][1]).not.toContain('private')
     expect(next.send.mock.calls[0][2]).toMatchObject({ TTL: expect.any(Number), urgency: 'high', timeout: 10000 })
     next.service.completed('private-thread', 'private-turn')
@@ -50,6 +50,27 @@ describe('Web Push delivery without an SSE client', () => {
     const restarted = setup(undefined, first.path)
     restarted.service.completed('private-thread', 'private-turn')
     expect(restarted.send).not.toHaveBeenCalled()
+  })
+
+  it('builds a short plain-text body from the first non-empty answer line', () => {
+    expect(notificationBody('\n## Completed **cleanly**\nInternal detail')).toBe('Completed cleanly')
+    expect(notificationBody('')).toBe('Your Codex turn is complete.')
+    expect(notificationBody('x'.repeat(220))).toHaveLength(180)
+    expect(notificationBody('x'.repeat(220))).toMatch(/…$/)
+  })
+
+  it('suppresses delivery while that subscribed device reports a visible app', async () => {
+    const { service, send } = setup()
+    const session = owner()
+    service.subscribe(subscription, session)
+    expect(service.visibility(subscription.endpoint, true, session)).toBe(true)
+    service.completed('thread', 'visible-turn', 'Visible response')
+    await service.flush()
+    expect(send).not.toHaveBeenCalled()
+    expect(service.visibility(subscription.endpoint, false, session)).toBe(true)
+    service.completed('thread', 'hidden-turn', 'Hidden response')
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1))
+    expect(JSON.parse(send.mock.calls[0][1])).toMatchObject({ body: 'Hidden response' })
   })
 
   it('retries transient failure from persisted state after a restart', async () => {

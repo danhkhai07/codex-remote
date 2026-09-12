@@ -278,6 +278,14 @@ export function createRemoteHttpServer(
           json(res, 200, { enabled: push.enabled(body.endpoint, session) })
           return
         }
+        if (url.pathname === '/api/push/visibility' && method === 'POST') {
+          const body = await readJson(req)
+          let ok
+          try { ok = push.visibility(body.endpoint, body.visible, session) }
+          catch { throw new HttpError(400, 'Invalid push visibility') }
+          json(res, 200, { ok })
+          return
+        }
         if (url.pathname === '/api/push/subscription' && method === 'POST') {
           const body = await readJson(req)
           let subscription

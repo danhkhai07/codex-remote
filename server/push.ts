@@ -3,10 +3,27 @@ import { readFileSync, writeFileSync, renameSync, chmodSync } from 'node:fs'
 import webpush, { type PushSubscription } from 'web-push'
 
 type Owner = { nonce: string; expiresAt: number }
-type Device = { subscription: PushSubscription; owner: Owner }
-type Delivery = { endpoint: string; nonce: string; tag: string; attempts: number; nextAt: number }
+type Device = { subscription: PushSubscription; owner: Owner; visibleUntil?: number }
+type Delivery = { endpoint: string; nonce: string; tag: string; body?: string; attempts: number; nextAt: number }
 type State = { fingerprint: string; keys: { publicKey: string; privateKey: string }; devices: Device[]; deliveries: Delivery[]; seen: string[] }
 const hash = (text: string) => createHash('sha256').update(text).digest('base64url')
+const DEFAULT_BODY = 'Your Codex turn is complete.'
+const FOREGROUND_TTL_MS = 40_000
+
+export function notificationBody(answer: unknown): string {
+  if (typeof answer !== 'string') return DEFAULT_BODY
+  const firstLine = answer.split(/\r?\n/).find(line => line.trim())?.trim()
+  if (!firstLine) return DEFAULT_BODY
+  const plain = firstLine
+    .replace(/^#{1,6}\s+/, '')
+    .replace(/^[-*+]\s+/, '')
+    .replace(/[*_`~]/g, '')
+    .replace(/\p{Cc}/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!plain) return DEFAULT_BODY
+  return plain.length > 180 ? `${plain.slice(0, 179).trimEnd()}…` : plain
+}
 
 export function validateSubscription(value: unknown): PushSubscription {
   const input = value as PushSubscription | undefined
@@ -62,6 +79,7 @@ export class PushService {
     this.#prune()
     const existing = this.#state.devices.find(device => device.subscription.endpoint === subscription.endpoint)
     if (existing) {
+      if (existing.owner.nonce !== owner.nonce) existing.visibleUntil = undefined
       existing.owner = { nonce: owner.nonce, expiresAt: owner.expiresAt }
       existing.subscription = subscription
     } else {
@@ -74,20 +92,35 @@ export class PushService {
   enabled(endpoint: unknown, owner: Owner) {
     return typeof endpoint === 'string' && this.#state.devices.some(device => device.subscription.endpoint === endpoint && device.owner.nonce === owner.nonce && device.owner.expiresAt * 1000 > Date.now())
   }
+  visibility(endpoint: unknown, visible: unknown, owner: Owner): boolean {
+    if (typeof endpoint !== 'string' || typeof visible !== 'boolean') throw new Error('Invalid push visibility')
+    this.#prune()
+    const device = this.#state.devices.find(device => device.subscription.endpoint === endpoint && device.owner.nonce === owner.nonce)
+    if (!device) return false
+    device.visibleUntil = visible ? Date.now() + FOREGROUND_TTL_MS : undefined
+    if (visible) this.#state.deliveries = this.#state.deliveries.filter(job => job.endpoint !== endpoint || job.nonce !== owner.nonce)
+    this.#save()
+    return true
+  }
+  #visible(device: Device): boolean {
+    return typeof device.visibleUntil === 'number' && device.visibleUntil > Date.now()
+  }
   unsubscribe(owner: Owner, endpoint?: unknown) {
     this.#state.devices = this.#state.devices.filter(device => device.owner.nonce !== owner.nonce || (endpoint !== undefined && device.subscription.endpoint !== endpoint))
     this.#prune()
     this.#save()
   }
-  completed(threadId: string, turnId: string) {
+  completed(threadId: string, turnId: string, answer: unknown = '') {
     const tag = hash(`${threadId}:${turnId}`).slice(0, 32)
+    const body = notificationBody(answer)
     if (this.#state.seen.includes(tag)) return
     this.#prune()
     this.#state.seen = [...this.#state.seen, tag].slice(-1000)
     for (const device of this.#state.devices) {
+      if (this.#visible(device)) continue
       // Coalesce a device's outstanding alerts into its latest completion.
       this.#state.deliveries = this.#state.deliveries.filter(job => job.endpoint !== device.subscription.endpoint)
-      this.#state.deliveries.push({ endpoint: device.subscription.endpoint, nonce: device.owner.nonce, tag, attempts: 0, nextAt: Date.now() })
+      this.#state.deliveries.push({ endpoint: device.subscription.endpoint, nonce: device.owner.nonce, tag, body, attempts: 0, nextAt: Date.now() })
     }
     this.#save()
     this.start()
@@ -107,8 +140,13 @@ export class PushService {
         if (this.#stopped || job.nextAt > Date.now()) continue
         const device = this.#state.devices.find(device => device.subscription.endpoint === job.endpoint && device.owner.nonce === job.nonce && device.owner.expiresAt * 1000 > Date.now())
         if (!device || !this.#state.deliveries.includes(job)) continue
+        if (this.#visible(device)) {
+          this.#state.deliveries = this.#state.deliveries.filter(entry => entry !== job)
+          this.#save()
+          continue
+        }
         try {
-          await this.send(device.subscription, JSON.stringify({ tag: job.tag }), {
+          await this.send(device.subscription, JSON.stringify({ tag: job.tag, body: notificationBody(job.body) }), {
             vapidDetails: { subject: this.subject, ...this.#state.keys }, timeout: 10000,
             TTL: Math.max(0, Math.min(3600, device.owner.expiresAt - Math.floor(Date.now() / 1000))), urgency: 'high', topic: job.tag,
           })
