@@ -16,6 +16,7 @@ import { FileViewer } from './FileViewer'
 import { FileBrowser } from './FileBrowser'
 import { LinkViewer } from './LinkViewer'
 import { EventAssembler, shouldKeepEventStream } from './eventStream'
+import { scheduleHistorySync } from './historySync'
 import { TranscriptViewport, type ReadingPosition } from './TranscriptViewport'
 import { matchingSlashCommands, parseSlashCommand, slashCommands } from './slashCommands'
 import { clearConversationSnapshot, loadConversationSnapshot, saveConversationSnapshot } from './deviceCache'
@@ -912,10 +913,9 @@ export function App() {
       } catch { /* Reconnect is background work; don't replace the screen. */ }
       finally { syncing = false }
     }
-    void sync()
-    const retry = setInterval(() => void sync(), 15_000)
-    return () => { cancelled = true; clearInterval(retry) }
-  }, [pageVisible, online, session, refreshThreads, setThreadTurn])
+    const stop = scheduleHistorySync(connected, () => void sync(), () => void refreshThreads().catch(() => undefined))
+    return () => { cancelled = true; stop() }
+  }, [pageVisible, online, connected, session, refreshThreads, setThreadTurn])
 
   const keepLive = shouldKeepEventStream(pageVisible, activeTurnId)
 

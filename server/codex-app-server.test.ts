@@ -6,12 +6,15 @@ describe('CodexAppServer', () => {
   it('reads a large thread history without discarding its RPC response', async () => {
     const fixture = fileURLToPath(new URL('./fixtures/fake-codex.mjs', import.meta.url))
     const appServer = new CodexAppServer(process.execPath, [fixture])
+    const messages: AppServerMessage[] = []
+    appServer.on('message', message => messages.push(message))
     try {
       const result = await appServer.request('thread/read', {
         threadId: 'thr_large', includeTurns: true,
       }, 5_000) as { thread: { id: string; turns: { items: { text: string }[] }[] } }
       expect(result.thread.id).toBe('thr_large')
       expect(result.thread.turns[0].items[0].text).toHaveLength(10_000_000)
+      expect(messages).toEqual([])
     } finally {
       appServer.stop()
     }
@@ -42,10 +45,10 @@ describe('CodexAppServer', () => {
         method: 'item/commandExecution/requestApproval',
       })
       expect(messages).toEqual(expect.arrayContaining([
-        expect.objectContaining({ result: { data: [], nextCursor: null } }),
         expect.objectContaining({ method: 'warning' }),
         expect.objectContaining({ method: 'item/commandExecution/requestApproval' }),
       ]))
+      expect(messages.every(message => typeof message.method === 'string')).toBe(true)
 
       appServer.respond('approval_fixture', { decision: 'accept' })
       await new Promise((resolve) => setTimeout(resolve, 10))

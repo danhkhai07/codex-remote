@@ -1,5 +1,6 @@
 import type { ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
+import { SseWriter } from './sse-writer.js'
 
 export type RemoteEvent = {
   id: number
@@ -10,7 +11,7 @@ export type RemoteEvent = {
 }
 
 type Subscriber = {
-  res: ServerResponse
+  writer: SseWriter
   heartbeat: NodeJS.Timeout
 }
 
@@ -30,22 +31,34 @@ export function sanitizeForBrowser(value: unknown, depth = 0): unknown {
 
 export function encodeEvent(event: RemoteEvent, replayed = false): string[] {
   const data = JSON.stringify(replayed ? { ...event, replayed: true } : event)
-  if (Buffer.byteLength(data) <= 16_000) return [`id: ${event.id}\ndata: ${data}\n\n`]
+  return encodeData(event.id, data)
+}
+
+function encodeData(id: number, data: string): string[] {
+  if (Buffer.byteLength(data) <= 16_000) return [`id: ${id}\ndata: ${data}\n\n`]
   // Bound SSE frames as well as HTTP writes: proxies can limit individual
   // event lines. JSON envelopes preserve newlines and Unicode losslessly.
   const total = Math.ceil(data.length / 4_000)
   return Array.from({ length: total }, (_, index) => {
-    const fragment = JSON.stringify({ id: event.id, index, total, data: data.slice(index * 4_000, (index + 1) * 4_000) })
+    const fragment = JSON.stringify({ id, index, total, data: data.slice(index * 4_000, (index + 1) * 4_000) })
     // Advance Last-Event-ID only once the entire event has been delivered.
-    return `${index === total - 1 ? `id: ${event.id}\n` : ''}event: fragment\ndata: ${fragment}\n\n`
+    return `${index === total - 1 ? `id: ${id}\n` : ''}event: fragment\ndata: ${fragment}\n\n`
   })
 }
 
 export class EventHub {
   readonly epoch = randomUUID()
-  readonly #events: RemoteEvent[] = []
+  readonly #events: Array<{ event: RemoteEvent; bytes: number }> = []
   readonly #subscribers = new Set<Subscriber>()
   #nextId = 1
+  #retainedBytes = 0
+  #droppedThrough = 0
+
+  constructor(readonly maxReplayBytes = 16 * 1024 * 1024) {}
+
+  get stats(): { retainedEvents: number; retainedBytes: number; subscribers: number } {
+    return { retainedEvents: this.#events.length, retainedBytes: this.#retainedBytes, subscribers: this.#subscribers.size }
+  }
 
   publish(type: RemoteEvent['type'], payload: unknown): RemoteEvent {
     const event: RemoteEvent = {
@@ -54,12 +67,19 @@ export class EventHub {
       type,
       payload: sanitizeForBrowser(payload),
     }
-    this.#events.push(event)
-    if (this.#events.length > 1_000) this.#events.splice(0, this.#events.length - 1_000)
+    const data = JSON.stringify(event)
+    const bytes = Buffer.byteLength(data)
+    this.#events.push({ event, bytes })
+    this.#retainedBytes += bytes
+    while (this.#events.length > 1_000 || this.#retainedBytes > this.maxReplayBytes) {
+      const removed = this.#events.shift()!
+      this.#retainedBytes -= removed.bytes
+      this.#droppedThrough = removed.event.id
+    }
 
-    const encoded = encodeEvent(event)
+    const encoded = this.#subscribers.size ? encodeData(event.id, data) : []
     for (const subscriber of this.#subscribers) {
-      for (const frame of encoded) subscriber.res.write(frame)
+      subscriber.writer.write(encoded)
     }
     return event
   }
@@ -72,29 +92,33 @@ export class EventHub {
       'X-Accel-Buffering': 'no',
     })
     res.flushHeaders()
-    // Named events survive intermediaries that consume SSE comments.
-    res.write('event: ready\ndata: {}\n\n')
-    // A device cursor can outlive a gateway restart, while event IDs restart at
-    // one. Treat a cursor from a future ID as a new epoch and replay the backlog.
-    const reset = Boolean(previousEpoch && previousEpoch !== this.epoch) || afterId >= this.#nextId
-    const replayAfterId = reset ? 0 : afterId
-    res.write(`event: stream-state\ndata: ${JSON.stringify({ epoch: this.epoch, reset })}\n\n`)
-    for (const event of this.#events) {
-      if (event.id > replayAfterId) {
-        for (const frame of encodeEvent(event, replayAfterId === 0)) res.write(frame)
-      }
-    }
-
+    const writer = new SseWriter(res)
     const subscriber: Subscriber = {
-      res,
-      heartbeat: setInterval(() => res.write('event: heartbeat\ndata: {}\n\n'), 15_000),
+      writer,
+      heartbeat: setInterval(() => writer.write(['event: heartbeat\ndata: {}\n\n']), 15_000),
     }
     subscriber.heartbeat.unref()
     this.#subscribers.add(subscriber)
-
-    return () => {
+    const unsubscribe = () => {
       clearInterval(subscriber.heartbeat)
       this.#subscribers.delete(subscriber)
+      writer.close()
+      res.off('close', unsubscribe)
     }
+    res.once('close', unsubscribe)
+    // Named events survive intermediaries that consume SSE comments.
+    writer.write(['event: ready\ndata: {}\n\n'])
+    // A device cursor can outlive a gateway restart, while event IDs restart at
+    // one. Treat a cursor from a future ID as a new epoch and replay the backlog.
+    const reset = Boolean(previousEpoch && previousEpoch !== this.epoch) || afterId >= this.#nextId || afterId < this.#droppedThrough
+    const replayAfterId = reset ? 0 : afterId
+    writer.write([`event: stream-state\ndata: ${JSON.stringify({ epoch: this.epoch, reset })}\n\n`])
+    for (const { event } of this.#events) {
+      if (event.id > replayAfterId) {
+        writer.write(encodeEvent(event, replayAfterId === 0))
+      }
+    }
+
+    return unsubscribe
   }
 }

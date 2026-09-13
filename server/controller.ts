@@ -48,6 +48,7 @@ export class RemoteController {
   readonly #models = new Map<string, Record<string, unknown>>()
   readonly #agentMessages = new Map<string, AgentMessages>()
   readonly #interrupts = new Map<string, Promise<unknown>>()
+  readonly #threadReads = new Map<string, Promise<unknown>>()
   onTurnCompleted?: (threadId: string, turnId: string, answer: string) => void
 
   constructor(config: RemoteConfig, appServer = new CodexAppServer(config.codexBin)) {
@@ -197,7 +198,7 @@ export class RemoteController {
   }
 
   async readMessageIds(threadId: string): Promise<unknown> {
-    const result = await this.appServer.request('thread/read', { threadId, includeTurns: true })
+    const result = await this.#readFullThread(threadId)
     this.#assertAllowedThread(result)
     const thread = threadFromResult(result)
     const turns = Array.isArray(thread.turns) ? thread.turns : []
@@ -215,7 +216,7 @@ export class RemoteController {
 
   async readThread(threadId: string): Promise<unknown> {
     try {
-      const result = await this.appServer.request('thread/read', { threadId, includeTurns: true })
+      const result = await this.#readFullThread(threadId)
       this.#assertAllowedThread(result)
       const wrapper = { ...asObject(result), thread: null }
       const thread = limitConversation(threadFromResult(result), MAX_CONVERSATION_BYTES - jsonBytes(wrapper) + 4)
@@ -424,11 +425,28 @@ export class RemoteController {
     return result
   }
 
+  #readFullThread(threadId: string): Promise<unknown> {
+    const pending = this.#threadReads.get(threadId)
+    if (pending) return pending
+    const request = this.appServer.request('thread/read', { threadId, includeTurns: true })
+      .finally(() => this.#threadReads.delete(threadId))
+    this.#threadReads.set(threadId, request)
+    return request
+  }
+
   #cacheThread(thread: Record<string, unknown>): void {
     const id = thread.id
     const cwd = String(thread.cwd ?? '')
     if (typeof id === 'string' && this.#config.workspaceRoots.includes(cwd)) {
-      this.#loadedThreads.set(id, { ...this.#loadedThreads.get(id), ...thread })
+      // This cache supplies routing and fallback metadata, never transcripts.
+      const metadata = { ...this.#loadedThreads.get(id), ...thread, turns: [], historyUnavailable: true }
+      this.#loadedThreads.delete(id)
+      this.#loadedThreads.set(id, metadata)
+      while (this.#loadedThreads.size > 256) {
+        const oldest = this.#loadedThreads.keys().next().value!
+        this.#loadedThreads.delete(oldest)
+        this.#resumedThreads.delete(oldest)
+      }
     }
   }
 

@@ -166,8 +166,6 @@ export class CodexAppServer extends EventEmitter {
       return
     }
 
-    this.emit('message', message)
-
     if (message.id !== undefined && message.method === undefined) {
       const pending = this.#pending.get(message.id)
       if (!pending) return
@@ -180,6 +178,10 @@ export class CodexAppServer extends EventEmitter {
       }
       return
     }
+
+    // RPC results (especially thread/read histories) belong only to the caller.
+    // Publishing them retains repeated full histories in the SSE replay ring.
+    this.emit('message', message)
 
     if (message.method && message.id !== undefined) {
       this.emit('serverRequest', message)
