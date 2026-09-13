@@ -14,4 +14,16 @@ describe('slash commands', () => {
     expect(matchingSlashCommands('/model ')).toEqual([])
     expect(matchingSlashCommands('/yo').map(({ name }) => name)).toEqual(['yolo'])
   })
+
+  it('sends file paths and unknown slash-prefixed text as regular prompts', () => {
+    for (const prompt of [
+      '/root/RUNNING-SERVICES/codex-remote/src/App.tsx',
+      '/root/company deck/report.html',
+      '/root',
+      '/status/report.html',
+      '/report.html xem file này',
+      '/unknown',
+    ]) expect(parseSlashCommand(prompt)).toBeNull()
+    expect(parseSlashCommand('/status')).toEqual({ name: 'status', argument: '' })
+  })
 })

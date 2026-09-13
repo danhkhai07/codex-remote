@@ -23,7 +23,9 @@ export function parseSlashCommand(value: string): { name: string; argument: stri
   if (!input.startsWith('/') || input.includes('\n')) return null
   const match = input.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/)
   if (!match) return null
-  return { name: match[1].toLocaleLowerCase(), argument: (match[2] ?? '').trim() }
+  const name = match[1].toLocaleLowerCase()
+  if (!slashCommands.some(command => command.name === name)) return null
+  return { name, argument: (match[2] ?? '').trim() }
 }
 
 export function matchingSlashCommands(value: string): SlashCommand[] {
