@@ -1,3 +1,4 @@
+import { ReadStateStore } from './read-state.js'
 import { HoursError, type WorkHoursStore } from './work-hours.js'
 import type { WorkPresence } from './work-presence.js'
 import { createReadStream, promises as fs } from 'node:fs'
@@ -183,6 +184,7 @@ export function createRemoteHttpServer(
   attachments?: AttachmentStore,
   workPresence?: WorkPresence,
   workHours?: WorkHoursStore,
+  readState = new ReadStateStore(),
 ) {
   const fileRoots = config.fileRoots ?? config.workspaceRoots
   const pptxPreviews = new PptxPreviewCache()
@@ -402,9 +404,26 @@ export function createRemoteHttpServer(
         return
       }
 
+      if (url.pathname === '/api/read-state' && method === 'GET') {
+        json(res, 200, readState.snapshot())
+        return
+      }
+      const readStateThreadId = routeThread(url.pathname, '/read-state')
+      if (readStateThreadId && method === 'POST') {
+        const body = await readJson(req)
+        if (!Array.isArray(body.ids) || body.ids.length > 1000 || body.ids.some(id => typeof id !== 'string' || id.length > 256)) {
+          throw new HttpError(400, 'Invalid completed reply IDs')
+        }
+        // Validate access without requiring a full history to be available for a live reply.
+        await controller.assertThreadAccess(readStateThreadId)
+        json(res, 200, readState.acknowledge(readStateThreadId, body.ids as string[]))
+        return
+      }
       const messageIdsThreadId = routeThread(url.pathname, '/message-ids')
       if (messageIdsThreadId && method === 'GET') {
-        json(res, 200, await controller.readMessageIds(messageIdsThreadId))
+        const result = await controller.readMessageIds(messageIdsThreadId)
+        readState.observe(messageIdsThreadId, result.ids)
+        json(res, 200, result)
         return
       }
       const readThreadId = routeThread(url.pathname, '')

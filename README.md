@@ -131,3 +131,12 @@ refreshing history or reconnecting does not reset them. Changing model preserves
 the current effort if supported; otherwise it selects that model's default.
 The exact displayed model/effort is sent with each new turn. Existing global
 choices are migrated to the last cached conversation on first load.
+
+The conversation `!` badge means a completed answer is unread. Progress messages,
+streaming output, and failed/interrupted turns do not create badges. Each successful
+turn counts once. Reading an answer clears its badge across devices via server-stored
+receipts; hidden or stale cached views do not acknowledge answers they have not rendered.
+Receipts persist across browser and gateway restarts in
+`~/.local/state/codex-remote/read-state.json` (override with `CODEX_REMOTE_READ_STATE_FILE`
+and use a persistent writable path in containers). Live events synchronize changes,
+with a ten-second snapshot poll and a refresh on reconnect as a fallback.

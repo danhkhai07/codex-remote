@@ -575,11 +575,15 @@ export function App() {
   const [fileBrowserPath, setFileBrowserPath] = useScreenState<string | null>('file-browser', null)
   const [linkViewer, setLinkViewer] = useScreenState<WebLinkReference | null>('link-viewer', null)
   const [renamingThread, setRenamingThread] = useState<Thread | null>(null)
-  const { counts: unreadCounts, observe: observeUnread, clear: clearUnread } = useUnreadMessages(
+  const { counts: unreadCounts, refresh: refreshUnread, clear: clearUnread } = useUnreadMessages(
     threads,
     session && pageVisible && historyReady && thread?.id === selectedId && !drawerOpen &&
       !fileViewer && !fileBrowserPath && !linkViewer && !renamingThread ? selectedId : null,
     Boolean(session?.csrf && online && pageVisible && cacheReady),
+    session?.csrf,
+    thread ? conversationItems(thread, transcripts[thread.id] ?? EMPTY_ITEMS)
+      .filter(item => item.type === 'agentMessage' && !item.streaming && item.phase !== 'commentary' && itemText(item).trim())
+      .map(item => `reply:${item.turnId}`) : [],
   )
   const closeRename = useCallback(() => setRenamingThread(null), [])
   const applyThreadName = useCallback((id: string, name: string | null) => {
@@ -1004,9 +1008,7 @@ export function App() {
         }
         return
       }
-      if (method === 'reply/completed' && eventThread && Array.isArray(params.ids)) {
-        observeUnread(eventThread, params.ids.filter((id): id is string => typeof id === 'string'))
-      }
+      if (method === 'reply/completed' || method === 'read-state/changed') void refreshUnread()
       if (eventThread && ['turn/started', 'turn/completed'].includes(method)) {
         turnVersions.current.set(eventThread, (turnVersions.current.get(eventThread) ?? 0) + 1)
       }
@@ -1057,7 +1059,7 @@ export function App() {
       source.close()
       setConnected(false)
     }
-  }, [keepLive, online, cacheReady, session, refreshThreads, setThreadTurn, confirmStop, applyThreadName, observeUnread])
+  }, [keepLive, online, cacheReady, session, refreshThreads, setThreadTurn, confirmStop, applyThreadName, refreshUnread])
 
   const selectedPending = useMemo(() => pending.filter((request) => {
     const id = request.params.threadId

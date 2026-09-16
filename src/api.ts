@@ -1,3 +1,4 @@
+import type { ReplySnapshot } from '../server/read-state'
 import type { DirectoryListing, ModelList, PendingRequest, RateLimitsResponse, ServerFileInfo, Session, ThreadList, ThreadResponse, TurnResponse } from './types'
 import { limitConversation } from '../server/conversation-size'
 
@@ -73,6 +74,10 @@ export const api = {
   }),
   logout: (csrf: string) => request<{ ok: boolean }>('/api/session/logout', { method: 'POST', body: '{}' }, csrf),
   threads: () => request<ThreadList>('/api/threads'),
+  readState: (signal?: AbortSignal) => request<ReplySnapshot>('/api/read-state', { signal }),
+  acknowledgeReplies: (id: string, ids: string[], csrf: string, signal?: AbortSignal) => request<ReplySnapshot>(`/api/threads/${encodeURIComponent(id)}/read-state`, {
+    method: 'POST', body: JSON.stringify({ ids }), signal,
+  }, csrf),
   messageIds: (id: string, signal?: AbortSignal) => request<{ ids: string[] }>(`/api/threads/${encodeURIComponent(id)}/message-ids`, { signal }),
   thread: (id: string, signal?: AbortSignal) => request<ThreadResponse>(`/api/threads/${encodeURIComponent(id)}`, { signal }).then(response => ({ ...response, thread: limitConversation(response.thread) })),
   createThread: (workspaceId: string, csrf: string, fullAccess = false) => request<ThreadResponse>('/api/threads', {

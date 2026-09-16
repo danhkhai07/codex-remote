@@ -198,6 +198,29 @@ describe('Codex Remote HTTP boundary', () => {
     expect(messageSummary.status).toBe(200)
     expect(JSON.parse(messageSummary.body)).toEqual({ ids: ['turn:reply'] })
     expect(messageIds).toHaveBeenCalledWith('chat')
+    expect((await fetchLocal(port, '/api/read-state')).status).toBe(401)
+    const loginB = await fetchLocal(port, '/api/session/login', { method: 'POST', origin: config.publicOrigin.origin, body: { password: config.password } })
+    const cookieB = loginB.headers['set-cookie']?.[0].split(';', 1)[0]
+    messageIds.mockResolvedValue({ ids: ['turn:reply', 'reply:finished'] })
+    await fetchLocal(port, '/api/threads/chat/message-ids', { cookie })
+    const stateB = JSON.parse((await fetchLocal(port, '/api/read-state', { cookie: cookieB })).body)
+    expect(stateB.unread.chat).toEqual(['reply:finished'])
+    const access = vi.spyOn(controller, 'assertThreadAccess').mockResolvedValue()
+    const receipt = { ids: ['reply:finished'] }
+    const readPath = '/api/threads/chat/read-state'
+    expect((await fetchLocal(port, readPath, { method: 'POST', body: receipt })).status).toBe(401)
+    expect((await fetchLocal(port, readPath, { ...options, csrf: 'bad', method: 'POST', body: receipt })).status).toBe(403)
+    expect((await fetchLocal(port, readPath, { ...options, method: 'POST', body: { ids: [null] } })).status).toBe(400)
+    messageIds.mockResolvedValue({ ids: ['turn:reply', 'reply:finished', 'reply:newer'] })
+    await fetchLocal(port, '/api/threads/chat/message-ids', { cookie: cookieB })
+    const marked = await fetchLocal(port, readPath, { ...options, method: 'POST', body: receipt })
+    expect(marked.status).toBe(200)
+    expect(JSON.parse(marked.body).unread.chat).toEqual(['reply:newer'])
+    expect(JSON.parse((await fetchLocal(port, '/api/read-state', { cookie: cookieB })).body).unread.chat).toEqual(['reply:newer'])
+    expect(access).toHaveBeenCalledWith('chat')
+    access.mockRejectedValueOnce(new Error('Outside workspace roots'))
+    expect((await fetchLocal(port, readPath, { ...options, method: 'POST', body: { ids: ['reply:newer'] } })).status).not.toBe(200)
+
     const rename = vi.spyOn(controller, 'renameThread').mockImplementation(async (_id, name) => ({ name: normalizeThreadName(name) }))
     const renamePath = '/api/threads/rename-target/name'
     expect((await fetchLocal(port, renamePath, { method: 'POST', body: { name: 'New name' } })).status).toBe(401)

@@ -209,6 +209,12 @@ export class RemoteController {
     return result
   }
 
+  async assertThreadAccess(threadId: string): Promise<void> {
+    const thread = this.#loadedThreads.get(threadId)
+    if (thread && this.#isAllowedThread(thread)) return
+    await this.#readThreadMetadata(threadId)
+  }
+
   async readMessageIds(threadId: string): Promise<{ ids: string[] }> {
     const result = await this.#readFullThread(threadId)
     this.#assertAllowedThread(result)

@@ -1,3 +1,5 @@
+import { ReadStateStore } from './read-state.js'
+import { homedir } from 'node:os'
 import { WorkHoursStore } from './work-hours.js'
 import { WorkPresence } from './work-presence.js'
 import { dirname, resolve } from 'node:path'
@@ -22,6 +24,11 @@ const vite = config.production
 const hoursFile = process.env.CODEX_REMOTE_WORK_HOURS_FILE?.trim()
 const workHours = hoursFile ? new WorkHoursStore(hoursFile) : undefined
 const controller = new RemoteController(config)
+const readState = new ReadStateStore(process.env.CODEX_REMOTE_READ_STATE_FILE?.trim() ||
+  resolve(homedir(), '.local/state/codex-remote/read-state.json'), () => {
+    controller.events.publish('codex', { method: 'read-state/changed', params: {} })
+  })
+controller.onReplyCompleted = (threadId, ids) => { readState.observe(threadId, ids, true) }
 const presenceFile = process.env.CODEX_REMOTE_WORK_PRESENCE_FILE?.trim()
 const workPresence = presenceFile ? new WorkPresence(presenceFile) : undefined
 controller.appServer.on('notification', (message) => {
@@ -45,7 +52,7 @@ controller.onTurnCompleted = (threadId, turnId, answer) => {
 await controller.start()
 push.start()
 
-const server = createRemoteHttpServer(config, controller, distRoot, vite, push, attachments, workPresence, workHours)
+const server = createRemoteHttpServer(config, controller, distRoot, vite, push, attachments, workPresence, workHours, readState)
 server.listen(config.port, config.host, () => {
   console.log(`Codex Remote listening on http://${config.host}:${config.port}`)
   console.log(`Public origin: ${config.publicOrigin.origin}`)
