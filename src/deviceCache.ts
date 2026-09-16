@@ -1,6 +1,6 @@
 import type { Session, Thread } from './types'
 import type { TranscriptItem } from './transcript'
-import { compactThreadHistory, isCachedThread, isThreadMetadata } from './threadHistoryCache'
+import { HISTORY_CACHE_LIMIT, compactThreadHistory, isCachedThread, isThreadMetadata } from './threadHistoryCache'
 import { jsonBytes, limitConversation, limitItems, MAX_CONVERSATION_BYTES } from '../server/conversation-size'
 
 const DATABASE_NAME = 'codex-remote-device-cache'
@@ -95,7 +95,7 @@ export async function loadConversationSnapshot(): Promise<ConversationSnapshot |
     if (!value.transcripts || typeof value.transcripts !== 'object' || Array.isArray(value.transcripts)) return null
     if (!Object.values(value.transcripts).every(items => Array.isArray(items) && items.every(item => item && typeof item.turnId === 'string'))) return null
     if (value.thread) value.thread = limitConversation(value.thread, MAX_CONVERSATION_BYTES - 64)
-    if (Array.isArray(value.histories)) value.histories = value.histories.filter(isCachedThread).slice(-8).map(compactThreadHistory)
+    if (Array.isArray(value.histories)) value.histories = value.histories.filter(isCachedThread).slice(-HISTORY_CACHE_LIMIT).map(compactThreadHistory)
     for (const [id, items] of Object.entries(value.transcripts)) {
       const history = value.thread?.id === id ? value.thread : value.histories?.find(thread => thread.id === id)
       value.transcripts[id] = limitItems(items, Math.max(2, MAX_CONVERSATION_BYTES - jsonBytes(history ?? null) - 32)).items
@@ -117,7 +117,7 @@ export async function saveConversationSnapshot(snapshot: Omit<ConversationSnapsh
       savedAt: Date.now(),
       threads: snapshot.threads.slice(0, 200).map(({ turns: _turns, ...metadata }) => metadata),
       thread,
-      histories: snapshot.histories?.slice(-8).map(history => history.id === thread?.id ? thread : compactThreadHistory(history)),
+      histories: snapshot.histories?.slice(-HISTORY_CACHE_LIMIT).map(history => history.id === thread?.id ? thread : compactThreadHistory(history)),
       transcripts: snapshot.selectedId ? { [snapshot.selectedId]: boundedTranscript } : {},
     })
   } catch {

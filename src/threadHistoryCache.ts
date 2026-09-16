@@ -1,7 +1,7 @@
 import type { Thread } from './types'
 import { limitConversation } from '../server/conversation-size'
 
-const ENTRY_COUNT = 8
+export const HISTORY_CACHE_LIMIT = 15
 
 export function isThreadMetadata(value: unknown): value is Thread {
   if (!value || typeof value !== 'object') return false
@@ -43,12 +43,12 @@ export class ThreadHistoryCache {
     } else value = compactThreadHistory(value)
     this.entries.delete(thread.id)
     this.entries.set(thread.id, value)
-    while (this.entries.size > ENTRY_COUNT) this.entries.delete(this.entries.keys().next().value!)
+    while (this.entries.size > HISTORY_CACHE_LIMIT) this.entries.delete(this.entries.keys().next().value!)
   }
 
   restore(threads: unknown): void {
     if (!Array.isArray(threads)) return
-    for (const thread of threads.slice(-ENTRY_COUNT)) if (isCachedThread(thread)) this.remember(thread)
+    for (const thread of threads.slice(-HISTORY_CACHE_LIMIT)) if (isCachedThread(thread)) this.remember(thread)
   }
 
   snapshot(): Thread[] { return [...this.entries.values()] }

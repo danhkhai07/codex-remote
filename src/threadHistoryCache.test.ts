@@ -6,14 +6,20 @@ import { MAX_CONVERSATION_BYTES } from '../server/conversation-size'
 const thread = (id: string): Thread => ({ id, cwd: '/workspace', name: id, createdAt: 0, updatedAt: 0, status: {}, turns: [{ id: `turn-${id}`, status: 'completed', items: [{ id: 'answer', type: 'agentMessage', text: `History ${id}` }] }] })
 
 describe('recent conversation history cache', () => {
-  it('keeps eight recent conversations and evicts the least recently used', () => {
+  it('keeps fifteen recent conversations and evicts the least recently used', () => {
     const cache = new ThreadHistoryCache()
-    for (let i = 0; i < 8; i++) cache.remember(thread(String(i)))
+    for (let i = 0; i < 15; i++) cache.remember(thread(String(i)))
     expect(cache.get('0')?.turns?.[0].items[0].text).toBe('History 0')
-    cache.remember(thread('8'))
+    cache.remember(thread('15'))
     expect(cache.get('1')).toBeUndefined()
     expect(cache.get('0')).toBeDefined()
-    expect(cache.snapshot()).toHaveLength(8)
+    expect(cache.snapshot()).toHaveLength(15)
+  })
+
+  it('restores the latest fifteen histories from an oversized snapshot', () => {
+    const cache = new ThreadHistoryCache()
+    cache.restore(Array.from({ length: 18 }, (_, i) => thread(String(i))))
+    expect(cache.snapshot().map(entry => entry.id)).toEqual(Array.from({ length: 15 }, (_, i) => String(i + 3)))
   })
 
   it('restores multiple histories and preserves content on metadata-only responses', () => {
