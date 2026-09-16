@@ -5,13 +5,13 @@ import { observeMessages, restoreUnread, type UnreadState } from './unread'
 import type { Thread } from './types'
 
 export function useUnreadMessages(threads: Thread[], readingId: string | null, enabled: boolean) {
-  const [state, setState] = useState(() => restoreUnread(readScreenState('unread-messages', {})))
+  const [state, setState] = useState(() => restoreUnread(readScreenState('unread-completed-replies', {})))
   const current = useRef(state)
   const reading = useRef(readingId)
   reading.current = readingId
   const update = useCallback((next: UnreadState) => {
     current.current = next
-    writeScreenState('unread-messages', next)
+    writeScreenState('unread-completed-replies', next)
     setState(next)
   }, [])
   const observe = useCallback((id: string, ids: string[], version?: number) => {

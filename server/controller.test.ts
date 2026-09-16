@@ -75,18 +75,38 @@ class StubAppServer extends CodexAppServer {
 }
 
 describe('RemoteController', () => {
+  it('notifies once per successful final reply, never on progress or interrupted turns', async () => {
+    const app = new StubAppServer()
+    const controller = new RemoteController(config, app)
+    await controller.listThreads()
+    const complete = vi.fn()
+    controller.onReplyCompleted = complete
+    const item = (id: string, phase: string) => app.emit('notification', { method: 'item/completed', params: {
+      threadId: 'thread-stored', turnId: id, item: { id: 'answer', type: 'agentMessage', phase, text: 'Text' },
+    } })
+    const end = (id: string, status: string) => app.emit('notification', { method: 'turn/completed', params: {
+      threadId: 'thread-stored', turn: { id, status },
+    } })
+    item('progress', 'commentary'); end('progress', 'completed')
+    item('stopped', 'final_answer'); end('stopped', 'interrupted')
+    item('done', 'final_answer')
+    expect(complete).not.toHaveBeenCalled()
+    end('done', 'completed')
+    expect(complete).toHaveBeenCalledExactlyOnceWith('thread-stored', ['reply:done'])
+  })
+
   it('returns only distinct assistant message IDs, including history beyond the display cap', async () => {
     const appServer = new StubAppServer()
-    const source = { thread: { id: 'messages', cwd: '/workspace', turns: [{ id: 't1', items: [
+    const source = { thread: { id: 'messages', cwd: '/workspace', turns: [{ id: 't1', status: 'completed', items: [
       { id: 'user', type: 'userMessage', text: 'Hi' },
       { id: 'tool', type: 'commandExecution', text: 'x'.repeat(6_000_000) },
       { id: 'reply', type: 'agentMessage', text: 'Hello' },
       { id: 'reply', type: 'agentMessage', text: 'Hello' },
       { id: 'blank', type: 'agentMessage', text: ' ' },
-    ] }, { id: 't2', items: [{ id: 'reply', type: 'agentMessage', text: 'Another reply' }] }] } }
+    ] }, { id: 't2', status: 'completed', items: [{ id: 'reply', type: 'agentMessage', text: 'Another reply' }] }] } }
     vi.spyOn(appServer, 'request').mockResolvedValue(source)
     const controller = new RemoteController(config, appServer)
-    expect(await controller.readMessageIds('messages')).toEqual({ ids: ['t1:reply', 't2:reply'] })
+    expect(await controller.readMessageIds('messages')).toEqual({ ids: ['reply:t1', 'reply:t2'] })
     source.thread.cwd = '/outside'
     await expect(controller.readMessageIds('messages')).rejects.toThrow()
   })

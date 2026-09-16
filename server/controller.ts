@@ -1,3 +1,4 @@
+import { completedReplyIds } from './completed-replies.js'
 import type { UploadedFile } from './attachments.js'
 import { randomUUID } from 'node:crypto'
 import type { RemoteConfig } from './config.js'
@@ -13,7 +14,7 @@ type PendingRequest = {
   createdAt: string
 }
 
-type AgentMessages = { order: string[]; text: Map<string, string> }
+type AgentMessages = { order: string[]; text: Map<string, string>; completed: Map<string, Record<string, unknown>> }
 
 export class ThreadNameError extends Error {
   readonly status = 400
@@ -50,6 +51,7 @@ export class RemoteController {
   readonly #agentMessages = new Map<string, AgentMessages>()
   readonly #interrupts = new Map<string, Promise<unknown>>()
   readonly #threadReads = new Map<string, Promise<unknown>>()
+  onReplyCompleted?: (threadId: string, ids: string[]) => void
   onTurnCompleted?: (threadId: string, turnId: string, answer: string) => void
 
   constructor(config: RemoteConfig, appServer = new CodexAppServer(config.codexBin)) {
@@ -64,6 +66,14 @@ export class RemoteController {
         const params = asObject(message.params)
         const turn = asObject(params.turn)
         if (typeof params.threadId === 'string' && typeof turn.id === 'string') {
+          const captured = this.#agentMessages.get(`${params.threadId}:${turn.id}`)
+          const ids = completedReplyIds({ ...turn, items: Array.isArray(turn.items) && turn.items.length
+            ? turn.items : [...(captured?.completed.values() ?? [])] })
+          if (ids.length && this.#loadedThreads.has(params.threadId)) {
+            this.events.publish('codex', { method: 'reply/completed', params: { threadId: params.threadId, ids } })
+            try { this.onReplyCompleted?.(params.threadId, ids) }
+            catch { console.error('Unable to persist completed reply state') }
+          }
           const answer = this.#completedAnswer(params.threadId, turn.id, turn)
           if (this.#loadedThreads.has(params.threadId)) {
             try { this.onTurnCompleted?.(params.threadId, turn.id, answer) }
@@ -102,9 +112,10 @@ export class RemoteController {
     let messages = this.#agentMessages.get(key)
     if (!messages) {
       if (this.#agentMessages.size >= 128) this.#agentMessages.delete(this.#agentMessages.keys().next().value as string)
-      messages = { order: [], text: new Map() }
+      messages = { order: [], text: new Map(), completed: new Map() }
       this.#agentMessages.set(key, messages)
     }
+    if (completedText !== null) messages.completed.set(itemId, { ...item, text: completedText.slice(0, 4_000) })
     if (!messages.text.has(itemId)) messages.order.push(itemId)
     const text = completedText ?? `${messages.text.get(itemId) ?? ''}${delta}`
     messages.text.set(itemId, text.slice(0, 4_000))
@@ -198,20 +209,12 @@ export class RemoteController {
     return result
   }
 
-  async readMessageIds(threadId: string): Promise<unknown> {
+  async readMessageIds(threadId: string): Promise<{ ids: string[] }> {
     const result = await this.#readFullThread(threadId)
     this.#assertAllowedThread(result)
     const thread = threadFromResult(result)
     const turns = Array.isArray(thread.turns) ? thread.turns : []
-    const ids = turns.flatMap((value) => {
-      const turn = asObject(value)
-      return (Array.isArray(turn.items) ? turn.items : []).flatMap((value) => {
-        const item = asObject(value)
-        return item.type === 'agentMessage' && typeof item.id === 'string' &&
-          typeof item.text === 'string' && item.text.trim()
-          ? [`${String(turn.id)}:${item.id}`] : []
-      })
-    })
+    const ids = turns.flatMap(value => completedReplyIds(asObject(value)))
     return { ids: [...new Set(ids)] }
   }
 

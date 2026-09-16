@@ -20,7 +20,7 @@ describe('controller history memory', () => {
     expect(request).toHaveBeenCalledTimes(1)
     resolve({ thread: { id: 'thread', cwd: '/workspace', turns: [{ id: 'turn', status: 'completed', items: [{ id: 'reply', type: 'agentMessage', text: 'hello' }] }] } })
     await expect(history).resolves.toMatchObject({ thread: { turns: [{ id: 'turn' }] } })
-    await expect(ids).resolves.toEqual({ ids: ['turn:reply'] })
+    await expect(ids).resolves.toEqual({ ids: ['reply:turn'] })
     request.mockRejectedValueOnce(new Error('temporary failure'))
     await expect(controller.readThread('thread')).rejects.toThrow('temporary failure')
     request.mockResolvedValue({ thread: { id: 'thread', cwd: '/workspace', turns: [] } })

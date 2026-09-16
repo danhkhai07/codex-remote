@@ -248,7 +248,7 @@ function ThreadSidebar({
             >
               <span className="thread-row-heading">
                 <span className="thread-row-title">{threadTitle(thread)}</span>
-                {(unreadCounts[thread.id] ?? 0) > 0 && <span className="thread-unread-badge" aria-label={`${unreadCounts[thread.id]} unread messages`}>{unreadCounts[thread.id] > 99 ? '99+' : unreadCounts[thread.id]}</span>}
+                {(unreadCounts[thread.id] ?? 0) > 0 && <span className="thread-unread-badge" aria-label="Unread completed answer" title="Có câu trả lời hoàn tất chưa đọc">!</span>}
               </span>
               <span className="thread-row-meta">
                 {shortWorkspace(thread.cwd)} · {formatTime(thread.updatedAt)}
@@ -1004,11 +1004,8 @@ export function App() {
         }
         return
       }
-      if (method === 'item/completed' && eventThread && typeof params.turnId === 'string') {
-        const item = object(params.item)
-        if (item.type === 'agentMessage' && typeof item.id === 'string' && typeof item.text === 'string' && item.text.trim()) {
-          observeUnread(eventThread, [`${params.turnId}:${item.id}`])
-        }
+      if (method === 'reply/completed' && eventThread && Array.isArray(params.ids)) {
+        observeUnread(eventThread, params.ids.filter((id): id is string => typeof id === 'string'))
       }
       if (eventThread && ['turn/started', 'turn/completed'].includes(method)) {
         turnVersions.current.set(eventThread, (turnVersions.current.get(eventThread) ?? 0) + 1)
