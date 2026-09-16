@@ -1,5 +1,6 @@
 import { ChangeEvent, Fragment, FormEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { enterSendsMessage, isComposerSubmitKey } from './composerKeyboard'
+import { settingsForModel, useConversationSettings } from './useConversationSettings'
 import { useThreadState } from './useThreadState'
 import { useUnreadMessages } from './useUnreadMessages'
 import { RenameConversation } from './RenameConversation'
@@ -549,8 +550,9 @@ export function App() {
   const [sendError, setSendError, , clearSendErrors] = useThreadState(selectedId, '')
   const [pending, setPending] = useState<PendingRequest[]>([])
   const [models, setModels] = useState<ModelOption[]>([])
-  const [selectedModel, setSelectedModel] = useScreenState<string | null>('model', null)
-  const [selectedEffort, setSelectedEffort] = useScreenState<string | null>('effort', null)
+  const { settings, update: setConversationSettings, migrateLegacy, saveError: settingsSaveError } = useConversationSettings(selectedId)
+  const selectedModel = settings?.model ?? null
+  const selectedEffort = settings?.effort ?? null
   const [yoloMode, setYoloMode, yoloSaveError] = useYoloPreference()
   const [commandNotice, setCommandNotice] = useScreenState<CommandNotice | null>('command-notice', null)
   const [slashIndex, setSlashIndex] = useState(0)
@@ -821,6 +823,7 @@ export function App() {
         threadCache.current.restore(cached.histories)
         if (cached.thread) threadCache.current.remember(cached.thread)
         setThreads(cached.threads)
+        migrateLegacy(cached.selectedId, cached.thread?.model)
         setSelectedId(cached.selectedId)
         selectedRef.current = cached.selectedId
         setThread(cached.thread)
@@ -847,7 +850,7 @@ export function App() {
       }
     })()
     return () => { cancelled = true }
-  }, [session, refreshThreads, openThread, setThreadTurn])
+  }, [session, refreshThreads, openThread, setThreadTurn, migrateLegacy])
 
   useEffect(() => {
     if (!session || !cacheReady || !historyReady || (thread && thread.id !== selectedId)) return
@@ -1066,6 +1069,7 @@ export function App() {
   const effectiveModel = selectedModel ?? thread?.model ?? models.find((model) => model.isDefault)?.model ?? null
   const effectiveModelOption = models.find((model) => model.model === effectiveModel)
   const effortOptions = effectiveModelOption?.supportedReasoningEfforts ?? []
+  const effectiveEffort = selectedEffort ?? effectiveModelOption?.defaultReasoningEffort ?? null
   const slashOptions = useMemo<SlashOption[]>(() => {
     const input = composer.trimStart()
     const modelMatch = input.match(/^\/model(?:\s+(.*))?$/i)
@@ -1170,7 +1174,7 @@ export function App() {
           { label: 'Connection', value: !online ? 'Offline' : connected ? 'Live' : activeTurnId ? 'Running' : pageVisible ? 'Syncing' : 'Sleeping' },
           { label: 'Workspace', value: thread ? shortWorkspace(thread.cwd) : 'None' },
           { label: 'Model', value: effectiveModel || 'Server default' },
-          { label: 'Effort', value: selectedEffort || effectiveModelOption?.defaultReasoningEffort || 'Model default' },
+          { label: 'Effort', value: effectiveEffort || 'Model default' },
           { label: 'Thread', value: activeTurnId ? 'Working' : typeof runtimeStatus === 'string' ? runtimeStatus : 'Idle' },
           { label: 'Approvals', value: 'Disabled' },
           { label: 'Sandbox', value: yoloMode ? 'Host access (YOLO)' : 'Workspace only' },
@@ -1206,12 +1210,12 @@ export function App() {
           setError(`Unknown model: ${argument}`)
           return
         }
-        setSelectedModel(selected.model)
-        setSelectedEffort(selected.defaultReasoningEffort ?? null)
+        const nextSettings = settingsForModel(selected, effectiveEffort)
+        setConversationSettings(nextSettings)
         showCommandNotice('Model changed', [
           { label: 'Model', value: selected.displayName || selected.model },
           { label: 'Applied', value: 'Future turns in this conversation' },
-          { label: 'Effort', value: selected.defaultReasoningEffort || 'Model default' },
+          { label: 'Effort', value: nextSettings.effort || 'Model default' },
         ])
         return
       }
@@ -1229,8 +1233,7 @@ export function App() {
           setError(`Reasoning effort “${argument}” is not available for ${effectiveModel}`)
           return
         }
-        setSelectedModel(effectiveModel)
-        setSelectedEffort(selected.reasoningEffort)
+        setConversationSettings({ model: effectiveModel, effort: selected.reasoningEffort })
         showCommandNotice('Reasoning effort changed', [
           { label: 'Model', value: effectiveModel },
           { label: 'Effort', value: selected.reasoningEffort },
@@ -1293,6 +1296,7 @@ export function App() {
       setError('Your draft is saved here. Send it when this turn finishes, or stop the turn first.')
       return
     }
+    if (effectiveModel) setConversationSettings({ model: effectiveModel, effort: effectiveEffort })
     sendingLocks.current.add(thread.id)
     setSendError('')
     setSending(current => ({ ...current, [thread.id]: true }))
@@ -1318,7 +1322,7 @@ export function App() {
       setUploadStatus('Starting Codex…')
       const response = await api.startTurn(thread.id, instruction, session.csrf, {
         model: effectiveModel ?? undefined,
-        effort: selectedEffort ?? undefined,
+        effort: effectiveEffort ?? undefined,
         fullAccess: yoloMode,
         attachmentIds: uploadedIds,
       })
@@ -1537,7 +1541,7 @@ export function App() {
               <h1>{thread ? threadTitle(thread) : 'Codex Remote'}</h1>
             </div>
             <p>
-              {thread ? <>{shortWorkspace(thread.cwd)}{effectiveModel ? ` · ${effectiveModel}` : ''}{selectedEffort ? ` · ${selectedEffort}` : ''}</> : 'Private workspace agent'}
+              {thread ? <>{shortWorkspace(thread.cwd)}{effectiveModel ? ` · ${effectiveModel}` : ''}{effectiveEffort ? ` · ${effectiveEffort}` : ''}</> : 'Private workspace agent'}
             </p>
           </div>
           {yoloMode && <button className="yolo-chip" type="button" onClick={() => {
@@ -1621,8 +1625,7 @@ export function App() {
                 onChange={(event) => {
                   const selected = models.find((model) => model.model === event.target.value)
                   if (!selected) return
-                  setSelectedModel(selected.model)
-                  setSelectedEffort(selected.defaultReasoningEffort ?? null)
+                  setConversationSettings(settingsForModel(selected, effectiveEffort))
                   setCommandNotice(null)
                   setError('')
                 }}
@@ -1638,24 +1641,25 @@ export function App() {
               <select
                 className="composer-effort"
                 aria-label="Reasoning effort for future turns"
-                value={selectedEffort || effectiveModelOption?.defaultReasoningEffort || ''}
+                value={effectiveEffort ?? ''}
                 disabled={!effectiveModel || effortOptions.length === 0}
                 onChange={(event) => {
                   const selected = effortOptions.find((entry) => entry.reasoningEffort === event.target.value)
                   if (!selected || !effectiveModel) return
-                  setSelectedModel(effectiveModel)
-                  setSelectedEffort(selected.reasoningEffort)
+                  setConversationSettings({ model: effectiveModel, effort: selected.reasoningEffort })
                   setCommandNotice(null)
                   setError('')
                 }}
               >
-                {effortOptions.length === 0 && <option value="">Effort</option>}
+                {effectiveEffort && !effortOptions.some(option => option.reasoningEffort === effectiveEffort) && <option value={effectiveEffort}>{effectiveEffort} (unavailable)</option>}
+                {effortOptions.length === 0 && !effectiveEffort && <option value="">Effort</option>}
                 {effortOptions.map((entry) => (
                   <option value={entry.reasoningEffort} key={entry.reasoningEffort}>{entry.reasoningEffort}</option>
                 ))}
               </select>
               <button type="button" className="composer-status" disabled={busy} onClick={() => void executeSlashCommand('status', '')}>Usage & status</button>
             </div>
+            {settingsSaveError && <p role="status" className="attachment-hint">{settingsSaveError}</p>}
             {commandNotice && <LocalCommandResult notice={commandNotice} onClose={() => setCommandNotice(null)} />}
             <SlashMenu
               activeIndex={slashIndex}
