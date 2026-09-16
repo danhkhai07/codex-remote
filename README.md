@@ -36,7 +36,7 @@ Server files: click an absolute file link in a Codex response to open the
 authenticated in-app viewer. Text/source files, Word DOCX, PowerPoint PPTX, PDF, PNG, JPEG, WebP and GIF can
 be previewed; every regular file can be downloaded to the current device. Paths
 are canonicalized and must stay inside `CODEX_REMOTE_WORKSPACE_ROOTS`, including
-after symlink resolution. Text preview is capped at 2 MB; larger or unsupported
+after symlink resolution. Text preview is capped at 10 MB; larger or unsupported
 files remain download-only. Markdown files open as rendered documents by default
 with a Preview/Raw toggle; line-target links open in Raw mode so the requested
 line remains highlighted.
@@ -98,7 +98,7 @@ Reverse proxies must accept bodies larger than the 25 MB file limit. Nginx defau
 to 1 MB, so use `client_max_body_size 26m;`; see
 [`deploy/nginx/codex-remote.conf`](deploy/nginx/codex-remote.conf).
 
-HTML files (`.html` and `.htm`, up to 2 MB) open with Preview / Raw modes.
+HTML files (`.html` and `.htm`, up to 10 MB) open with Preview / Raw modes.
 Preview supports inline CSS and JavaScript in an isolated iframe. Resources must
 be embedded in the file (inline or data URLs); external and sibling assets and
 network requests are blocked. Download keeps the original file.
@@ -114,7 +114,7 @@ to `/` enables browsing outside home, including `/tmp`, `/etc` and `/var`. The
 Up button can then reach `/`. Existing authentication and OS file permissions
 still apply. Workspace selection continues to use `CODEX_REMOTE_WORKSPACE_ROOTS`.
 
-SVG files (up to the 2 MB text-preview limit) support Preview / Raw modes.
+SVG files (up to the 10 MB text-preview limit) support Preview / Raw modes.
 Preview uses an image element, so embedded scripts do not execute and external
 resources are not loaded. The checkerboard background shows transparency.
 

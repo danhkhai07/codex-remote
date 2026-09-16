@@ -3,7 +3,7 @@ import { open, realpath, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { basename, extname, isAbsolute, resolve, sep } from 'node:path'
 
-export const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024
+export const MAX_TEXT_PREVIEW_BYTES = 10 * 1024 * 1024
 export const MAX_DOCX_PREVIEW_BYTES = 20 * 1024 * 1024
 export const MAX_PPTX_PREVIEW_BYTES = 20 * 1024 * 1024
 

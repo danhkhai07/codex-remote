@@ -210,7 +210,7 @@ request and rejects files outside `CODEX_REMOTE_FILE_ROOTS` (defaulting to
 `CODEX_REMOTE_WORKSPACE_ROOTS`); a symlink
 cannot escape that boundary. File APIs require the signed session, use
 `private, no-store`, stream bytes instead of buffering whole downloads, and
-support byte ranges for browser PDF viewers. Text preview is limited to 2 MB to
+support byte ranges for browser PDF viewers. Text preview is limited to 10 MB to
 protect mobile rendering; a larger text file remains downloadable. Setting file
 roots to `/` enables browsing the host filesystem outside home. With narrower
 file roots, every regular file below an allowed root is eligible

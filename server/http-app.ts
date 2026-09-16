@@ -16,7 +16,7 @@ import { ThreadNameError, type RemoteController } from './controller.js'
 import { LoginRateLimiter } from './login-rate-limit.js'
 import { validateSubscription, type PushService } from './push.js'
 import { AttachmentError, AttachmentStore, MAX_ATTACHMENT_BYTES, type UploadedFile } from './attachments.js'
-import { inspectServerFile, ServerFileError, serveServerFile } from './server-files.js'
+import { inspectServerFile, MAX_TEXT_PREVIEW_BYTES, ServerFileError, serveServerFile } from './server-files.js'
 import { PptxPreviewCache } from './pptx-preview.js'
 import { DOCX_FRAME_CSP, DOCX_FRAME_HTML } from './docx-frame.js'
 import { listDirectory } from './directory-listing.js'
@@ -301,7 +301,7 @@ export function createRemoteHttpServer(
       if (url.pathname === '/api/files/html-preview' && method === 'GET') {
         const file = await inspectServerFile(url.searchParams.get('path'), fileRoots)
         if (file.kind !== 'text' || !['.html', '.htm'].includes(file.extension)) throw new HttpError(415, 'Use an HTML file for this preview')
-        if (!file.previewable) throw new HttpError(413, 'HTML preview is limited to 2 MB; download the file instead')
+        if (!file.previewable) throw new HttpError(413, `HTML preview is limited to ${MAX_TEXT_PREVIEW_BYTES / 1024 / 1024} MB; download the file instead`)
         const html = await fs.readFile(file.path)
         res.setHeader('Content-Type', 'text/html; charset=utf-8')
         res.setHeader('Cache-Control', 'private, no-store')
