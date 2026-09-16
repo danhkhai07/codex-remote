@@ -658,6 +658,8 @@ textarea:focus {
 
 .connection-chip {
   display: inline-flex;
+  flex-shrink: 0;
+  white-space: nowrap;
   min-height: 30px;
   align-self: center;
   align-items: center;
@@ -2738,6 +2740,10 @@ textarea:focus {
 }
 
 @media (max-width: 480px) {
+  .workspace-header { flex-wrap: wrap; gap: 8px; }
+  .workspace-title { flex-basis: 80px; }
+  .header-actions { margin-left: auto; }
+
   .login-card {
     padding: 26px 20px;
     border-radius: 22px;
@@ -2745,14 +2751,6 @@ textarea:focus {
 
   .workspace-title p {
     max-width: 42vw;
-  }
-
-  .connection-chip {
-    font-size: 0;
-  }
-
-  .connection-chip .connection-dot {
-    margin: 0 2px;
   }
 
   .header-actions .quiet-button {
