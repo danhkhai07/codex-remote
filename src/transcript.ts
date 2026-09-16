@@ -25,9 +25,6 @@ export function updateTranscript(items: TranscriptItem[], event: RemoteEvent): T
   if (typeof id !== 'string') return items
   const index = items.findIndex(item => item.id === id && item.turnId === turnId)
   const previous = index < 0 ? undefined : items[index]
-  if (method.endsWith('/delta') || method.endsWith('/outputDelta')) {
-    if (previous?.historyItemTruncated || (index < 0 && items.at(-1)?.historyItemTruncated)) return items
-  }
   let next: TranscriptItem
   if ((method === 'item/started' || method === 'item/completed') && supplied) {
     next = { ...previous, ...supplied, turnId, streaming: method !== 'item/completed' }

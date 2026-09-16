@@ -35,7 +35,7 @@ export type Thread = {
   turns?: Turn[]
   historyUnavailable?: boolean
   historyCacheTruncated?: boolean
-  historyTruncation?: 'tail'
+  historyTruncation?: 'head' | 'tail'
   latestTurn?: { id: string; status: string }
 }
 

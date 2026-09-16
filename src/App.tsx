@@ -360,7 +360,7 @@ export const Conversation = memo(function Conversation({ thread, activeTurnId, i
   } : null
   return (
     <section className={`conversation-stream${rows.length === 0 && !pendingMessage && !activeTurnId ? ' is-empty' : ''}`} aria-live="polite">
-      {!thread.historyCacheTruncated && rows.some(item => item.historyItemTruncated) && <p className="history-note">Phần cuối nội dung đã được rút gọn để giữ bản xem trong giới hạn 5 MB. Lịch sử gốc vẫn giữ nguyên.</p>}
+      {!thread.historyCacheTruncated && rows.some(item => item.historyItemTruncated) && <p className="history-note">Phần đầu nội dung cũ đã được rút gọn để giữ bản xem trong giới hạn 5 MB. Lịch sử gốc vẫn giữ nguyên.</p>}
       {rows.length === 0 && !pendingMessage && !activeTurnId && (
         <div className="empty-state">
           <h2>What should Codex work on?</h2>
@@ -1597,7 +1597,7 @@ export function App() {
           {thread && !historyReady && <div className="loading-inline" role="status">
             {historyLoading ? <><span className="spinner" />Loading conversation…</> : <><span>{online ? 'Conversation could not be loaded.' : 'This conversation is not cached on this device yet.'}</span><button type="button" className="quiet-button" disabled={!online} onClick={() => void openThread(thread).catch(reason => setError(errorMessage(reason)))}>Retry</button></>}
           </div>}
-          {thread?.historyCacheTruncated && <p className="history-note">{thread.historyTruncation === 'tail' ? 'Hội thoại vượt giới hạn 5 MB: phần cuối đã được rút gọn trong bản xem/cache. Lịch sử gốc vẫn giữ nguyên.' : 'Showing recent cached messages. Full history refreshes when connected.'}</p>}
+          {thread?.historyCacheTruncated && <p className="history-note">{thread.historyTruncation === 'head' ? 'Hội thoại vượt giới hạn 5 MB: phần cũ nhất đã được rút gọn trong bản xem/cache. Lịch sử gốc vẫn giữ nguyên.' : thread.historyTruncation === 'tail' ? 'Hội thoại vượt giới hạn 5 MB: phần cuối đã được rút gọn trong bản xem/cache. Lịch sử gốc vẫn giữ nguyên.' : 'Showing recent cached messages. Full history refreshes when connected.'}</p>}
           {thread && historyReady && <Conversation thread={thread} activeTurnId={activeTurnId} items={transcripts[thread.id] ?? EMPTY_ITEMS} pendingMessage={sentMessages[thread.id]} yoloMode={yoloMode} onOpenFile={openFile} onOpenLink={openLink} onSuggestion={suggestPrompt} />}
         </TranscriptViewport>
 

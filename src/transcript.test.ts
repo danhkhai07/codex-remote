@@ -8,11 +8,15 @@ function event(method: string, params: Record<string, unknown>): RemoteEvent {
 const thread: Thread = { id: 'thread', cwd: '/workspace', createdAt: 0, updatedAt: 0, status: {}, turns: [] }
 
 describe('live conversation', () => {
-  it('caps oversized streaming output and does not regrow the trimmed tail', () => {
+  it('caps oversized streaming output while retaining new deltas', () => {
     const items = updateTranscript([], event('item/agentMessage/delta', { itemId: 'large', delta: 'x'.repeat(6_000_000) }))
     expect(Buffer.byteLength(JSON.stringify(items), 'utf8')).toBeLessThanOrEqual(5_000_000)
     expect(items[0].historyItemTruncated).toBe(true)
-    expect(updateTranscript(items, event('item/agentMessage/delta', { itemId: 'large', delta: 'more' }))).toBe(items)
+    const updated = updateTranscript(items, event('item/agentMessage/delta', { itemId: 'large', delta: 'more' }))
+    expect(String(updated[0].text).endsWith('more')).toBe(true)
+    expect(Buffer.byteLength(JSON.stringify(updated), 'utf8')).toBeLessThanOrEqual(5_000_000)
+    const next = updateTranscript(updated, event('item/agentMessage/delta', { itemId: 'new', delta: 'Newest answer' }))
+    expect(next.at(-1)).toMatchObject({ id: 'new', text: 'Newest answer' })
     const ended = updateTranscript(items, event('turn/completed', {}))
     expect(ended[0].streaming).toBe(false)
   })

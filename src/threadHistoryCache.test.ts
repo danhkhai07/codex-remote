@@ -28,14 +28,14 @@ describe('recent conversation history cache', () => {
     expect(cache.snapshot()).toEqual([])
   })
 
-  it('caps histories at 5 MB, trims the tail, and marks partial cache', () => {
+  it('caps histories at 5 MB, trims the beginning, and marks partial cache', () => {
     const large = thread('large')
     large.turns![0].items = Array.from({ length: 1000 }, (_, i) => ({ id: String(i), text: `Message ${i} ` + 'x'.repeat(6000) }))
     const cached = compactThreadHistory(large)
     expect(cached.historyCacheTruncated).toBe(true)
     expect(new TextEncoder().encode(JSON.stringify(cached)).length).toBeLessThanOrEqual(MAX_CONVERSATION_BYTES)
-    expect(cached.turns![0].items[0]?.id).toBe('0')
-    expect(cached.turns![0].items.at(-1)?.id).not.toBe('999')
+    expect(cached.turns![0].items[0]?.id).not.toBe('0')
+    expect(cached.turns![0].items.at(-1)?.id).toBe('999')
     expect(large.turns![0].items).toHaveLength(1000)
   })
 
