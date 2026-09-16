@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm'
 import { api, ApiError, serverFileUrl } from './api'
 import { parseLocalFileReference, type LocalFileReference, type WebLinkReference } from './MarkdownMessage'
 import type { ServerFileInfo } from './types'
+import { SvgPreview } from './SvgPreview'
 import { DocxPreview } from './DocxPreview'
 import { readScreenState, useRestoredScroll, useScreenState } from './screenState'
 
@@ -34,6 +35,9 @@ export function formatFileType(file: Pick<ServerFileInfo, 'contentType' | 'exten
   if (known[mime]) return known[mime]
   if (file.kind === 'text') {
     const textFormats: Record<string, string> = {
+      '.svg': 'SVG image',
+      '.html': 'HTML document',
+      '.htm': 'HTML document',
       '.csv': 'CSV document',
       '.json': 'JSON document',
       '.md': 'Markdown document',
@@ -249,6 +253,9 @@ export function FileViewer({ reference, onClose, onOpenFile, onOpenLink }: {
   const previewUrl = serverFileUrl(reference.path)
   const downloadUrl = serverFileUrl(reference.path, true)
   const nativeShare = info ? supportsNativeFileShare(info) : false
+  const svg = info?.kind === 'text' && info.extension === '.svg'
+  const html = info?.kind === 'text' && ['.html', '.htm'].includes(info.extension)
+  const htmlPreviewUrl = `/api/files/html-preview?${new URLSearchParams({ path: reference.path })}`
   const markdown = info?.kind === 'text' && ['.md', '.markdown'].includes(info.extension)
 
   const saveFile = () => {
@@ -289,7 +296,7 @@ export function FileViewer({ reference, onClose, onOpenFile, onOpenLink }: {
           <span className="file-viewer-details-toggle" aria-hidden="true">⌄</span>
         </button>
         <div className="file-viewer-actions">
-          {info?.previewable && !['docx', 'pptx'].includes(info.kind) && <a className="quiet-button" href={previewUrl} target="_blank" rel="noreferrer">Open</a>}
+          {info?.previewable && !svg && !['docx', 'pptx'].includes(info.kind) && <a className="quiet-button" href={html ? htmlPreviewUrl : previewUrl} target="_blank" rel="noreferrer">Open</a>}
           {info && <button className="primary-button" type="button" onClick={saveFile} disabled={nativeShare && sharePreparing}>
             {nativeShare ? (sharePreparing ? 'Preparing…' : 'Save / Share') : 'Download'}
           </button>}
@@ -299,7 +306,7 @@ export function FileViewer({ reference, onClose, onOpenFile, onOpenLink }: {
       <div className="file-viewer-information">
         <div className="file-viewer-meta">
           {info ? <><span>{formatFileSize(info.size)}</span><span>{formatFileType(info)}</span></> : <span>Loading file…</span>}
-          {markdown && <div className="file-text-mode" role="group" aria-label="Markdown view mode">
+          {(markdown || html || svg) && info.previewable && <div className="file-text-mode" role="group" aria-label={svg ? "SVG view mode" : html ? "HTML view mode" : "Markdown view mode"}>
             <button type="button" className={textMode === 'preview' ? 'is-active' : ''} onClick={() => setTextMode('preview')}>Preview</button>
             <button type="button" className={textMode === 'raw' ? 'is-active' : ''} onClick={() => setTextMode('raw')}>Raw</button>
           </div>}
@@ -321,15 +328,19 @@ export function FileViewer({ reference, onClose, onOpenFile, onOpenLink }: {
           </dl>
         </div>}
       </div>
-      <div ref={bodyRef} className={`file-viewer-body${info?.kind ? ` is-${info.kind}` : ''}`}>
+      <div ref={bodyRef} className={`file-viewer-body${svg && textMode === 'preview' ? ' is-svg' : html && textMode === 'preview' ? ' is-html' : info?.kind ? ` is-${info.kind}` : ''}`}>
         {error && <div className="file-viewer-empty" role="alert"><strong>Couldn’t open file</strong><p>{error}</p><button type="button" className="quiet-button" onClick={() => setAttempt(value => value + 1)}>Retry</button></div>}
         {!error && !info && <span className="spinner" aria-label="Loading file" />}
         {!error && info?.kind === 'text' && info.previewable && text === null && <span className="spinner" aria-label="Loading text" />}
         {!error && info?.kind === 'text' && info.previewable && text !== null && markdown && textMode === 'preview' && (
           <MarkdownPreview text={text} currentPath={reference.path} onOpenFile={onOpenFile} onOpenLink={onOpenLink} />
         )}
-        {!error && info?.kind === 'text' && info.previewable && text !== null && (!markdown || textMode === 'raw') && (
+        {!error && info?.kind === 'text' && info.previewable && text !== null && ((!markdown && !html && !svg) || textMode === 'raw') && (
           <TextPreview text={text} targetLine={reference.line} autoScroll={readScreenState(`file:${reference.path}:scroll:${textMode}`, null) === null} />
+        )}
+        {!error && svg && info.previewable && text !== null && textMode === 'preview' && <SvgPreview key={reference.path} text={text} name={info.name} />}
+        {!error && html && info.previewable && text !== null && textMode === 'preview' && (
+          <iframe key={`${reference.path}:${attempt}`} src={htmlPreviewUrl} title={info.name} sandbox="allow-scripts" referrerPolicy="no-referrer" />
         )}
         {!error && info?.kind === 'image' && <img src={previewUrl} alt={info.name} />}
         {!error && info?.kind === 'pdf' && <iframe src={previewUrl} title={info.name} />}

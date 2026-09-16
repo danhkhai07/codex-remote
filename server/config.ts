@@ -10,6 +10,7 @@ export type RemoteConfig = {
   sessionTtlSeconds: number
   codexBin: string
   workspaceRoots: string[]
+  fileRoots?: string[]
   production: boolean
 }
 
@@ -73,6 +74,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RemoteConfig {
     sessionTtlSeconds: parseTtl(env.CODEX_REMOTE_SESSION_TTL_SECONDS),
     codexBin: env.CODEX_REMOTE_CODEX_BIN?.trim() || 'codex',
     workspaceRoots: parseWorkspaceRoots(required(env, 'CODEX_REMOTE_WORKSPACE_ROOTS')),
+    fileRoots: parseWorkspaceRoots(env.CODEX_REMOTE_FILE_ROOTS?.trim() || required(env, 'CODEX_REMOTE_WORKSPACE_ROOTS')),
     production: env.NODE_ENV === 'production',
   }
 }

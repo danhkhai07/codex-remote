@@ -180,6 +180,7 @@ export function createRemoteHttpServer(
   push?: PushService,
   attachments?: AttachmentStore,
 ) {
+  const fileRoots = config.fileRoots ?? config.workspaceRoots
   const pptxPreviews = new PptxPreviewCache()
   const loginRateLimiter = new LoginRateLimiter()
   const headers = securityHeaders(config)
@@ -269,15 +270,29 @@ export function createRemoteHttpServer(
         return
       }
       if (url.pathname === '/api/files/list' && method === 'GET') {
-        json(res, 200, await listDirectory(url.searchParams, config.workspaceRoots))
+        json(res, 200, await listDirectory(url.searchParams, fileRoots))
         return
       }
       if (url.pathname === '/api/files/info' && method === 'GET') {
-        json(res, 200, await inspectServerFile(url.searchParams.get('path'), config.workspaceRoots))
+        json(res, 200, await inspectServerFile(url.searchParams.get('path'), fileRoots))
+        return
+      }
+      if (url.pathname === '/api/files/html-preview' && method === 'GET') {
+        const file = await inspectServerFile(url.searchParams.get('path'), fileRoots)
+        if (file.kind !== 'text' || !['.html', '.htm'].includes(file.extension)) throw new HttpError(415, 'Use an HTML file for this preview')
+        if (!file.previewable) throw new HttpError(413, 'HTML preview is limited to 2 MB; download the file instead')
+        const html = await fs.readFile(file.path)
+        res.setHeader('Content-Type', 'text/html; charset=utf-8')
+        res.setHeader('Cache-Control', 'private, no-store')
+        // Keep scripts interactive without granting the document access to the app origin.
+        res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts")
+        res.setHeader('X-Frame-Options', 'SAMEORIGIN')
+        res.setHeader('Referrer-Policy', 'no-referrer')
+        res.end(html)
         return
       }
       if (url.pathname === '/api/files/pptx-preview' && method === 'GET') {
-        const file = await inspectServerFile(url.searchParams.get('path'), config.workspaceRoots)
+        const file = await inspectServerFile(url.searchParams.get('path'), fileRoots)
         const pdf = await pptxPreviews.get(file)
         res.setHeader('Content-Type', 'application/pdf')
         res.setHeader('Cache-Control', 'private, no-store')
@@ -287,7 +302,7 @@ export function createRemoteHttpServer(
         return
       }
       if (url.pathname === '/api/files/content' && (method === 'GET' || method === 'HEAD')) {
-        const file = await inspectServerFile(url.searchParams.get('path'), config.workspaceRoots)
+        const file = await inspectServerFile(url.searchParams.get('path'), fileRoots)
         serveServerFile(req, res, file, url.searchParams.get('download') === '1')
         return
       }

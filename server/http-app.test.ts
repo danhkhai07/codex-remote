@@ -68,6 +68,35 @@ describe('Codex Remote HTTP boundary', () => {
     await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()))
   })
 
+  it('uses separate file roots for authenticated browsing and previews outside the workspace', async () => {
+    const base = await fs.mkdtemp(join(tmpdir(), 'remote-file-roots-'))
+    const workspace = join(base, 'workspace')
+    await fs.mkdir(workspace)
+    const outside = join(base, 'outside.html')
+    await fs.writeFile(outside, '<h1>Outside workspace</h1>')
+    const config: RemoteConfig = {
+      host: '127.0.0.1', port: 5173, publicOrigin: new URL('https://remote.example.test'),
+      password: 'correct horse battery staple', sessionSecret: 's'.repeat(48), sessionTtlSeconds: 600,
+      codexBin: 'unused', workspaceRoots: [workspace], fileRoots: ['/'], production: true,
+    }
+    const server = createRemoteHttpServer(config, new RemoteController(config, new CodexAppServer('unused')), base, null)
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as AddressInfo).port
+    cleanups.push(async () => { await new Promise<void>(resolve => server.close(() => resolve())); await fs.rm(base, { recursive: true, force: true }) })
+    expect((await fetchLocal(port, '/api/files/list?path=/')).status).toBe(401)
+    const login = await fetchLocal(port, '/api/session/login', { method: 'POST', origin: config.publicOrigin.origin, body: { password: config.password } })
+    const cookie = login.headers['set-cookie']?.[0].split(';', 1)[0]
+    const listing = await fetchLocal(port, `/api/files/list?path=${encodeURIComponent(base)}`, { cookie })
+    expect(listing.status).toBe(200)
+    expect(JSON.parse(listing.body).entries.some((entry: { name: string }) => entry.name === 'outside.html')).toBe(true)
+    for (const endpoint of ['info', 'content', 'html-preview']) {
+      const response = await fetchLocal(port, `/api/files/${endpoint}?path=${encodeURIComponent(outside)}`, { cookie })
+      expect(response.status).toBe(200)
+    }
+    expect((await fetchLocal(port, `/api/files/content?path=${encodeURIComponent(outside)}&download=1`, { cookie })).headers['content-disposition']).toContain('attachment;')
+    expect(config.workspaceRoots).toEqual([workspace])
+  })
+
   it('serves the login shell publicly while protecting APIs and login origin', async () => {
     const distRoot = await fs.mkdtemp(join(tmpdir(), 'codex-remote-http-'))
     const workspaceRoot = await fs.mkdtemp(join(tmpdir(), 'codex-remote-workspace-'))
@@ -125,6 +154,7 @@ describe('Codex Remote HTTP boundary', () => {
     expect((await fetchLocal(port, '/api/attachments', { method: 'POST', rawBody: Buffer.from('image'), contentType: 'image/png' })).status).toBe(401)
     expect((await fetchLocal(port, `/api/files/info?path=${encodeURIComponent(textPath)}`)).status).toBe(401)
     expect((await fetchLocal(port, '/api/files/docx-frame')).status).toBe(401)
+    expect((await fetchLocal(port, '/api/files/html-preview')).status).toBe(401)
     expect((await fetchLocal(port, '/api/files/pptx-preview')).status).toBe(401)
     expect((await fetchLocal(port, `/api/files/list?path=${encodeURIComponent(workspaceRoot)}`)).status).toBe(401)
 
@@ -202,6 +232,25 @@ describe('Codex Remote HTTP boundary', () => {
       kind: 'docx',
       previewable: true,
     })
+    const htmlPath = join(workspaceRoot, 'preview.html')
+    const htmlContent = '<!doctype html><style>body{color:red}</style><button onclick="this.textContent=123">Click</button>'
+    await fs.writeFile(htmlPath, htmlContent)
+    const htmlUrl = `/api/files/html-preview?path=${encodeURIComponent(htmlPath)}`
+    const htmlPreview = await fetchLocal(port, htmlUrl, { cookie })
+    expect(htmlPreview.status).toBe(200)
+    expect(htmlPreview.body).toBe(htmlContent)
+    expect(htmlPreview.headers['content-type']).toBe('text/html; charset=utf-8')
+    expect(htmlPreview.headers['cache-control']).toBe('private, no-store')
+    expect(htmlPreview.headers['content-security-policy']).toContain('sandbox allow-scripts')
+    expect(htmlPreview.headers['content-security-policy']).not.toContain('allow-same-origin')
+    expect(htmlPreview.headers['content-security-policy']).toContain("connect-src 'none'")
+    const rawHtml = await fetchLocal(port, `/api/files/content?path=${encodeURIComponent(htmlPath)}`, { cookie })
+    expect(rawHtml.headers['content-type']).toContain('text/plain')
+    expect(rawHtml.body).toBe(htmlContent)
+    expect((await fetchLocal(port, `/api/files/html-preview?path=${encodeURIComponent(textPath)}`, { cookie })).status).toBe(415)
+    expect((await fetchLocal(port, '/api/files/html-preview?path=/etc/passwd', { cookie })).status).toBe(403)
+    await fs.truncate(htmlPath, 2 * 1024 * 1024 + 1)
+    expect((await fetchLocal(port, htmlUrl, { cookie })).status).toBe(413)
     const docxFrame = await fetchLocal(port, '/api/files/docx-frame', { cookie })
     expect(docxFrame.status).toBe(200)
     expect(docxFrame.headers['content-security-policy']).toContain("default-src 'none'")

@@ -2,6 +2,7 @@ import { mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it } from 'vitest'
+import { inspectServerFile } from './server-files.js'
 import { listDirectory } from './directory-listing.js'
 
 const temporary: string[] = []
@@ -61,4 +62,15 @@ describe('workspace directory browsing', () => {
       await expect(listDirectory(query(root, options), [root])).rejects.toMatchObject({ status: 400 })
     }
   })
+})
+
+it('supports filesystem root for browsing, reading files and following links outside the workspace', async () => {
+  const { root, base } = await fixture()
+  const listing = await listDirectory(query(root), ['/'])
+  expect(listing.parentPath).toBe(base)
+  expect(listing.entries.find(entry => entry.name === 'escape')).toMatchObject({ kind: 'file' })
+  expect((await listDirectory(query('/'), ['/'])).parentPath).toBeNull()
+  expect(await inspectServerFile(join(base, 'outside.txt'), ['/'])).toMatchObject({ kind: 'text', previewable: true })
+  expect(await inspectServerFile(join(root, 'escape'), ['/'])).toMatchObject({ path: join(base, 'outside.txt') })
+  await expect(inspectServerFile(join(base, 'outside.txt'), [root])).rejects.toMatchObject({ status: 403 })
 })

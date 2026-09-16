@@ -41,7 +41,7 @@ const TEXT_FILENAMES = new Set([
 ])
 
 function insideRoot(path: string, root: string): boolean {
-  return path === root || path.startsWith(`${root}${sep}`)
+  return root === sep || path === root || path.startsWith(`${root}${sep}`)
 }
 
 async function prefix(path: string, length = 16): Promise<Buffer> {
@@ -87,7 +87,7 @@ function textExtension(name: string): string {
 
 export async function inspectServerFile(input: unknown, workspaceRoots: string[]): Promise<ServerFileInfo> {
   if (typeof input !== 'string' || input.length === 0 || input.length > 4096 || !isAbsolute(input)) {
-    throw new ServerFileError(400, 'File path must be an absolute workspace path')
+    throw new ServerFileError(400, 'File path must be an absolute path')
   }
 
   let path: string
@@ -101,7 +101,7 @@ export async function inspectServerFile(input: unknown, workspaceRoots: string[]
   }
 
   if (!workspaceRoots.some(root => insideRoot(path, root))) {
-    throw new ServerFileError(403, 'File is outside the configured workspace roots')
+    throw new ServerFileError(403, 'File is outside the configured file roots')
   }
 
   let metadata

@@ -9,11 +9,11 @@ export async function listDirectory(query: URLSearchParams, roots: string[]) {
   const offset = Number(query.get('offset') ?? 0)
   const limit = Number(query.get('limit') ?? 100)
   const search = (query.get('search') ?? '').trim().toLocaleLowerCase()
-  if (!input || input.length > 4096 || input.includes('\0') || !isAbsolute(input)) throw new ServerFileError(400, 'Directory path must be an absolute workspace path')
+  if (!input || input.length > 4096 || input.includes('\0') || !isAbsolute(input)) throw new ServerFileError(400, 'Directory path must be an absolute path')
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 200 || search.length > 255) throw new ServerFileError(400, 'Invalid directory listing parameters')
   try {
     const path = await realpath(resolve(input))
-    if (!allowed(path, roots)) throw new ServerFileError(403, 'Directory is outside the configured workspace roots')
+    if (!allowed(path, roots)) throw new ServerFileError(403, 'Directory is outside the configured file roots')
     if (!(await stat(path)).isDirectory()) throw new ServerFileError(400, 'Path is not a directory')
     const hidden = query.get('hidden') === '1'
     const children = (await readdir(path, { withFileTypes: true }))
