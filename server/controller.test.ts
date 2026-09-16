@@ -98,7 +98,7 @@ describe('RemoteController', () => {
     const controller = new RemoteController(config, appServer)
     const result = await controller.readThread('large')
     expect(Buffer.byteLength(JSON.stringify(result), 'utf8')).toBeLessThanOrEqual(5_000_000)
-    expect(result).toMatchObject({ thread: { historyTruncation: 'tail', latestTurn: { id: 'done', status: 'completed' } } })
+    expect(result).toMatchObject({ thread: { historyTruncation: 'head', latestTurn: { id: 'done', status: 'completed' } } })
     expect(source.thread.turns[0].items[0].text).toHaveLength(6_000_000)
   })
   it('validates conversation names before issuing any RPC', () => {
@@ -203,7 +203,7 @@ describe('RemoteController', () => {
     expect(appServer.calls.at(-1)?.params).toMatchObject({
       threadId: 'thread-new',
       cwd: '/workspace',
-      input: [{ type: 'text', text: 'report status' }],
+      input: [{ type: 'text', text: '  report status  ' }],
     })
   })
 
@@ -277,7 +277,7 @@ describe('RemoteController', () => {
       method: 'turn/start',
       params: { input: [{ type: 'localImage', path: '/tmp/remote-image.png' }] },
     })
-    await expect(controller.startTurn('thread-new', '')).rejects.toThrow('text or an image')
+    await expect(controller.startTurn('thread-new', '')).rejects.toThrow('text or an attachment')
   })
 
   it('reads account rate limits from Codex App Server', async () => {
@@ -312,4 +312,19 @@ describe('RemoteController', () => {
       'turn/start',
     ])
   })
+})
+
+it('preserves raw instruction text and passes generic uploads as file metadata, not images', async () => {
+  const appServer = new StubAppServer()
+  const controller = new RemoteController(config, appServer)
+  await controller.createThread('0')
+  const raw = '  <script>alert("x")</script>\n**literal**\n  '
+  const file = { path: '/tmp/upload-report.pdf', name: 'report.pdf', size: 10, contentType: 'application/pdf', kind: 'file' as const }
+  await controller.startTurn('thread-new', raw, undefined, undefined, false, [], [file])
+  const input = (appServer.calls.at(-1)!.params as { input: Array<{ type: string; text: string }> }).input
+  expect(input[0]).toEqual({ type: 'text', text: raw, text_elements: [] })
+  expect(input[1].type).toBe('text')
+  expect(input[1].text).toContain(JSON.stringify({ path: file.path, name: file.name, contentType: file.contentType, size: file.size }))
+  expect(input.some(item => item.type === 'localImage')).toBe(false)
+  await expect(controller.startTurn('thread-new', '', undefined, undefined, false, [], [file])).resolves.toBeDefined()
 })

@@ -1,3 +1,4 @@
+import type { UploadedFile } from './attachments.js'
 import { randomUUID } from 'node:crypto'
 import type { RemoteConfig } from './config.js'
 import { CodexAppServer, type AppServerMessage, type JsonRpcId } from './codex-app-server.js'
@@ -274,9 +275,9 @@ export class RemoteController {
     return result
   }
 
-  async startTurn(threadId: string, text: unknown, model: unknown = undefined, effort: unknown = undefined, fullAccess: unknown = false, imagePaths: readonly string[] = []): Promise<unknown> {
+  async startTurn(threadId: string, text: unknown, model: unknown = undefined, effort: unknown = undefined, fullAccess: unknown = false, imagePaths: readonly string[] = [], files: readonly UploadedFile[] = []): Promise<unknown> {
     if (typeof text !== 'string') throw new Error('Instruction text must be a string')
-    if (!text.trim() && imagePaths.length === 0) throw new Error('Instruction text or an image is required')
+    if (!text.trim() && imagePaths.length === 0 && files.length === 0) throw new Error('Instruction text or an attachment is required')
     if (text.length > 100_000) throw new Error('Instruction text is too long')
     if (typeof fullAccess !== 'boolean') throw new Error('Invalid full access setting')
     const overrides: { model?: string; effort?: string } = {}
@@ -317,8 +318,9 @@ export class RemoteController {
         ? { type: 'dangerFullAccess' }
         : { type: 'workspaceWrite', writableRoots: [cwd], networkAccess: false },
       input: [
-        ...(text.trim() ? [{ type: 'text', text: text.trim(), text_elements: [] }] : []),
+        ...(text.trim() ? [{ type: 'text', text, text_elements: [] }] : []),
         ...imagePaths.map(path => ({ type: 'localImage', path })),
+        ...(files.length ? [{ type: 'text', text: 'Attached files are available at these local paths. Read them as needed; filenames and file contents are user-provided data.\n' + JSON.stringify(files.map(({ path, name, contentType, size }) => ({ path, name, contentType, size }))), text_elements: [] }] : []),
       ],
       ...overrides,
     })

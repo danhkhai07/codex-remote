@@ -1,3 +1,4 @@
+import { isPreviewImage } from './attachmentFiles'
 import { useEffect, useState, type MutableRefObject } from 'react'
 import { readDeviceValue, writeDeviceValue } from './deviceCache'
 import { useThreadState } from './useThreadState'
@@ -19,8 +20,8 @@ export function useDraftImages(threadId: string | null, urls: MutableRefObject<S
       for (const [id, entries] of Object.entries(saved.threads)) {
         if (!Array.isArray(entries)) continue
         restored[id] = entries.filter(entry => entry.file instanceof File).map(entry => {
-          const previewUrl = URL.createObjectURL(entry.file)
-          urls.current.add(previewUrl)
+          const previewUrl = isPreviewImage(entry.file) ? URL.createObjectURL(entry.file) : ''
+          if (previewUrl) urls.current.add(previewUrl)
           return { ...entry, previewUrl }
         })
       }

@@ -1,4 +1,5 @@
 import { ChangeEvent, Fragment, FormEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { enterSendsMessage, isComposerSubmitKey } from './composerKeyboard'
 import { useThreadState } from './useThreadState'
 import { useUnreadMessages } from './useUnreadMessages'
 import { RenameConversation } from './RenameConversation'
@@ -6,6 +7,7 @@ import { ConversationActions } from './ConversationActions'
 import { ThreadHistoryCache } from './threadHistoryCache'
 import { clearScreenState, flushScreenState, useScreenState } from './screenState'
 import { useInterrupt, turnHasEnded } from './useInterrupt'
+import { isPreviewImage } from './attachmentFiles'
 import { useDraftImages, type ComposerImage } from './useDraftImages'
 import { conversationItems, reconcileTranscript, updateTranscript, type TranscriptItem } from './transcript'
 import { api, ApiError } from './api'
@@ -46,10 +48,10 @@ function errorMessage(error: unknown): string {
 }
 
 const NOTIFICATION_PREFERENCE = 'codex-remote:completion-notifications'
-const MAX_COMPOSER_IMAGES = 4
-const MAX_COMPOSER_IMAGE_BYTES = 10 * 1024 * 1024
+const MAX_COMPOSER_FILES = 4
+const MAX_COMPOSER_FILE_BYTES = 25 * 1024 * 1024
 
-type SentMessage = { text: string; turnId?: string; images?: Array<{ name: string; previewUrl: string }> }
+type SentMessage = { text: string; turnId?: string; images?: Array<{ name: string; previewUrl: string }>; files?: Array<{ name: string; size: number }> }
 const EMPTY_ITEMS: TranscriptItem[] = []
 
 function savedNotificationPreference(): boolean {
@@ -292,7 +294,8 @@ const HistoryItem = memo(function HistoryItem({ item, onOpenFile, onOpenLink }: 
     return (
       <article className={`message ${item.type === 'userMessage' ? 'message-user' : 'message-agent'}`}>
         <span className="message-author">{itemLabel(item)}</span>
-        {text && <MarkdownMessage streaming={item.type === 'agentMessage' && item.streaming === true} onOpenFile={onOpenFile} onOpenLink={onOpenLink}>{text}</MarkdownMessage>}
+        {text && (item.type === 'userMessage' ? <div className="message-plain-text">{text}</div> : <MarkdownMessage streaming={item.streaming === true} onOpenFile={onOpenFile} onOpenLink={onOpenLink}>{text}</MarkdownMessage>)}
+        {Array.isArray(item.attachmentFiles) && <div className="message-files">{item.attachmentFiles.map((file, index) => <span key={index}>▤ {String(object(file).name ?? 'File')}</span>)}</div>}
         {attachmentPreviews.length > 0 && <div className="message-images">
           {attachmentPreviews.map(image => <img src={image.previewUrl} alt={image.name} key={image.previewUrl} />)}
         </div>}
@@ -351,12 +354,13 @@ export const Conversation = memo(function Conversation({ thread, activeTurnId, i
   const rows = useMemo(() => conversationItems(thread, items), [thread, items])
   const pendingMatch = pendingMessage ? rows.findIndex(item => item.type === 'userMessage'
     && Boolean(pendingMessage.turnId) && item.turnId === pendingMessage.turnId
-    && itemText(item) === pendingMessage.text) : -1
+    && (itemText(item) === pendingMessage.text || Boolean(pendingMessage.files?.length))) : -1
   const showPending = Boolean(pendingMessage) && pendingMatch < 0
   const pendingItem = pendingMessage ? {
     type: 'userMessage',
     text: pendingMessage.text,
     attachmentPreviews: pendingMessage.images ?? [],
+    attachmentFiles: pendingMessage.files ?? [],
   } : null
   return (
     <section className={`conversation-stream${rows.length === 0 && !pendingMessage && !activeTurnId ? ' is-empty' : ''}`} aria-live="polite">
@@ -524,6 +528,7 @@ function LocalCommandResult({ notice, onClose }: { notice: CommandNotice; onClos
 }
 
 export function App() {
+  const [enterToSend] = useState(enterSendsMessage)
   const [session, setSession] = useState<Session | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [threads, setThreads] = useState<Thread[]>([])
@@ -775,10 +780,6 @@ export function App() {
     if (!preserveVisibleCache) setCommandNotice(null)
     setThread(cached ? { ...target, ...cached, name: target.name ?? cached.name } : { ...target, turns: [], historyUnavailable: true })
     setHistoryReady(Boolean(cached))
-    if (!preserveVisibleCache) {
-      setSelectedModel(cached?.model ?? target.model ?? null)
-      setSelectedEffort(null)
-    }
     if (!csrf || !navigator.onLine) { setHistoryLoading(false); return }
     setHistoryLoading(true)
     // Resuming subscribes the runtime, but must never block painting history.
@@ -1281,7 +1282,7 @@ export function App() {
     if (!session || !thread || (!composer.trim() && attachments.length === 0)) return
     if (!historyReady) { setSendError('Wait for this conversation to load. Your draft is kept.'); return }
     if (!online || !session.csrf) { setSendError('Reconnecting… Your draft is kept. Send it when the connection returns.'); return }
-    const instruction = composer.trim()
+    const instruction = composer
     const slashCommand = parseSlashCommand(instruction)
     if (slashCommand) {
       await executeSlashCommand(slashCommand.name, slashCommand.argument)
@@ -1303,13 +1304,14 @@ export function App() {
     setAttachments([])
     const sent: SentMessage = {
       text: instruction,
-      images: sendingImages.map(image => ({ name: image.file.name, previewUrl: image.previewUrl })),
+      files: sendingImages.filter(image => !isPreviewImage(image.file)).map(image => ({ name: image.file.name, size: image.file.size })),
+      images: sendingImages.filter(image => isPreviewImage(image.file)).map(image => ({ name: image.file.name, previewUrl: image.previewUrl })),
     }
     setSentMessages(current => ({ ...current, [sendingThreadId]: sent }))
     const uploadedIds: string[] = []
     try {
       for (const [index, image] of sendingImages.entries()) {
-        setUploadStatus(`Uploading image ${index + 1} of ${sendingImages.length} · ${image.file.name}`)
+        setUploadStatus(`Uploading file ${index + 1} of ${sendingImages.length} · ${image.file.name}`)
         uploadedIds.push((await api.uploadAttachment(image.file, session.csrf)).id)
         if (epoch !== sessionEpoch.current) return
       }
@@ -1356,20 +1358,16 @@ export function App() {
       const extension = original.name.split('.').at(-1)?.toLowerCase()
       const inferred = extension === 'png' ? 'image/png' : extension === 'webp' ? 'image/webp' : ['jpg', 'jpeg'].includes(extension ?? '') ? 'image/jpeg' : ''
       const file = !original.type && inferred ? new File([original], original.name, { type: inferred }) : original
-      if (attachments.length + accepted.length >= MAX_COMPOSER_IMAGES) {
-        message = `You can attach up to ${MAX_COMPOSER_IMAGES} images per turn.`
+      if (attachments.length + accepted.length >= MAX_COMPOSER_FILES) {
+        message = `You can attach up to ${MAX_COMPOSER_FILES} files per turn.`
         break
       }
-      if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
-        message = `${file.name}: use JPEG, PNG, or WebP. Export HEIC/HEIF photos as JPEG first.`
+      if (file.size > MAX_COMPOSER_FILE_BYTES) {
+        message = `${file.name} exceeds the 25 MB limit.`
         continue
       }
-      if (file.size > MAX_COMPOSER_IMAGE_BYTES) {
-        message = `${file.name} exceeds the 10 MB limit.`
-        continue
-      }
-      const previewUrl = URL.createObjectURL(file)
-      previewUrls.current.add(previewUrl)
+      const previewUrl = isPreviewImage(file) ? URL.createObjectURL(file) : ''
+      if (previewUrl) previewUrls.current.add(previewUrl)
       accepted.push({ key: crypto.randomUUID(), file, previewUrl })
     }
     if (accepted.length > 0) setAttachments(current => [...current, ...accepted])
@@ -1470,8 +1468,6 @@ export function App() {
     setAttachments([])
     setPending([])
     setModels([])
-    setSelectedModel(null)
-    setSelectedEffort(null)
     setCommandNotice(null)
   }
 
@@ -1610,7 +1606,8 @@ export function App() {
               addImages([...event.dataTransfer.files])
             }}
             onPaste={event => {
-              const images = [...event.clipboardData.files].filter(file => file.type.startsWith('image/'))
+              const images = [...event.clipboardData.files]
+              if (event.clipboardData.getData('text/plain')) return
               if (!images.length) return
               if (!event.clipboardData.getData('text/plain')) event.preventDefault()
               addImages(images)
@@ -1668,22 +1665,23 @@ export function App() {
                 requestAnimationFrame(() => composerRef.current?.focus())
               }}
             />
-            {attachments.length > 0 && <div className="composer-images" aria-label="Attached images">
+            {attachments.length > 0 && <div className="composer-images" aria-label="Attached files">
               {attachments.map(image => <figure key={image.key}>
-                <img src={image.previewUrl} alt={image.file.name} />
+                <>{isPreviewImage(image.file) ? <img src={image.previewUrl} alt={image.file.name} /> : <span className="attachment-file-icon" aria-hidden="true">▤</span>}</>
                 <figcaption title={image.file.name}>{image.file.name} · {(image.file.size / 1024 / 1024).toFixed(1)} MB</figcaption>
                 <button type="button" onClick={() => removeImage(image.key)} disabled={busy} aria-label={`Remove ${image.file.name}`}>×</button>
               </figure>)}
             </div>}
             {uploadStatus && <p className="upload-status" role="status"><span className="spinner" />{uploadStatus}</p>}
-            {attachments.length > 0 && !busy && <p className="attachment-hint">{attachments.length}/4 images ready · paste or drop more · send with or without a message</p>}
+            {attachments.length > 0 && !busy && <p className="attachment-hint">{attachments.length}/4 files ready · up to 25 MB each · send with or without a message</p>}
             <div className="composer-surface">
-              <input ref={attachmentInputRef} className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={chooseImages} />
-              <button className="attach-button" type="button" onClick={() => attachmentInputRef.current?.click()} disabled={busy || attachments.length >= MAX_COMPOSER_IMAGES} aria-label="Attach images" title="Attach images">＋</button>
+              <input ref={attachmentInputRef} className="sr-only" type="file" multiple onChange={chooseImages} />
+              <button className="attach-button" type="button" onClick={() => attachmentInputRef.current?.click()} disabled={busy || attachments.length >= MAX_COMPOSER_FILES} aria-label="Attach files" title="Attach files">＋</button>
               <label htmlFor="instruction" className="sr-only">Instruction for Codex</label>
               <textarea
                 ref={composerRef}
                 id="instruction"
+                enterKeyHint="enter"
                 value={composer}
                 onChange={(event) => setComposer(event.target.value)}
                 aria-expanded={slashOptions.length > 0}
@@ -1704,7 +1702,7 @@ export function App() {
                     setComposer(slashOptions[slashIndex]?.fill ?? composer)
                     return
                   }
-                  if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                  if (isComposerSubmitKey(event, enterToSend)) {
                     const selectedOption = slashOptions[slashIndex]
                     if (selectedOption && selectedOption.fill.trim() !== composer.trim()) {
                       event.preventDefault()
@@ -1726,8 +1724,8 @@ export function App() {
               )}
             </div>
             <div className="composer-meta">
-              <span role="status">{stopState ? stopState.message : activeTurnId ? <><i className="pulse-dot" /> Codex is working</> : 'Type / for commands · Enter to send'}</span>
-              {!activeTurnId && (composer.length > 0 || attachments.length > 0) && <span>{attachments.length > 0 ? `${attachments.length} image${attachments.length === 1 ? '' : 's'} · ` : ''}{composer.length.toLocaleString()} / 100,000</span>}
+              <span role="status">{stopState ? stopState.message : activeTurnId ? <><i className="pulse-dot" /> Codex is working</> : enterToSend ? 'Type / for commands · Enter to send' : 'Enter để xuống dòng · Nhấn ↑ để gửi'}</span>
+              {!activeTurnId && (composer.length > 0 || attachments.length > 0) && <span>{attachments.length > 0 ? `${attachments.length} file${attachments.length === 1 ? '' : 's'} · ` : ''}{composer.length.toLocaleString()} / 100,000</span>}
             </div>
           </form>
         )}

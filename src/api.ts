@@ -51,9 +51,9 @@ export const api = {
   fileText: (path: string) => requestText(serverFileUrl(path)),
   fileBlob: (path: string) => requestBlob(serverFileUrl(path, true)),
   pptxPreview: (path: string, signal: AbortSignal) => requestBlob(`/api/files/pptx-preview?${new URLSearchParams({ path })}`, signal),
-  uploadAttachment: (file: File, csrf: string) => request<{ id: string; size: number; contentType: string }>('/api/attachments', {
+  uploadAttachment: (file: File, csrf: string) => request<{ id: string; size: number; contentType: string }>(`/api/attachments?${new URLSearchParams({ name: file.name })}`, {
     method: 'POST',
-    headers: { 'Content-Type': file.type },
+    headers: { 'Content-Type': file.type || 'application/octet-stream' },
     body: file,
   }, csrf),
   deleteAttachment: (id: string, csrf: string) => request<{ ok: boolean }>(`/api/attachments/${encodeURIComponent(id)}`, {

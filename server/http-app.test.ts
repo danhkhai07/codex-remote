@@ -250,6 +250,15 @@ describe('Codex Remote HTTP boundary', () => {
     expect(uploaded.status).toBe(201)
     const attachmentId = JSON.parse(uploaded.body).id as string
     expect((await fetchLocal(port, `/api/attachments/${attachmentId}`, { ...options, method: 'DELETE' })).status).toBe(200)
+    const htmlUpload = await fetchLocal(port, '/api/attachments?name=source.html', { ...options, method: 'POST', rawBody: Buffer.from('<script>window.injected = true</script>'), contentType: 'text/html' })
+    expect(htmlUpload.status).toBe(201)
+    const fileId = JSON.parse(htmlUpload.body).id
+    const startWithFile = vi.spyOn(controller, 'startTurn').mockResolvedValueOnce({ turn: { id: 'uploaded-file-turn' } })
+    const fileTurn = await fetchLocal(port, '/api/threads/upload-test/turns', { ...options, method: 'POST', body: { text: '  <b>literal</b>\n ', attachmentIds: [fileId] } })
+    expect(fileTurn.status).toBe(202)
+    expect(startWithFile).toHaveBeenCalledWith('upload-test', '  <b>literal</b>\n ', undefined, undefined, false, [], [expect.objectContaining({ name: 'source.html', contentType: 'text/html', kind: 'file' })])
+    startWithFile.mockRestore()
+
     const subscription = {
       endpoint: 'https://fcm.googleapis.com/fcm/send/test',
       keys: { p256dh: Buffer.alloc(65, 4).toString('base64url'), auth: Buffer.alloc(16, 1).toString('base64url') },

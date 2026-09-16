@@ -13,7 +13,7 @@ import type { RemoteConfig } from './config.js'
 import { ThreadNameError, type RemoteController } from './controller.js'
 import { LoginRateLimiter } from './login-rate-limit.js'
 import { validateSubscription, type PushService } from './push.js'
-import { AttachmentError, AttachmentStore, MAX_IMAGE_BYTES } from './attachments.js'
+import { AttachmentError, AttachmentStore, MAX_ATTACHMENT_BYTES, type UploadedFile } from './attachments.js'
 import { inspectServerFile, ServerFileError, serveServerFile } from './server-files.js'
 import { PptxPreviewCache } from './pptx-preview.js'
 import { DOCX_FRAME_CSP, DOCX_FRAME_HTML } from './docx-frame.js'
@@ -74,13 +74,13 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
 
 async function readBytes(req: IncomingMessage, limit: number): Promise<Buffer> {
   const declared = Number(req.headers['content-length'] ?? 0)
-  if (Number.isFinite(declared) && declared > limit) throw new HttpError(413, 'Image exceeds the 10 MB limit')
+  if (Number.isFinite(declared) && declared > limit) throw new HttpError(413, 'File exceeds the 25 MB limit')
   let size = 0
   const chunks: Buffer[] = []
   for await (const chunk of req) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
     size += buffer.length
-    if (size > limit) throw new HttpError(413, 'Image exceeds the 10 MB limit')
+    if (size > limit) throw new HttpError(413, 'File exceeds the 25 MB limit')
     chunks.push(buffer)
   }
   return Buffer.concat(chunks)
@@ -292,15 +292,14 @@ export function createRemoteHttpServer(
         return
       }
       if (url.pathname === '/api/attachments' && method === 'POST') {
-        if (!attachments) throw new HttpError(503, 'Image attachments are unavailable')
+        if (!attachments) throw new HttpError(503, 'File attachments are unavailable')
         const contentType = (req.headers['content-type'] ?? '').toLowerCase().split(';', 1)[0].trim()
-        if (!['image/jpeg', 'image/png', 'image/webp'].includes(contentType)) throw new HttpError(415, 'Use a JPEG, PNG, or WebP image')
-        json(res, 201, attachments.add(await readBytes(req, MAX_IMAGE_BYTES), contentType, session))
+        json(res, 201, attachments.add(await readBytes(req, MAX_ATTACHMENT_BYTES), contentType, session, url.searchParams.get('name') ?? 'attachment'))
         return
       }
       const attachmentMatch = url.pathname.match(/^\/api\/attachments\/([^/]+)$/)
       if (attachmentMatch && method === 'DELETE') {
-        if (!attachments) throw new HttpError(503, 'Image attachments are unavailable')
+        if (!attachments) throw new HttpError(503, 'File attachments are unavailable')
         attachments.remove(decodeURIComponent(attachmentMatch[1]), session)
         json(res, 200, { ok: true })
         return
@@ -396,11 +395,11 @@ export function createRemoteHttpServer(
       const turnThreadId = routeThread(url.pathname, '/turns')
       if (turnThreadId && method === 'POST') {
         const body = await readJson(req)
-        if (!attachments && body.attachmentIds !== undefined) throw new HttpError(503, 'Image attachments are unavailable')
-        const operation = (paths: string[]) => controller.startTurn(turnThreadId, body.text ?? '', body.model, body.effort, body.fullAccess ?? false, paths)
+        if (!attachments && body.attachmentIds !== undefined) throw new HttpError(503, 'File attachments are unavailable')
+        const operation = (_paths: string[], files: UploadedFile[]) => controller.startTurn(turnThreadId, body.text ?? '', body.model, body.effort, body.fullAccess ?? false, files.filter(file => file.kind === 'image').map(file => file.path), files.filter(file => file.kind === 'file'))
         json(res, 202, attachments
           ? await attachments.use(body.attachmentIds, session, operation)
-          : await operation([]))
+          : await operation([], []))
         return
       }
       const interruptThreadId = routeThread(url.pathname, '/interrupt')

@@ -2798,3 +2798,7 @@ textarea:focus {
     transition-duration: 0.01ms !important;
   }
 }
+.message-plain-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+.message-files { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.message-files span { padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; overflow-wrap: anywhere; }
+.attachment-file-icon { display: grid; place-items: center; width: 100%; height: 72px; font-size: 2rem; color: var(--muted); }

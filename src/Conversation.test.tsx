@@ -37,3 +37,17 @@ it('keeps image previews visible while an attached turn is pending', () => {
   expect(html).toContain('src="blob:screen"')
   expect(html).toContain('alt="screen.png"')
 })
+
+it('renders every user input as literal text, including HTML, Markdown and whitespace', () => {
+  const raw = '  <script>alert(1)</script>\n<img src=x onerror=alert(1)>\n**bold** [link](https://example.com)\n  '
+  for (const pending of [false, true]) {
+    const html = renderToStaticMarkup(<Conversation thread={thread} items={pending ? [] : [{ id: 'raw', turnId: 't', type: 'userMessage', text: raw }]}
+      activeTurnId={null} pendingMessage={pending ? { text: raw } : undefined} yoloMode={false} onSuggestion={() => {}} />)
+    expect(html).toContain('class="message-plain-text"')
+    expect(html).toContain('  &lt;script&gt;alert(1)&lt;/script&gt;\n&lt;img src=x onerror=alert(1)&gt;\n**bold** [link](https://example.com)\n  ')
+    expect(html).not.toContain('<script')
+    expect(html).not.toContain('<img')
+    expect(html).not.toContain('<a ')
+    expect(html).not.toContain('<strong>bold</strong>')
+  }
+})

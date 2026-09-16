@@ -3,12 +3,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-export const MAX_IMAGE_BYTES = 10 * 1024 * 1024
-export const MAX_IMAGES_PER_TURN = 4
-const MAX_PENDING_IMAGES = 32
+export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+export const MAX_ATTACHMENTS_PER_TURN = 4
+const MAX_PENDING_ATTACHMENTS = 32
 
 type Owner = { nonce: string; expiresAt: number }
-type StoredAttachment = { id: string; path: string; nonce: string; expiresAt: number; consuming: boolean; turnId?: string }
+export type UploadedFile = { path: string; name: string; contentType: string; size: number; kind: 'image' | 'file' }
+type StoredAttachment = UploadedFile & { id: string; path: string; nonce: string; expiresAt: number; consuming: boolean; turnId?: string }
 
 export class AttachmentError extends Error {
   constructor(readonly status: number, message: string) {
@@ -26,7 +27,7 @@ function imageExtension(data: Buffer, contentType: string): string {
   throw new AttachmentError(400, 'Image bytes do not match the declared type')
 }
 
-/** Session-owned temporary image files; browser-supplied paths never cross this boundary. */
+/** Session-owned temporary files; browser-supplied paths never cross this boundary. */
 export class AttachmentStore {
   readonly #root: string
   readonly #items = new Map<string, StoredAttachment>()
@@ -34,28 +35,33 @@ export class AttachmentStore {
   readonly #timer: NodeJS.Timeout
 
   constructor(root?: string) {
-    this.#root = root ?? mkdtempSync(join(tmpdir(), 'codex-remote-images-'))
+    this.#root = root ?? mkdtempSync(join(tmpdir(), 'codex-remote-attachments-'))
     if (root) mkdirSync(root, { recursive: true, mode: 0o700 })
     this.#timer = setInterval(() => this.prune(), 60_000)
     this.#timer.unref()
   }
 
-  add(data: Buffer, contentType: string, owner: Owner): { id: string; size: number; contentType: string } {
+  add(data: Buffer, contentType: string, owner: Owner, filename = 'attachment'): { id: string; size: number; contentType: string } {
     this.prune()
-    if (data.length === 0) throw new AttachmentError(400, 'Image is empty')
-    if (data.length > MAX_IMAGE_BYTES) throw new AttachmentError(413, 'Image exceeds the 10 MB limit')
-    if (this.#items.size >= MAX_PENDING_IMAGES) throw new AttachmentError(503, 'Too many pending images; try again shortly')
-    if ([...this.#items.values()].filter(item => item.nonce === owner.nonce && !item.turnId).length >= MAX_IMAGES_PER_TURN) {
-      throw new AttachmentError(409, `Only ${MAX_IMAGES_PER_TURN} pending images are allowed`)
+    if (data.length > MAX_ATTACHMENT_BYTES) throw new AttachmentError(413, 'File exceeds the 25 MB limit')
+    if (this.#items.size >= MAX_PENDING_ATTACHMENTS) throw new AttachmentError(503, 'Too many pending files; try again shortly')
+    if ([...this.#items.values()].filter(item => item.nonce === owner.nonce && !item.turnId).length >= MAX_ATTACHMENTS_PER_TURN) {
+      throw new AttachmentError(409, `Only ${MAX_ATTACHMENTS_PER_TURN} pending files are allowed`)
     }
     const normalized = contentType.toLowerCase().split(';', 1)[0].trim()
-    const extension = imageExtension(data, normalized)
+    const image = ['image/png', 'image/jpeg', 'image/webp'].includes(normalized)
+    const extension = image ? imageExtension(data, normalized) : ''
+    const basename = filename.split(/[\\/]/).at(-1) || 'attachment'
+    let name = Array.from(basename, character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127 ? '_' : character).join('')
+    if (name === '.' || name === '..') name = 'attachment'
+    while (Buffer.byteLength(name, 'utf8') > 180) name = name.slice(0, -1)
+    if (filename === 'attachment' && extension) name += `.${extension}`
     const id = randomUUID()
-    const path = join(this.#root, `${id}.${extension}`)
+    const path = join(this.#root, `${id}-${name}`)
     writeFileSync(path, data, { flag: 'wx', mode: 0o600 })
     this.#items.set(id, {
       id,
-      path,
+      path, name, contentType: normalized || 'application/octet-stream', size: data.length, kind: image ? 'image' : 'file',
       nonce: owner.nonce,
       expiresAt: Math.min(owner.expiresAt * 1000, Date.now() + 10 * 60_000),
       consuming: false,
@@ -73,10 +79,10 @@ export class AttachmentStore {
     for (const item of this.#items.values()) if (item.nonce === owner.nonce && !item.consuming && !item.turnId) this.#delete(item)
   }
 
-  async use<T>(ids: unknown, owner: Owner, operation: (paths: string[]) => Promise<T>): Promise<T> {
+  async use<T>(ids: unknown, owner: Owner, operation: (paths: string[], files: UploadedFile[]) => Promise<T>): Promise<T> {
     this.prune()
-    if (ids === undefined || ids === null) return operation([])
-    if (!Array.isArray(ids) || ids.length > MAX_IMAGES_PER_TURN || ids.some(id => typeof id !== 'string') || new Set(ids).size !== ids.length) {
+    if (ids === undefined || ids === null) return operation([], [])
+    if (!Array.isArray(ids) || ids.length > MAX_ATTACHMENTS_PER_TURN || ids.some(id => typeof id !== 'string') || new Set(ids).size !== ids.length) {
       throw new AttachmentError(400, 'Invalid attachment list')
     }
     const items = ids.map(id => this.#items.get(id as string)).map(item => {
@@ -85,10 +91,10 @@ export class AttachmentStore {
     })
     for (const item of items) item.consuming = true
     try {
-      const result = await operation(items.map(item => item.path))
+      const result = await operation(items.map(item => item.path), items.map(({ path, name, contentType, size, kind }) => ({ path, name, contentType, size, kind })))
       const turnId = (result as { turn?: { id?: unknown } } | null)?.turn?.id
       for (const item of items) {
-        if (typeof turnId === 'string' && !this.#completed.has(turnId)) {
+        if (typeof turnId === 'string' && (item.kind === 'file' || !this.#completed.has(turnId))) {
           item.turnId = turnId
           item.expiresAt = Date.now() + 24 * 60 * 60_000
         } else this.#delete(item)
@@ -102,7 +108,7 @@ export class AttachmentStore {
   completeTurn(turnId: string): void {
     this.#completed.add(turnId)
     if (this.#completed.size > 256) this.#completed.delete(this.#completed.values().next().value!)
-    for (const item of this.#items.values()) if (item.turnId === turnId) this.#delete(item)
+    for (const item of this.#items.values()) if (item.turnId === turnId && item.kind === 'image') this.#delete(item)
   }
 
   prune(now = Date.now()): void {
