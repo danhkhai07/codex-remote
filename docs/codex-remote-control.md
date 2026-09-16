@@ -122,9 +122,9 @@ reading positions, Markdown mode and Word zoom/scroll) is saved locally with a
 seven-day lifetime. Draft images are stored separately in IndexedDB as files,
 not temporary blob URLs. Device storage is best-effort when quota is exhausted.
 
-Eight recently opened conversation histories are retained in an in-memory LRU and
-the device snapshot. Each cached history is limited to approximately 1 MB / 400
-recent items; partial history is labeled until the server refreshes it. Switching
+Fifteen recently opened conversation histories are retained in an in-memory LRU and
+the device snapshot. Each cached history is limited to 5,000,000 bytes of UTF-8 JSON, retaining the newest
+content; partial history is labeled until the server refreshes it. Switching
 renders cached history immediately, including offline, while read/resume requests
 run separately. Stale requests cannot overwrite the newly selected conversation.
 History is not serialized into synchronous localStorage, and blocked IndexedDB
@@ -174,14 +174,15 @@ agent prompts. `/status` also reads live ChatGPT usage windows through
 `account/rateLimits/read`, including percent used/remaining and reset times when
 the current authentication mode exposes them.
 
-The composer accepts up to four JPEG, PNG or WebP images per turn, with a 10 MB
-limit for each image. The authenticated gateway validates the declared MIME type
-against the file signature, stores each upload in a private temporary directory
-and sends only its server-owned `localImage` path to App Server. Opaque upload
-IDs are bound to the login session and expire after ten minutes when unsent. An
-accepted image remains readable until its turn completes, then is deleted; a
-24-hour cleanup fallback covers a missing completion event. A rejected request
-keeps the browser draft available to retry.
+The composer accepts up to four files of any type per turn, up to 25 MB each.
+PNG/JPEG/WebP images are signature-validated and sent as native `localImage`
+inputs. Other uploads remain opaque files; Codex receives their server-owned
+paths, names, sizes and MIME types in a text input. Upload IDs are session-bound.
+Unsent files expire after ten minutes. Accepted images are deleted on completion
+(with a 24-hour fallback); other files remain up to 24 hours for follow-up turns.
+Restarting the gateway clears temporary uploads. Failed sends restore drafts.
+User messages render as escaped plain text, never HTML or Markdown, and retain
+whitespace. The textarea accepts text input without rich-text formatting.
 
 Absolute file links in agent messages open an authenticated file viewer instead
 of navigating the PWA to a host filesystem path. The viewer renders UTF-8
@@ -191,7 +192,7 @@ for every regular file type. Downloads use an attachment response so the same
 link can save onto the phone, tablet or computer currently running Codex Remote.
 
 `GET /api/files/list` is authenticated and read-only. It lists one canonical
-directory within configured workspace roots, supports filename search, hidden-file
+directory within configured file roots, supports filename search, hidden-file
 filtering and pagination (100 entries by default, maximum 200). Child symlinks are
 checked before metadata is returned; unavailable/outside targets cannot be opened.
 The Files dialog starts at the conversation cwd and preserves its location while
@@ -205,18 +206,20 @@ URLs, HTML alternative chunks are disabled, and links route through the existing
 file/link viewers. Preview is approximate; downloads retain the original DOCX.
 
 The gateway resolves the real path on every metadata, preview and download
-request and rejects files outside `CODEX_REMOTE_WORKSPACE_ROOTS`; a symlink
+request and rejects files outside `CODEX_REMOTE_FILE_ROOTS` (defaulting to
+`CODEX_REMOTE_WORKSPACE_ROOTS`); a symlink
 cannot escape that boundary. File APIs require the signed session, use
 `private, no-store`, stream bytes instead of buffering whole downloads, and
 support byte ranges for browser PDF viewers. Text preview is limited to 2 MB to
-protect mobile rendering; a larger text file remains downloadable. Configure
-workspace roots narrowly: every regular file below an allowed root is eligible
+protect mobile rendering; a larger text file remains downloadable. Setting file
+roots to `/` enables browsing the host filesystem outside home. With narrower
+file roots, every regular file below an allowed root is eligible
 for authenticated download, so using `/root` exposes substantially more than a
 single repository to a logged-in Codex Remote device.
 
-The reverse proxy must allow request bodies larger than the application's 10 MB
-image limit. Nginx defaults to 1 MB and otherwise rejects ordinary phone photos
-before they reach Codex Remote. Set `client_max_body_size 11m;` in the HTTPS
+The reverse proxy must allow request bodies larger than the application's 25 MB
+file limit. Nginx defaults to 1 MB and otherwise rejects ordinary phone photos
+before they reach Codex Remote. Set `client_max_body_size 26m;` in the HTTPS
 server block; the complete example in `deploy/nginx/codex-remote.conf` also
 disables buffering for the Server-Sent Events stream.
 
@@ -258,3 +261,11 @@ Set `CODEX_REMOTE_SMOKE_ORIGIN` to the public HTTPS origin to run the same live
 smoke through a reverse proxy or tunnel instead of directly against loopback.
 The smoke uploads and deletes an image payload larger than Nginx's 1 MB default,
 so it verifies the proxy upload limit as well as authentication and SSE.
+
+## Automatic screen-time tracking
+
+Set `CODEX_REMOTE_WORK_PRESENCE_FILE` to a writable JSONL path to enable the authenticated `/api/work-presence` endpoint. The client reports visible/hidden and processing state every 15 seconds, on visibility changes, and on page exit. No typing is required. Gaps longer than 45 seconds are discarded; no open-tab idle allowance is added. The server stores only timestamp intervals and state, with no conversation text. Server turn-start/completion events let the vault subtract processing across concurrent threads. Multi-tab/device intervals are merged by the vault calculator. Restart only when turns are idle; reload the client to begin reporting.
+
+## Shared working-hours database
+
+`CODEX_REMOTE_WORK_HOURS_FILE` enables `/api/working-hours` for the single authenticated account. The server is the sole writer to a JSON state file, with atomic replacement, a previous-state backup, and revision checks to reject stale writes. The fixed dashboard preview uses a restricted bridge for GET and start/stop/replace-total commands; browser-local data is not silently imported. Timer timestamps come from the server and stop commits totals and clears the timer in one transaction. The client polls every five seconds.

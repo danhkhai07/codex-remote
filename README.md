@@ -22,10 +22,14 @@ All deployment-specific values belong in `.env`: public origin, gateway password
 session secret, Codex binary, and workspace roots. Historical Codex threads retain
 their original workspace path; changing roots does not rewrite those histories.
 
-Images: attach, paste, or drop up to four PNG/JPEG/WebP files, 10 MB each.
+Attachments: choose, paste, or drop up to four files of any type, 25 MB each.
+PNG/JPEG/WebP files use native image input; other files are passed to Codex as
+local file paths with names and types. User messages display as plain text,
+including literal HTML/Markdown, preserving whitespace and line breaks.
 Uploads remain local and session-owned. Accepted images remain available until
 the turn completes, with a 24-hour cleanup fallback for missing completion
-events. Unsent images expire after ten minutes; restarting clears temporary
+events. Other accepted files remain for up to 24 hours for follow-up turns.
+Unsent files expire after ten minutes; restarting clears temporary
 uploads. Failed sends retain the browser draft for retry.
 
 Server files: click an absolute file link in a Codex response to open the
@@ -75,8 +79,8 @@ sheet so “Save to Files” returns to the existing app instead of navigating t
 PWA into Quick Look.
 
 Conversation history responses and individual history-cache entries are capped at
-5,000,000 bytes of UTF-8 JSON (5 MB). Oversized histories keep the beginning and
-shorten the chronological tail, including individual oversized tool outputs.
+5,000,000 bytes of UTF-8 JSON (5 MB). Oversized histories keep the newest content and
+shorten the chronological beginning, including individual oversized tool outputs.
 The viewer labels shortened content; the latest turn ID/status is retained
 separately so trimming cannot hide the current run state. Streaming output is
 bounded too. Original Codex rollout files and model context are not modified.
@@ -90,6 +94,40 @@ turn is active, and disconnects while hidden and idle to avoid needless battery
 and network use. Web Push reports completion when the operating system suspends
 the PWA's JavaScript.
 
-Reverse proxies must accept bodies larger than the image limit. Nginx defaults
-to 1 MB, so use `client_max_body_size 11m;`; see
+Reverse proxies must accept bodies larger than the 25 MB file limit. Nginx defaults
+to 1 MB, so use `client_max_body_size 26m;`; see
 [`deploy/nginx/codex-remote.conf`](deploy/nginx/codex-remote.conf).
+
+HTML files (`.html` and `.htm`, up to 2 MB) open with Preview / Raw modes.
+Preview supports inline CSS and JavaScript in an isolated iframe. Resources must
+be embedded in the file (inline or data URLs); external and sibling assets and
+network requests are blocked. Download keeps the original file.
+
+Click ☆ beside a file or folder to pin it, and ★ to unpin it. Pinned paths
+appear in the collapsible “Đã ghim” section across conversations. The
+file viewer also has a pin button. Pins persist on the current browser/device;
+★ removes a pin. Opening a pin uses the usual workspace access checks.
+
+File browsing, previews and downloads use `CODEX_REMOTE_FILE_ROOTS` (comma-separated
+absolute directories). It defaults to `CODEX_REMOTE_WORKSPACE_ROOTS`; setting it
+to `/` enables browsing outside home, including `/tmp`, `/etc` and `/var`. The
+Up button can then reach `/`. Existing authentication and OS file permissions
+still apply. Workspace selection continues to use `CODEX_REMOTE_WORKSPACE_ROOTS`.
+
+SVG files (up to the 2 MB text-preview limit) support Preview / Raw modes.
+Preview uses an image element, so embedded scripts do not execute and external
+resources are not loaded. The checkerboard background shows transparency.
+
+To apply an update after active turns finish, run `scripts/restart-when-idle.mjs`
+with the gateway environment in a separate service/process group. It checks the
+full returned thread list twice, leaves active or unknown states running, restarts
+`codex-remote.service` once, and verifies health. A partial/paginated list blocks
+the restart. `--check` reports readiness without restarting. Status is written to
+`~/.local/state/codex-remote/restart-when-idle.json`.
+
+Model and reasoning-effort choices are stored together per conversation on this
+browser, without the screen cache's seven-day expiry. Switching conversations,
+refreshing history or reconnecting does not reset them. Changing model preserves
+the current effort if supported; otherwise it selects that model's default.
+The exact displayed model/effort is sent with each new turn. Existing global
+choices are migrated to the last cached conversation on first load.
