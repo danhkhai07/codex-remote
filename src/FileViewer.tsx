@@ -1,3 +1,4 @@
+import { attachWorkTimerStorage, WORK_TIMER_PATH } from './workTimerStorage'
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -170,6 +171,11 @@ export function FileViewer({ reference, onClose, onOpenFile, onOpenLink }: {
   const [textMode, setTextMode] = useScreenState<'preview' | 'raw'>(`file:${reference.path}:mode`, reference.line ? 'raw' : 'preview')
   const [attempt, setAttempt] = useState(0)
   const bodyRef = useRef<HTMLDivElement>(null)
+  const htmlFrameRef = useRef<HTMLIFrameElement>(null)
+  useEffect(() => {
+    if (reference.path !== WORK_TIMER_PATH) return
+    return attachWorkTimerStorage(() => htmlFrameRef.current?.contentWindow ?? null)
+  }, [reference.path])
   useRestoredScroll(bodyRef, `file:${reference.path}:scroll:${textMode}`, Boolean(info && (info.kind !== 'text' || text !== null)))
   const closeButton = useRef<HTMLButtonElement>(null)
   const identityButton = useRef<HTMLButtonElement>(null)
@@ -345,7 +351,7 @@ export function FileViewer({ reference, onClose, onOpenFile, onOpenLink }: {
         )}
         {!error && svg && info.previewable && text !== null && textMode === 'preview' && <SvgPreview key={reference.path} text={text} name={info.name} />}
         {!error && html && info.previewable && text !== null && textMode === 'preview' && (
-          <iframe key={`${reference.path}:${attempt}`} src={htmlPreviewUrl} title={info.name} sandbox="allow-scripts" referrerPolicy="no-referrer" />
+          <iframe ref={htmlFrameRef} key={`${reference.path}:${attempt}`} src={htmlPreviewUrl} title={info.name} sandbox="allow-scripts" referrerPolicy="no-referrer" />
         )}
         {!error && info?.kind === 'image' && <img src={previewUrl} alt={info.name} />}
         {!error && info?.kind === 'pdf' && <iframe src={previewUrl} title={info.name} />}

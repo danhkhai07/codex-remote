@@ -1,3 +1,5 @@
+import { WorkHoursStore } from './work-hours.js'
+import { WorkPresence } from './work-presence.js'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadConfig } from './config.js'
@@ -17,7 +19,18 @@ const vite = config.production
       appType: 'spa',
     }))
 
+const hoursFile = process.env.CODEX_REMOTE_WORK_HOURS_FILE?.trim()
+const workHours = hoursFile ? new WorkHoursStore(hoursFile) : undefined
 const controller = new RemoteController(config)
+const presenceFile = process.env.CODEX_REMOTE_WORK_PRESENCE_FILE?.trim()
+const workPresence = presenceFile ? new WorkPresence(presenceFile) : undefined
+controller.appServer.on('notification', (message) => {
+  if (!workPresence || !['turn/started', 'turn/completed'].includes(message.method)) return
+  const params = message.params ?? {}, turn = params.turn ?? {}
+  if (typeof params.threadId === 'string' && typeof turn.id === 'string') {
+    workPresence.processing(params.threadId, turn.id, message.method === 'turn/started')
+  }
+})
 // push.js persists via atomic sibling-.tmp + rename(), so its state file must
 // live inside a writable *directory* — not on a bind-mounted single file. The
 // container sets CODEX_REMOTE_PUSH_STATE to a path under a host-backed dir
@@ -32,7 +45,7 @@ controller.onTurnCompleted = (threadId, turnId, answer) => {
 await controller.start()
 push.start()
 
-const server = createRemoteHttpServer(config, controller, distRoot, vite, push, attachments)
+const server = createRemoteHttpServer(config, controller, distRoot, vite, push, attachments, workPresence, workHours)
 server.listen(config.port, config.host, () => {
   console.log(`Codex Remote listening on http://${config.host}:${config.port}`)
   console.log(`Public origin: ${config.publicOrigin.origin}`)

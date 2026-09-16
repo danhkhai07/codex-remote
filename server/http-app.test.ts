@@ -1,3 +1,5 @@
+import { WorkHoursStore } from './work-hours.js'
+import { WorkPresence } from './work-presence.js'
 import { promises as fs } from 'node:fs'
 import { request } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -128,7 +130,7 @@ describe('Codex Remote HTTP boundary', () => {
     const controller = new RemoteController(config, new CodexAppServer('unused'))
     const push = new PushService(join(distRoot, 'push-state.json'), config.sessionSecret, config.publicOrigin.origin)
     const attachments = new AttachmentStore(join(distRoot, 'attachments'))
-    const server = createRemoteHttpServer(config, controller, distRoot, null, push, attachments)
+    const server = createRemoteHttpServer(config, controller, distRoot, null, push, attachments, new WorkPresence(join(workspaceRoot, 'screen.jsonl')), new WorkHoursStore(join(workspaceRoot, 'hours.json')))
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const port = (server.address() as AddressInfo).port
     cleanups.push(async () => {
@@ -177,6 +179,18 @@ describe('Codex Remote HTTP boundary', () => {
     expect((await fetchLocal(port, '/api/session', { cookie })).status).toBe(200)
     const csrf = JSON.parse(login.body).csrf as string
     const options = { cookie, csrf, origin: config.publicOrigin.origin }
+    expect((await fetchLocal(port, '/api/working-hours')).status).toBe(401)
+    const initialHours = await fetchLocal(port, '/api/working-hours', options)
+    expect(initialHours.status).toBe(200)
+    const changeHours = { action: 'replace-totals', expectedRevision: 0, totals: { '2026-01-01': 230 / 60 } }
+    expect((await fetchLocal(port, '/api/working-hours', { ...options, method: 'POST', body: changeHours })).status).toBe(200)
+    expect((await fetchLocal(port, '/api/working-hours', { ...options, method: 'POST', body: changeHours })).status).toBe(409)
+    expect((await fetchLocal(port, '/api/working-hours', { ...options, csrf: 'wrong', method: 'POST', body: changeHours })).status).toBe(403)
+    const presenceBody = { clientId: 'test-tab', visible: true, processing: false }
+    expect((await fetchLocal(port, '/api/work-presence', { ...options, method: 'POST', body: presenceBody })).status).toBe(200)
+    expect((await fetchLocal(port, '/api/work-presence', { ...options, csrf: 'wrong', method: 'POST', body: presenceBody })).status).toBe(403)
+    expect((await fetchLocal(port, '/api/work-presence', { ...options, method: 'POST', body: { ...presenceBody, visible: 'yes' } })).status).toBe(400)
+
     const messageIds = vi.spyOn(controller, 'readMessageIds').mockResolvedValue({ ids: ['turn:reply'] })
     expect((await fetchLocal(port, '/api/threads/chat/message-ids')).status).toBe(401)
     expect(messageIds).not.toHaveBeenCalled()

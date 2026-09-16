@@ -1,3 +1,5 @@
+import { HoursError, type WorkHoursStore } from './work-hours.js'
+import type { WorkPresence } from './work-presence.js'
 import { createReadStream, promises as fs } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { extname, resolve, sep } from 'node:path'
@@ -179,6 +181,8 @@ export function createRemoteHttpServer(
   vite: ViteDevServer | null,
   push?: PushService,
   attachments?: AttachmentStore,
+  workPresence?: WorkPresence,
+  workHours?: WorkHoursStore,
 ) {
   const fileRoots = config.fileRoots ?? config.workspaceRoots
   const pptxPreviews = new PptxPreviewCache()
@@ -246,6 +250,23 @@ export function createRemoteHttpServer(
         if (req.headers['x-csrf-token'] !== session.csrf) throw new HttpError(403, 'Invalid CSRF token')
       }
 
+      if (url.pathname === '/api/working-hours' && ['GET', 'POST'].includes(method)) {
+        if (!workHours) throw new HttpError(503, 'Shared working hours are not configured')
+        try { json(res, 200, method === 'GET' ? workHours.read() : workHours.change(await readJson(req))) }
+        catch (error) { if (error instanceof HoursError) throw new HttpError(error.status, error.message); throw error }
+        return
+      }
+      if (url.pathname === '/api/work-presence' && method === 'POST') {
+        if (!workPresence) throw new HttpError(503, 'Screen tracking is not configured')
+        const body = await readJson(req)
+        try { workPresence.report(session.nonce, body) }
+        catch (error) {
+          if (error instanceof Error && error.message === 'Invalid screen presence') throw new HttpError(400, error.message)
+          throw error
+        }
+        json(res, 200, { ok: true })
+        return
+      }
       if (url.pathname === '/api/session' && method === 'GET') {
         json(res, 200, {
           csrf: session.csrf,
