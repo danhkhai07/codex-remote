@@ -6,6 +6,7 @@ import { parseLocalFileReference, type LocalFileReference, type WebLinkReference
 import type { ServerFileInfo } from './types'
 import { SvgPreview } from './SvgPreview'
 import { DocxPreview } from './DocxPreview'
+import { usePinnedFiles } from './pinnedFiles'
 import { readScreenState, useRestoredScroll, useScreenState } from './screenState'
 
 const MAX_SHARE_FILE_BYTES = 20 * 1024 * 1024
@@ -155,7 +156,9 @@ export function FileViewer({ reference, onClose, onOpenFile, onOpenLink }: {
   onOpenFile?: (reference: LocalFileReference) => void
   onOpenLink?: (reference: WebLinkReference) => void
 }) {
+  const { pins, storageError, togglePin } = usePinnedFiles()
   const [info, setInfo] = useState<ServerFileInfo | null>(null)
+  const pinned = pins.some(pin => pin.path === (info?.path ?? reference.path))
   const [text, setText] = useState<string | null>(null)
   const [docxBlob, setDocxBlob] = useState<Blob | null>(null)
   const [error, setError] = useState('')
@@ -296,6 +299,7 @@ export function FileViewer({ reference, onClose, onOpenFile, onOpenLink }: {
           <span className="file-viewer-details-toggle" aria-hidden="true">⌄</span>
         </button>
         <div className="file-viewer-actions">
+          {info && <button type="button" className="file-pin-button" aria-label={pinned ? 'Bỏ ghim file' : 'Ghim file'} aria-pressed={pinned} onClick={() => togglePin({ path: info.path, kind: 'file' })}>{pinned ? '★' : '☆'}</button>}
           {info?.previewable && !svg && !['docx', 'pptx'].includes(info.kind) && <a className="quiet-button" href={html ? htmlPreviewUrl : previewUrl} target="_blank" rel="noreferrer">Open</a>}
           {info && <button className="primary-button" type="button" onClick={saveFile} disabled={nativeShare && sharePreparing}>
             {nativeShare ? (sharePreparing ? 'Preparing…' : 'Save / Share') : 'Download'}
@@ -304,6 +308,7 @@ export function FileViewer({ reference, onClose, onOpenFile, onOpenLink }: {
         </div>
       </header>
       <div className="file-viewer-information">
+        {storageError && <p role="status">Không lưu được danh sách ghim trên trình duyệt. Các thay đổi chỉ giữ trong phiên này.</p>}
         <div className="file-viewer-meta">
           {info ? <><span>{formatFileSize(info.size)}</span><span>{formatFileType(info)}</span></> : <span>Loading file…</span>}
           {(markdown || html || svg) && info.previewable && <div className="file-text-mode" role="group" aria-label={svg ? "SVG view mode" : html ? "HTML view mode" : "Markdown view mode"}>

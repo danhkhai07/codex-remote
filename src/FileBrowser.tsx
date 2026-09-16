@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from './api'
+import { usePinnedFiles } from './pinnedFiles'
 import { useRestoredScroll, useScreenState } from './screenState'
 import { formatFileSize } from './FileViewer'
 import type { DirectoryListing } from './types'
@@ -11,6 +12,10 @@ export function FileBrowser({ initialPath, covered, onClose, onOpenFile }: {
   onClose: () => void
   onOpenFile: (reference: LocalFileReference) => void
 }) {
+  const { pins, storageError, togglePin } = usePinnedFiles()
+  const isPinned = (path: string) => pins.some(pin => pin.path === path)
+  const [editingPath, setEditingPath] = useState(false)
+  const menu = useRef<HTMLDetailsElement>(null)
   const key = `browser:${initialPath}`
   const [path, setPath] = useScreenState(`${key}:path`, initialPath)
   const [address, setAddress] = useScreenState(`${key}:address`, path)
@@ -63,6 +68,8 @@ export function FileBrowser({ initialPath, covered, onClose, onOpenFile }: {
   }, [path, query, hidden, offset, revision])
 
   const navigate = (next: string) => {
+    setEditingPath(false)
+    if (menu.current) menu.current.open = false
     setListing(null)
     setPath(next)
     setAddress(next)
@@ -78,29 +85,52 @@ export function FileBrowser({ initialPath, covered, onClose, onOpenFile }: {
   }}>
     <section className="file-browser" role="dialog" aria-modal={!covered} aria-labelledby="file-browser-title">
       <header className="file-browser-header">
-        <div><h2 id="file-browser-title">Files</h2><p>Browse and preview server files</p></div>
-        <button ref={close} type="button" className="icon-button" aria-label="Close file browser" onClick={onClose}>×</button>
+        <h2 id="file-browser-title">Files</h2>
+        <div className="file-browser-header-actions">
+
+          <button ref={close} type="button" className="icon-button" aria-label="Close file browser" onClick={onClose}>×</button>
+        </div>
       </header>
       <div className="file-browser-controls">
-        <div className="file-browser-navigation">
-          <button type="button" className="quiet-button" disabled={loading || !listing?.parentPath} onClick={() => listing?.parentPath && navigate(listing.parentPath)} aria-label="Parent directory">↑ Up</button>
-          <button type="button" className="quiet-button" onClick={() => navigate(initialPath)} title={initialPath}>Working directory</button>
-          <button type="button" className="quiet-button" onClick={() => setRevision(value => value + 1)} aria-label="Refresh directory">↻</button>
+        <div className="file-browser-location">
+          <button type="button" className="icon-button" disabled={loading || !listing?.parentPath} onClick={() => listing?.parentPath && navigate(listing.parentPath)} aria-label="Parent directory">↑</button>
+          <button type="button" className="file-browser-current" title={listing?.path ?? path} aria-label="Edit directory path" aria-expanded={editingPath} onClick={() => setEditingPath(value => !value)}>
+            <strong>{(listing?.path ?? path).split('/').filter(Boolean).at(-1) ?? '/'}</strong>
+            <small>{listing?.path ?? path}</small>
+          </button>
+          <details className="file-browser-menu" ref={menu}>
+            <summary className="icon-button" aria-label="File browser options">⋯</summary>
+            <div className="file-browser-menu-panel">
+              <button type="button" onClick={() => navigate(initialPath)}>Working directory</button>
+              <button type="button" onClick={() => { setRevision(value => value + 1); if (menu.current) menu.current.open = false }}>Refresh</button>
+              <label><input type="checkbox" checked={hidden} onChange={event => { setHidden(event.target.checked); setOffset(0) }} />Hidden files</label>
+            </div>
+          </details>
         </div>
-        <form className="file-browser-address" onSubmit={event => { event.preventDefault(); if (address.trim()) navigate(address.trim()) }}>
-          <input aria-label="Directory path" value={address} onChange={event => setAddress(event.target.value)} spellCheck={false} autoCapitalize="none" autoCorrect="off" />
+        {editingPath && <form className="file-browser-address" onSubmit={event => { event.preventDefault(); if (address.trim()) navigate(address.trim()) }}>
+          <input autoFocus aria-label="Directory path" value={address} onChange={event => setAddress(event.target.value)} spellCheck={false} autoCapitalize="none" autoCorrect="off" />
           <button type="submit" className="quiet-button">Go</button>
-        </form>
+        </form>}
         <div className="file-browser-filter">
-          <input type="search" aria-label="Search current folder" placeholder="Search this folder…" value={search} onChange={event => setSearch(event.target.value)} />
-          <label><input type="checkbox" checked={hidden} onChange={event => { setHidden(event.target.checked); setOffset(0) }} />Hidden files</label>
+          <input type="search" aria-label="Search current folder" placeholder="Search files…" value={search} onChange={event => setSearch(event.target.value)} />
         </div>
       </div>
       <div className="file-browser-list" ref={list} aria-busy={loading}>
+        {storageError && <p className="file-browser-storage-note" role="status">Không lưu được danh sách ghim trên trình duyệt. Các thay đổi chỉ giữ trong phiên này.</p>}
+        {pins.length > 0 && <details className="file-browser-pins" aria-label="Đã ghim">
+          <summary>★ Đã ghim <span>{pins.length}</span></summary>
+          {pins.map(pin => <div className="file-browser-row" key={pin.path}>
+            <button type="button" className="file-browser-entry" title={pin.path} onClick={event => {
+              if (pin.kind === 'directory') navigate(pin.path)
+              else { lastFile.current = event.currentTarget; onOpenFile({ path: pin.path }) }
+            }}><span aria-hidden="true">{pin.kind === 'directory' ? '▣' : '▤'}</span><span className="file-browser-name">{pin.path.split('/').filter(Boolean).at(-1) ?? '/'}<small className="file-browser-pin-path">{pin.path}</small></span><span className="file-browser-size">{pin.kind === 'directory' ? 'Folder' : 'File'}</span></button>
+            <button type="button" className="file-pin-button" aria-label={`Bỏ ghim ${pin.path}`} aria-pressed="true" onClick={() => togglePin(pin)}>★</button>
+          </div>)}
+        </details>}
         {loading && !listing ? <div className="file-browser-empty" role="status"><span className="spinner" />Loading files…</div>
           : error && !listing ? <div className="file-browser-empty" role="alert"><p>{error}</p><button className="quiet-button" onClick={() => setRevision(value => value + 1)}>Retry</button></div>
           : listing?.entries.length === 0 ? <p className="file-browser-empty">{query ? 'No matching files in this folder.' : 'This folder is empty.'}</p>
-          : listing?.entries.map(entry => <button key={entry.path} type="button" className="file-browser-entry" disabled={entry.kind === 'unavailable'} title={entry.kind === 'unavailable' ? 'Unavailable or outside allowed workspaces' : entry.path}
+          : listing?.entries.map(entry => <div className="file-browser-row" key={entry.path}><button type="button" className="file-browser-entry" disabled={entry.kind === 'unavailable'} title={entry.kind === 'unavailable' ? 'Unavailable or outside allowed workspaces' : entry.path}
             onClick={event => {
               if (entry.kind === 'directory') navigate(entry.path)
               else { lastFile.current = event.currentTarget; onOpenFile({ path: entry.path }) }
@@ -110,12 +140,14 @@ export function FileBrowser({ initialPath, covered, onClose, onOpenFile }: {
             </svg>
             <span className="file-browser-name">{entry.name}{entry.symlink && <small> · Link</small>}</span>
             <span className="file-browser-size">{entry.kind === 'directory' ? 'Folder' : entry.size !== null ? formatFileSize(entry.size) : 'Unavailable'}</span>
-          </button>)}
+          </button><button type="button" className="file-pin-button" disabled={entry.kind === 'unavailable'}
+            aria-label={`${isPinned(entry.path) ? 'Bỏ ghim' : 'Ghim'} ${entry.name}`} aria-pressed={isPinned(entry.path)}
+            onClick={() => { if (entry.kind !== 'unavailable') togglePin({ path: entry.path, kind: entry.kind === 'directory' ? 'directory' : 'file' }) }}>{isPinned(entry.path) ? '★' : '☆'}</button></div>)}
       </div>
       <footer className="file-browser-footer">
         <span>{!loading && !error && listing ? `${listing.total ? listing.offset + 1 : 0}–${Math.min(listing.offset + listing.entries.length, listing.total)} of ${listing.total}` : 'Read-only browser'}</span>
-        <div><button type="button" className="quiet-button" disabled={loading || Boolean(error) || offset === 0} onClick={() => setOffset(Math.max(0, offset - (listing?.limit ?? 100)))}>Previous</button>
-          <button type="button" className="quiet-button" disabled={loading || Boolean(error) || !listing || offset + listing.limit >= listing.total} onClick={() => setOffset(offset + (listing?.limit ?? 100))}>Next</button></div>
+        {listing && (offset > 0 || listing.total > listing.limit) && <div><button type="button" className="quiet-button" disabled={loading || Boolean(error) || offset === 0} onClick={() => setOffset(Math.max(0, offset - (listing?.limit ?? 100)))}>Previous</button>
+          <button type="button" className="quiet-button" disabled={loading || Boolean(error) || !listing || offset + listing.limit >= listing.total} onClick={() => setOffset(offset + (listing?.limit ?? 100))}>Next</button></div>}
       </footer>
     </section>
   </div>
