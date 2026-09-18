@@ -354,11 +354,13 @@ textarea:focus {
 .app-shell {
   display: grid;
   grid-template-columns: 310px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   height: 100dvh;
   background: var(--canvas);
 }
 
 .thread-sidebar {
+  min-height: 0;
   z-index: 20;
   display: flex;
   min-width: 0;
