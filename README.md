@@ -147,3 +147,7 @@ for your next message; disabled skills are listed but cannot be selected. Select
 are kept separately with each conversation draft, restored after a failed send, and
 cleared after a successful send. The gateway refreshes and validates selected skills
 and sends native skill inputs to Codex; arbitrary client-supplied skill paths are rejected.
+
+### Direct working-hours link
+
+Open `/working-hours` (or `/working-hours/`) to access the shared working-hours dashboard directly. It uses the existing Codex login, requires authentication before loading the private dashboard, and uses the same JSON database and timer as the file preview. `/workboard` is a separate existing application and is not mapped to this dashboard.

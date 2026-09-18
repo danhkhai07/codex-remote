@@ -1,0 +1,6 @@
+.working-hours-shell{height:100vh;height:100dvh;display:flex;flex-direction:column;background:#101714;overflow:hidden}
+.working-hours-header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:none;padding:8px max(12px,env(safe-area-inset-right)) 8px max(12px,env(safe-area-inset-left));border-bottom:1px solid var(--line)}
+.working-hours-header strong{font-size:16px}.working-hours-header nav{display:flex;align-items:center;gap:6px}.working-hours-header a,.working-hours-header button{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:8px;color:var(--text);font-size:14px;text-decoration:none;white-space:nowrap}
+.working-hours-shell>iframe{display:block;width:100%;flex:1;min-height:0;border:0;background:#101714;padding-bottom:env(safe-area-inset-bottom)}
+.working-hours-error{margin:0;padding:12px;color:var(--danger);background:var(--panel);overflow-wrap:anywhere}.working-hours-error button{margin-left:12px;min-height:44px}
+@media(max-width:359px){.working-hours-header{gap:4px;padding-inline:8px}.working-hours-header nav{gap:2px}.working-hours-header a,.working-hours-header button{font-size:12px;padding:6px}}

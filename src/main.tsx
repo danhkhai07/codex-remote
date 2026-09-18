@@ -1,3 +1,4 @@
+import { WorkingHoursPage, isWorkingHoursPath } from './WorkingHoursPage'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
@@ -11,7 +12,7 @@ if (import.meta.hot) import.meta.hot.dispose(removeZoomLock)
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <AppRecovery><App /></AppRecovery>
+    <AppRecovery>{isWorkingHoursPath(window.location.pathname) ? <WorkingHoursPage /> : <App />}</AppRecovery>
   </StrictMode>,
 )
 

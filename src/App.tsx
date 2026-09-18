@@ -66,7 +66,7 @@ function savedNotificationPreference(): boolean {
   }
 }
 
-function Login({ installPrompt, offline, onInstall, onLogin }: {
+export function Login({ installPrompt, offline, onInstall, onLogin }: {
   installPrompt: PwaInstallPrompt | null
   offline: boolean
   onInstall: () => void
