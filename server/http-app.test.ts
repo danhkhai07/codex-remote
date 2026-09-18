@@ -191,6 +191,11 @@ describe('Codex Remote HTTP boundary', () => {
     expect((await fetchLocal(port, '/api/work-presence', { ...options, csrf: 'wrong', method: 'POST', body: presenceBody })).status).toBe(403)
     expect((await fetchLocal(port, '/api/work-presence', { ...options, method: 'POST', body: { ...presenceBody, visible: 'yes' } })).status).toBe(400)
 
+    const skills = vi.spyOn(controller, 'listSkills').mockResolvedValue({ skills: [], errors: [] })
+    expect((await fetchLocal(port, '/api/threads/chat/skills')).status).toBe(401)
+    expect(skills).not.toHaveBeenCalled()
+    expect((await fetchLocal(port, '/api/threads/chat/skills?refresh=1', { cookie })).status).toBe(200)
+    expect(skills).toHaveBeenCalledWith('chat', true)
     const messageIds = vi.spyOn(controller, 'readMessageIds').mockResolvedValue({ ids: ['turn:reply'] })
     expect((await fetchLocal(port, '/api/threads/chat/message-ids')).status).toBe(401)
     expect(messageIds).not.toHaveBeenCalled()
@@ -233,7 +238,7 @@ describe('Codex Remote HTTP boundary', () => {
     expect(rename).toHaveBeenLastCalledWith('rename-target', '  Hội thoại mới  ')
     const listing = await fetchLocal(port, `/api/files/list?path=${encodeURIComponent(workspaceRoot)}`, { cookie })
     expect(listing.status).toBe(200)
-    expect(JSON.parse(listing.body).entries).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'notes.md', kind: 'file' })]))
+    expect(JSON.parse(listing.body).entries).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'notes.md', kind: 'file' })], undefined))
     expect((await fetchLocal(port, `/api/files/list?path=${encodeURIComponent(outsideRoot)}`, { cookie })).status).toBe(403)
     const fileInfo = await fetchLocal(port, `/api/files/info?path=${encodeURIComponent(textPath)}`, { cookie })
     expect(fileInfo.status).toBe(200)
@@ -345,7 +350,7 @@ describe('Codex Remote HTTP boundary', () => {
     const startWithFile = vi.spyOn(controller, 'startTurn').mockResolvedValueOnce({ turn: { id: 'uploaded-file-turn' } })
     const fileTurn = await fetchLocal(port, '/api/threads/upload-test/turns', { ...options, method: 'POST', body: { text: '  <b>literal</b>\n ', attachmentIds: [fileId] } })
     expect(fileTurn.status).toBe(202)
-    expect(startWithFile).toHaveBeenCalledWith('upload-test', '  <b>literal</b>\n ', undefined, undefined, false, [], [expect.objectContaining({ name: 'source.html', contentType: 'text/html', kind: 'file' })])
+    expect(startWithFile).toHaveBeenCalledWith('upload-test', '  <b>literal</b>\n ', undefined, undefined, false, [], [expect.objectContaining({ name: 'source.html', contentType: 'text/html', kind: 'file' })], undefined)
     startWithFile.mockRestore()
 
     const subscription = {

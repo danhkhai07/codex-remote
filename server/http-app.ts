@@ -419,6 +419,11 @@ export function createRemoteHttpServer(
         json(res, 200, readState.acknowledge(readStateThreadId, body.ids as string[]))
         return
       }
+      const skillsThreadId = routeThread(url.pathname, '/skills')
+      if (skillsThreadId && method === 'GET') {
+        json(res, 200, await controller.listSkills(skillsThreadId, url.searchParams.get('refresh') === '1'))
+        return
+      }
       const messageIdsThreadId = routeThread(url.pathname, '/message-ids')
       if (messageIdsThreadId && method === 'GET') {
         const result = await controller.readMessageIds(messageIdsThreadId)
@@ -451,7 +456,7 @@ export function createRemoteHttpServer(
       if (turnThreadId && method === 'POST') {
         const body = await readJson(req)
         if (!attachments && body.attachmentIds !== undefined) throw new HttpError(503, 'File attachments are unavailable')
-        const operation = (_paths: string[], files: UploadedFile[]) => controller.startTurn(turnThreadId, body.text ?? '', body.model, body.effort, body.fullAccess ?? false, files.filter(file => file.kind === 'image').map(file => file.path), files.filter(file => file.kind === 'file'))
+        const operation = (_paths: string[], files: UploadedFile[]) => controller.startTurn(turnThreadId, body.text ?? '', body.model, body.effort, body.fullAccess ?? false, files.filter(file => file.kind === 'image').map(file => file.path), files.filter(file => file.kind === 'file'), body.skills)
         json(res, 202, attachments
           ? await attachments.use(body.attachmentIds, session, operation)
           : await operation([], []))
