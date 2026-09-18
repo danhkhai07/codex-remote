@@ -130,6 +130,8 @@ export function Login({ installPrompt, offline, onInstall, onLogin }: {
 function ThreadSidebar({
   threads,
   unreadCounts,
+  activeTurns,
+  sending,
   selectedId,
   open,
   busy,
@@ -147,6 +149,8 @@ function ThreadSidebar({
 }: {
   threads: Thread[]
   unreadCounts: Record<string, number>
+  activeTurns: Record<string, string | null>
+  sending: Record<string, boolean>
   selectedId: string | null
   open: boolean
   busy: boolean
@@ -251,6 +255,7 @@ function ThreadSidebar({
             >
               <span className="thread-row-heading">
                 <span className="thread-row-title">{threadTitle(thread)}</span>
+                {(sending[thread.id] || activeTurns[thread.id] || object(thread.status).type === 'active') && <span className="spinner thread-working-spinner" role="img" aria-label={sending[thread.id] ? 'Đang gửi yêu cầu' : 'Codex đang làm'} title={sending[thread.id] ? 'Đang gửi yêu cầu' : 'Codex đang làm'} />}
                 {(unreadCounts[thread.id] ?? 0) > 0 && <span className="thread-unread-badge" aria-label="Unread completed answer" title="Có câu trả lời hoàn tất chưa đọc">!</span>}
               </span>
               <span className="thread-row-meta">
@@ -1530,6 +1535,8 @@ export function App() {
       <ThreadSidebar
         threads={threads}
         unreadCounts={unreadCounts}
+        activeTurns={activeTurns}
+        sending={sending}
         selectedId={selectedId}
         open={drawerOpen}
         busy={busy}

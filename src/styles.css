@@ -2853,3 +2853,8 @@ textarea:focus {
 .skill-option:disabled { opacity: .55; }
 .selected-skills { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
 .selected-skills button { padding: 6px 10px; border: 1px solid var(--accent); border-radius: 16px; background: var(--panel); color: var(--text); overflow-wrap: anywhere; }
+
+.thread-working-spinner { width: 14px; height: 14px; flex: 0 0 14px; border-width: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .thread-working-spinner { animation: none; }
+}
