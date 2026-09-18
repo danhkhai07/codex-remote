@@ -2841,11 +2841,12 @@ textarea:focus {
 .svg-preview img { display: block; width: 100%; height: 100%; min-height: 0; object-fit: contain; }
 .svg-preview p { color: #333; padding: 16px; background: #fff; border-radius: 8px; }
 
-.skills-picker { border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin: 8px 0; max-height: min(420px, 45dvh); overflow: auto; }
-.skills-picker-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.skills-picker { display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin: 8px 0; max-height: min(420px, 45dvh); overflow: hidden; }
+.skills-picker-heading { flex-shrink: 0; display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .skills-picker-heading strong { flex: 1; }
-.skills-picker > input { width: 100%; min-width: 0; }
+.skills-picker > input { flex-shrink: 0; width: 100%; min-width: 0; }
 .skills-picker p { color: var(--muted); font-size: .8rem; }
+.skills-picker-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-top: 4px; }
 .skills-picker-list { display: grid; gap: 6px; }
 .skill-option { display: grid; gap: 4px; text-align: left; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); overflow-wrap: anywhere; }
 .skill-option[aria-pressed='true'] { border-color: var(--accent); }

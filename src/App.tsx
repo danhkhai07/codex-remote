@@ -543,6 +543,8 @@ export function App() {
   const [threads, setThreads] = useState<Thread[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [skillsOpen, setSkillsOpen] = useState(false)
+  const skillsButtonRef = useRef<HTMLButtonElement>(null)
+  const closeSkills = useCallback(() => setSkillsOpen(false), [])
   const [selectedSkills, setSelectedSkills, setThreadSkills, clearSkills] = useThreadState<SkillSelection[]>(selectedId, EMPTY_SKILLS, 'draft-skills')
   const [thread, setThread] = useState<Thread | null>(null)
   const [historyReady, setHistoryReady] = useState(false)
@@ -1677,10 +1679,10 @@ export function App() {
                   <option value={entry.reasoningEffort} key={entry.reasoningEffort}>{entry.reasoningEffort}</option>
                 ))}
               </select>
-              <button type="button" className="composer-status" disabled={busy} aria-expanded={skillsOpen} onClick={() => setSkillsOpen(value => !value)}>Skills{selectedSkills.length ? ` (${selectedSkills.length})` : ''}</button>
+              <button type="button" className="composer-status" ref={skillsButtonRef} disabled={busy} aria-expanded={skillsOpen} aria-controls={skillsOpen ? 'skills-picker' : undefined} onClick={() => setSkillsOpen(value => !value)}>Skills{selectedSkills.length ? ` (${selectedSkills.length})` : ''}</button>
               <button type="button" className="composer-status" disabled={busy} onClick={() => void executeSlashCommand('status', '')}>Usage & status</button>
             </div>
-            {skillsOpen && thread && <SkillsPicker key={thread.id} threadId={thread.id} selected={selectedSkills} onChange={setSelectedSkills} onClose={() => setSkillsOpen(false)} disabled={busy} />}
+            {skillsOpen && thread && <SkillsPicker key={thread.id} threadId={thread.id} selected={selectedSkills} onChange={setSelectedSkills} onClose={closeSkills} triggerRef={skillsButtonRef} disabled={busy} />}
             {selectedSkills.length > 0 && <div className="selected-skills" aria-label="Selected skills">{selectedSkills.map(skill => <button type="button" key={skill.path} disabled={busy} aria-label={`Remove skill ${skill.name}`} onClick={() => setSelectedSkills(current => current.filter(item => item.path !== skill.path))}>{skill.name} ×</button>)}</div>}
             {settingsSaveError && <p role="status" className="attachment-hint">{settingsSaveError}</p>}
             {commandNotice && <LocalCommandResult notice={commandNotice} onClose={() => setCommandNotice(null)} />}
