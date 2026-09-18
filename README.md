@@ -140,3 +140,10 @@ Receipts persist across browser and gateway restarts in
 `~/.local/state/codex-remote/read-state.json` (override with `CODEX_REMOTE_READ_STATE_FILE`
 and use a persistent writable path in containers). Live events synchronize changes,
 with a ten-second snapshot poll and a refresh on reconnect as a fallback.
+
+Use the **Skills** button beside model/effort, or `/skills`, to list skills available
+for the current conversation's working directory. Search, refresh, and select skills
+for your next message; disabled skills are listed but cannot be selected. Selections
+are kept separately with each conversation draft, restored after a failed send, and
+cleared after a successful send. The gateway refreshes and validates selected skills
+and sends native skill inputs to Codex; arbitrary client-supplied skill paths are rejected.

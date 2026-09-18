@@ -24,6 +24,8 @@ describe('slash commands', () => {
       '/report.html xem file này',
       '/unknown',
     ]) expect(parseSlashCommand(prompt)).toBeNull()
+    expect(parseSlashCommand('/skills')).toEqual({ name: 'skills', argument: '' })
+    expect(matchingSlashCommands('/ski').map(({ name }) => name)).toEqual(['skills'])
     expect(parseSlashCommand('/status')).toEqual({ name: 'status', argument: '' })
   })
 })

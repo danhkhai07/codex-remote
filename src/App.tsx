@@ -1,3 +1,5 @@
+import { SkillsPicker } from './SkillsPicker'
+import type { SkillSelection } from '../server/skills'
 import { ChangeEvent, Fragment, FormEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { enterSendsMessage, isComposerSubmitKey } from './composerKeyboard'
 import { settingsForModel, useConversationSettings } from './useConversationSettings'
@@ -53,6 +55,7 @@ const MAX_COMPOSER_FILES = 4
 const MAX_COMPOSER_FILE_BYTES = 25 * 1024 * 1024
 
 type SentMessage = { text: string; turnId?: string; images?: Array<{ name: string; previewUrl: string }>; files?: Array<{ name: string; size: number }> }
+const EMPTY_SKILLS: SkillSelection[] = []
 const EMPTY_ITEMS: TranscriptItem[] = []
 
 function savedNotificationPreference(): boolean {
@@ -534,6 +537,8 @@ export function App() {
   const [authLoading, setAuthLoading] = useState(true)
   const [threads, setThreads] = useState<Thread[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [skillsOpen, setSkillsOpen] = useState(false)
+  const [selectedSkills, setSelectedSkills, setThreadSkills, clearSkills] = useThreadState<SkillSelection[]>(selectedId, EMPTY_SKILLS, 'draft-skills')
   const [thread, setThread] = useState<Thread | null>(null)
   const [historyReady, setHistoryReady] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
@@ -1240,6 +1245,10 @@ export function App() {
         ])
         return
       }
+      case 'skills':
+        setComposer('')
+        setSkillsOpen(true)
+        return
       case 'help':
         showCommandNotice('Slash commands', slashCommands.map((command) => ({
           label: command.usage,
@@ -1303,6 +1312,7 @@ export function App() {
     setError('')
     const sendingThreadId = thread.id
     const epoch = sessionEpoch.current
+    const sendingSkills = selectedSkills
     const sendingImages = attachments
     setAttachments([])
     const sent: SentMessage = {
@@ -1324,8 +1334,10 @@ export function App() {
         effort: effectiveEffort ?? undefined,
         fullAccess: yoloMode,
         attachmentIds: uploadedIds,
+        skills: sendingSkills,
       })
       if (epoch !== sessionEpoch.current) return
+      setThreadSkills(sendingThreadId, current => current.filter(skill => !sendingSkills.some(sent => sent.path === skill.path)))
       if (!completedTurns.current.has(response.turn.id)) {
         setSentMessages(current => ({ ...current, [sendingThreadId]: { ...sent, turnId: response.turn.id } }))
         setThreadTurn(sendingThreadId, response.turn.id)
@@ -1441,6 +1453,8 @@ export function App() {
     setHistoryReady(false)
     setHistoryLoading(false)
     clearUnread()
+    clearSkills()
+    setSkillsOpen(false)
     clearScreenState()
     sessionEpoch.current += 1
     sendingLocks.current.clear()
@@ -1656,8 +1670,11 @@ export function App() {
                   <option value={entry.reasoningEffort} key={entry.reasoningEffort}>{entry.reasoningEffort}</option>
                 ))}
               </select>
+              <button type="button" className="composer-status" disabled={busy} aria-expanded={skillsOpen} onClick={() => setSkillsOpen(value => !value)}>Skills{selectedSkills.length ? ` (${selectedSkills.length})` : ''}</button>
               <button type="button" className="composer-status" disabled={busy} onClick={() => void executeSlashCommand('status', '')}>Usage & status</button>
             </div>
+            {skillsOpen && thread && <SkillsPicker key={thread.id} threadId={thread.id} selected={selectedSkills} onChange={setSelectedSkills} onClose={() => setSkillsOpen(false)} disabled={busy} />}
+            {selectedSkills.length > 0 && <div className="selected-skills" aria-label="Selected skills">{selectedSkills.map(skill => <button type="button" key={skill.path} disabled={busy} aria-label={`Remove skill ${skill.name}`} onClick={() => setSelectedSkills(current => current.filter(item => item.path !== skill.path))}>{skill.name} ×</button>)}</div>}
             {settingsSaveError && <p role="status" className="attachment-hint">{settingsSaveError}</p>}
             {commandNotice && <LocalCommandResult notice={commandNotice} onClose={() => setCommandNotice(null)} />}
             <SlashMenu

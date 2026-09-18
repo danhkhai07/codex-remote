@@ -1,3 +1,4 @@
+import type { SkillList, SkillSelection } from '../server/skills'
 import type { ReplySnapshot } from '../server/read-state'
 import type { DirectoryListing, ModelList, PendingRequest, RateLimitsResponse, ServerFileInfo, Session, ThreadList, ThreadResponse, TurnResponse } from './types'
 import { limitConversation } from '../server/conversation-size'
@@ -78,6 +79,7 @@ export const api = {
   acknowledgeReplies: (id: string, ids: string[], csrf: string, signal?: AbortSignal) => request<ReplySnapshot>(`/api/threads/${encodeURIComponent(id)}/read-state`, {
     method: 'POST', body: JSON.stringify({ ids }), signal,
   }, csrf),
+  skills: (id: string, refresh = false, signal?: AbortSignal) => request<SkillList>(`/api/threads/${encodeURIComponent(id)}/skills${refresh ? '?refresh=1' : ''}`, { signal }),
   messageIds: (id: string, signal?: AbortSignal) => request<{ ids: string[] }>(`/api/threads/${encodeURIComponent(id)}/message-ids`, { signal }),
   thread: (id: string, signal?: AbortSignal) => request<ThreadResponse>(`/api/threads/${encodeURIComponent(id)}`, { signal }).then(response => ({ ...response, thread: limitConversation(response.thread) })),
   createThread: (workspaceId: string, csrf: string, fullAccess = false) => request<ThreadResponse>('/api/threads', {
@@ -98,7 +100,7 @@ export const api = {
     body: JSON.stringify({ name }),
     signal: AbortSignal.timeout(15_000),
   }, csrf),
-  startTurn: (id: string, text: string, csrf: string, options: { model?: string; effort?: string; fullAccess?: boolean; attachmentIds?: string[] } = {}) => request<TurnResponse>(`/api/threads/${encodeURIComponent(id)}/turns`, {
+  startTurn: (id: string, text: string, csrf: string, options: { model?: string; effort?: string; fullAccess?: boolean; attachmentIds?: string[]; skills?: SkillSelection[] } = {}) => request<TurnResponse>(`/api/threads/${encodeURIComponent(id)}/turns`, {
     method: 'POST',
     body: JSON.stringify({ text, ...options }),
   }, csrf),

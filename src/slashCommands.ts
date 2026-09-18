@@ -6,6 +6,7 @@ export type SlashCommand = {
 }
 
 export const slashCommands: SlashCommand[] = [
+  { name: 'skills', usage: '/skills', description: 'List and select skills for your next message' },
   { name: 'status', usage: '/status', description: 'Show connection, model, turn, and queue status' },
   { name: 'model', usage: '/model <model>', description: 'Choose the model for future turns', takesArgument: true },
   { name: 'effort', usage: '/effort <level>', description: 'Choose reasoning effort for the selected model', takesArgument: true },
