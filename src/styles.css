@@ -2923,7 +2923,11 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
 .localhost-preview-error button { flex-shrink: 0; }
 .localhost-preview-content { position: relative; min-height: 0; overflow: hidden; }
 .localhost-preview-content iframe { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
-.localhost-preview-content .file-viewer-empty { height: 100%; overflow: auto; padding: 20px; }
+.localhost-preview-content .file-viewer-empty { height: 100%; max-width: none; align-content: center; overflow: auto; padding: 20px; }
+.localhost-preview-content .file-viewer-empty p { max-width: 480px; }
+.localhost-preview .localhost-preview-address-toggle { max-width: min(36vw, 320px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser-frame-help { position: absolute; bottom: 10px; right: 10px; z-index: 2; max-width: calc(100% - 20px); margin: 0; padding: 8px 12px; border-radius: 8px; color: var(--muted); background: var(--panel); font-size: .75rem; }
+.browser-frame-help button { color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; }
 .localhost-preview-loading { position: absolute; z-index: 1; inset: 12px 12px auto; display: flex; align-items: center; justify-content: center; gap: 10px; width: fit-content; max-width: calc(100% - 24px); margin-inline: auto; padding: 10px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text); font-size: .8rem; pointer-events: none; }
 .localhost-preview-loading .spinner { width: 16px; height: 16px; flex-shrink: 0; }
 @media (max-width: 760px) {

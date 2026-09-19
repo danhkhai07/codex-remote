@@ -1,24 +1,24 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { api } from './api'
-import { parseLocalhostAddress } from './localhostAddress'
+import { parseBrowserAddress } from './browserAddress'
 import { useScreenState } from './screenState'
 
-type Preview = { url: string; viewUrl: string; address: string; port: number; loadId: number }
+type Preview = { url: string; viewUrl: string; address: string; port?: number; loadId: number }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Không thể mở preview. Hãy thử lại.'
 }
 
-export function LocalhostPreview({ csrf, onClose, initialUrl }: {
+export function LocalhostPreview({ csrf, onClose, initialUrl, scope = 'services', onNavigate }: {
   csrf: string
   onClose: () => void
   initialUrl?: string
+  scope?: string
+  onNavigate?: (address: string) => void
 }) {
-  const [savedAddress, setSavedAddress] = useScreenState('browser:localhost-preview', '3000')
+  const [savedAddress, setSavedAddress] = useScreenState(`browser:${scope}:address`, '')
+  const [lastUrl, setLastUrl] = useScreenState(`browser:${scope}:last-url`, '')
   const [address, setAddress] = useState(initialUrl ?? savedAddress)
-  const [enabled, setEnabled] = useState<boolean | null>(null)
-  const [statusError, setStatusError] = useState('')
-  const [statusAttempt, setStatusAttempt] = useState(0)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [preview, setPreview] = useState<Preview | null>(null)
@@ -32,6 +32,8 @@ export function LocalhostPreview({ csrf, onClose, initialUrl }: {
   const request = useRef<AbortController | null>(null)
   const popup = useRef<Window | null>(null)
   const autoOpened = useRef<string | null>(null)
+  const navigate = useRef(onNavigate)
+  navigate.current = onNavigate
   const close = useRef(onClose)
   close.current = onClose
 
@@ -83,23 +85,11 @@ export function LocalhostPreview({ csrf, onClose, initialUrl }: {
     }
   }, [])
 
-  useEffect(() => {
-    let current = true
-    setEnabled(null)
-    setStatusError('')
-    void api.localhostPreviewStatus().then(result => {
-      if (current) setEnabled(result.enabled)
-    }).catch(reason => {
-      if (current) setStatusError(errorMessage(reason))
-    })
-    return () => { current = false }
-  }, [statusAttempt])
-
   const launch = useCallback(async (value: string, inBrowser = false) => {
     if (request.current) return
-    const parsed = parseLocalhostAddress(value)
+    const parsed = parseBrowserAddress(value, window.location.origin)
     if (!parsed) {
-      setError('Nhập port từ 1024–65535 hoặc địa chỉ HTTP localhost, ví dụ http://localhost:3000.')
+      setError('Nhập URL http://, https://, đường dẫn như /working-hours hoặc port localhost.')
       return
     }
     // Open synchronously during the click so mobile browsers allow the new tab.
@@ -117,13 +107,15 @@ export function LocalhostPreview({ csrf, onClose, initialUrl }: {
     setBusy(true)
     setError('')
     try {
-      const result = await api.launchLocalhostPreview(parsed.port, parsed.path, csrf, controller.signal)
+      const result = parsed.kind === 'localhost'
+        ? await api.launchLocalhostPreview(parsed.local.port, parsed.local.path, csrf, controller.signal)
+        : { url: parsed.url, viewUrl: parsed.url }
       if (controller.signal.aborted) return
       const url = new URL(result.url)
       const viewUrl = new URL(result.viewUrl)
       const allowedProtocol = url.protocol === 'https:' || (window.location.protocol === 'http:' && url.protocol === 'http:')
-      const localPath = url.origin === window.location.origin && url.pathname.startsWith(`/preview/${parsed.port}/`)
-      if (!allowedProtocol || (!localPath && url.origin === window.location.origin) || viewUrl.origin !== url.origin) {
+      const localPath = url.origin === window.location.origin && url.pathname.startsWith(`/preview/${parsed.kind === 'localhost' ? parsed.local.port : ''}/`)
+      if (parsed.kind === 'localhost' && (!allowedProtocol || (!localPath && url.origin === window.location.origin) || viewUrl.origin !== url.origin)) {
         throw new Error('Địa chỉ preview không hợp lệ.')
       }
       if (opened) {
@@ -137,6 +129,9 @@ export function LocalhostPreview({ csrf, onClose, initialUrl }: {
         // Move focus before hiding the address form, also dismissing mobile keyboards.
         if (controls.current?.contains(document.activeElement)) closeButton.current?.focus()
         setControlsOpen(false)
+        setLastUrl(value)
+        autoOpened.current = value
+        navigate.current?.(value)
       }
     } catch (reason) {
       opened?.close()
@@ -148,18 +143,19 @@ export function LocalhostPreview({ csrf, onClose, initialUrl }: {
         if (!controller.signal.aborted) setBusy(false)
       }
     }
-  }, [csrf])
+  }, [csrf, setLastUrl])
 
   useEffect(() => {
-    if (!initialUrl || !enabled || autoOpened.current === initialUrl) return
+    const target = initialUrl || lastUrl
+    if (!target || autoOpened.current === target) return
     // Deferral lets StrictMode discard its first mount without issuing a ticket.
     const timer = setTimeout(() => {
-      autoOpened.current = initialUrl
-      setAddress(initialUrl)
-      void launch(initialUrl)
+      autoOpened.current = target
+      setAddress(target)
+      void launch(target)
     }, 0)
     return () => clearTimeout(timer)
-  }, [initialUrl, enabled, launch])
+  }, [initialUrl, lastUrl, launch])
 
   useEffect(() => {
     if (!preview || loaded) return
@@ -169,7 +165,7 @@ export function LocalhostPreview({ csrf, onClose, initialUrl }: {
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    if (enabled && !busy) void launch(address)
+    if (!busy) void launch(address)
   }
 
   return <div ref={backdrop} className="file-viewer-backdrop localhost-preview-backdrop" onMouseDown={event => {
@@ -178,41 +174,39 @@ export function LocalhostPreview({ csrf, onClose, initialUrl }: {
     <section ref={dialog} className="file-viewer localhost-preview" role="dialog" aria-modal="true" aria-labelledby="localhost-preview-title">
       <header className="file-viewer-header">
         <div className="link-viewer-identity">
-          <span className="file-viewer-title" id="localhost-preview-title">Localhost preview</span>
+          <span className="file-viewer-title" id="localhost-preview-title">Browser</span>
         </div>
         {preview && <div className="localhost-preview-actions">
-          <button className="quiet-button localhost-preview-address-toggle" type="button" aria-expanded={controlsOpen} aria-controls="localhost-preview-controls" onClick={() => setControlsOpen(value => !value)} title="Đổi port hoặc địa chỉ">:{preview.port} <span aria-hidden="true">⌄</span></button>
-          <button className="quiet-button" type="button" disabled={busy || !enabled || !csrf} onClick={() => void launch(preview.address)} aria-label="Reload preview" title="Reload">↻</button>
-          <button className="quiet-button" type="button" disabled={busy || !enabled || !csrf} onClick={() => void launch(preview.address, true)} aria-label="Open preview in browser" title="Open browser">↗</button>
+          <button className="quiet-button localhost-preview-address-toggle" type="button" aria-expanded={controlsOpen} aria-controls="localhost-preview-controls" onClick={() => setControlsOpen(value => !value)} title="Đổi địa chỉ">{preview.port ? `:${preview.port}` : new URL(preview.viewUrl).hostname} <span aria-hidden="true">⌄</span></button>
+          <button className="quiet-button" type="button" disabled={busy || !csrf} onClick={() => void launch(preview.address)} aria-label="Tải lại trang" title="Reload">↻</button>
+          <button className="quiet-button" type="button" disabled={busy || !csrf} onClick={() => void launch(preview.address, true)} aria-label="Mở tab ngoài" title="Mở tab ngoài">↗</button>
         </div>}
-        <button ref={closeButton} className="icon-button" type="button" onClick={onClose} aria-label="Close localhost preview">×</button>
+        <button ref={closeButton} className="icon-button" type="button" onClick={onClose} aria-label="Đóng Browser">×</button>
       </header>
-      <div ref={controls} id="localhost-preview-controls" className="localhost-preview-controls" hidden={!controlsOpen && !error && !statusError}>
+      <div ref={controls} id="localhost-preview-controls" className="localhost-preview-controls" hidden={!controlsOpen && !error}>
         <form onSubmit={submit} hidden={!controlsOpen}>
-          <label htmlFor="localhost-preview-address">Port hoặc địa chỉ localhost</label>
+          <label htmlFor="localhost-preview-address">Địa chỉ trang</label>
           <div className="localhost-preview-address-row">
-            <input id="localhost-preview-address" value={address} onChange={event => setAddress(event.target.value)} placeholder="3000 hoặc http://localhost:5174" autoCapitalize="none" autoCorrect="off" spellCheck={false} disabled={busy} aria-describedby="localhost-preview-help" />
-            <button className="primary-button" type="submit" disabled={!enabled || busy || !csrf}>{busy ? 'Đang mở…' : 'Open preview'}</button>
+            <input id="localhost-preview-address" value={address} onChange={event => setAddress(event.target.value)} placeholder="https://example.com, /working-hours hoặc 5183" autoCapitalize="none" autoCorrect="off" spellCheck={false} disabled={busy} aria-describedby="localhost-preview-help" />
+            <button className="primary-button" type="submit" disabled={busy || !csrf}>{busy ? 'Đang mở…' : 'Mở trang'}</button>
           </div>
         </form>
         {controlsOpen && <div className="localhost-preview-toolbar">
-          <p id="localhost-preview-help">Giữ app trên VPS chạy trong lúc xem.</p>
+          <p id="localhost-preview-help">Nhập link web, đường dẫn nội bộ hoặc port của app trên VPS.</p>
           <div className="localhost-preview-actions">
-            <button className="quiet-button" type="button" disabled={busy || !enabled || !csrf} onClick={() => void launch(address, true)}>Open browser ↗</button>
+            <button className="quiet-button" type="button" disabled={busy || !csrf} onClick={() => void launch(address, true)}>Mở tab ngoài ↗</button>
           </div>
         </div>}
-        {enabled === null && !statusError && <p className="localhost-preview-status" role="status">Đang kiểm tra preview…</p>}
-        {enabled === false && <p className="localhost-preview-status" role="status">Preview chưa được cấu hình domain trên server.</p>}
-        {statusError && <div className="localhost-preview-error" role="alert"><span>{statusError}</span><button className="quiet-button" type="button" onClick={() => setStatusAttempt(value => value + 1)}>Thử lại</button></div>}
         {error && <p className="localhost-preview-error" role="alert">{error}</p>}
       </div>
       <div className="localhost-preview-content">
-        {!preview && <div className="file-viewer-empty"><strong>Xem localhost ngay tại đây</strong><p>Nhập port của app, ví dụ 3000 hoặc 5174, rồi mở preview.</p></div>}
+        {preview && new URL(preview.viewUrl).origin !== window.location.origin && <p className="browser-frame-help">Nếu trang không cho hiển thị ở đây, chọn <button type="button" onClick={() => void launch(preview.address, true)}>Mở tab ngoài ↗</button>.</p>}
+        {!preview && <div className="file-viewer-empty"><strong>Mở một trang để bắt đầu</strong><p>Web, app localhost và các trang Codex Remote đều mở ở đây.</p></div>}
         {preview && <>
-          {!loaded && <div className="localhost-preview-loading" role="status"><span className="spinner" aria-hidden="true" />{slow ? 'Trang tải lâu. Có thể thử Open browser.' : 'Đang tải ứng dụng…'}</div>}
-          <iframe key={preview.loadId} src={preview.url} title={`Localhost port ${preview.port}`} sandbox="allow-same-origin allow-scripts allow-forms allow-downloads allow-popups allow-popups-to-escape-sandbox" referrerPolicy="no-referrer" onLoad={() => setLoaded(true)} onError={() => {
+          {!loaded && <div className="localhost-preview-loading" role="status"><span className="spinner" aria-hidden="true" />{slow ? 'Trang tải lâu hoặc không cho nhúng. Thử Mở tab ngoài.' : 'Đang tải ứng dụng…'}</div>}
+          <iframe key={preview.loadId} src={preview.url} title={preview.port ? `Localhost port ${preview.port}` : 'Browser page'} sandbox="allow-same-origin allow-scripts allow-forms allow-downloads allow-popups allow-popups-to-escape-sandbox" referrerPolicy="no-referrer" onLoad={() => setLoaded(true)} onError={() => {
             setLoaded(true)
-            setError('Không thể tải ứng dụng trong khung xem. Thử Reload hoặc Open browser.')
+            setError('Không thể tải ứng dụng trong khung xem. Thử tải lại hoặc Mở tab ngoài.')
           }} />
         </>}
       </div>

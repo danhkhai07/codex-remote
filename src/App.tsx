@@ -1,5 +1,4 @@
 import { LocalhostPreview } from './LocalhostPreview'
-import { isLocalhostUrl } from './localhostAddress'
 import { EMPTY_NEW_CONVERSATION, NEW_CONVERSATION_KEY, prepareNewConversation, type NewConversation } from './newConversation'
 import { SkillsPicker } from './SkillsPicker'
 import type { SkillSelection } from '../server/skills'
@@ -13,7 +12,7 @@ import { ConversationActions } from './ConversationActions'
 import { ConversationFolders } from './ConversationFolders'
 import { useConversationGroups } from './useConversationGroups'
 import { ThreadHistoryCache } from './threadHistoryCache'
-import { clearScreenState, flushScreenState, writeScreenState, useScreenState } from './screenState'
+import { clearScreenState, flushScreenState, readScreenState, writeScreenState, useScreenState } from './screenState'
 import { useInterrupt, turnHasEnded } from './useInterrupt'
 import { isPreviewImage } from './attachmentFiles'
 import { useDraftImages, type ComposerImage } from './useDraftImages'
@@ -24,7 +23,6 @@ import { enablePush, disablePush, reportPushVisibility, restorePush } from './pu
 import { MarkdownMessage, type LocalFileReference, type WebLinkReference } from './MarkdownMessage'
 import { FileViewer } from './FileViewer'
 import { FileBrowser } from './FileBrowser'
-import { LinkViewer } from './LinkViewer'
 import { EventAssembler, shouldKeepEventStream } from './eventStream'
 import { scheduleHistorySync } from './historySync'
 import { TranscriptViewport, type ReadingPosition } from './TranscriptViewport'
@@ -610,13 +608,18 @@ export function App() {
   const [error, setError] = useState('')
   const [fileViewer, setFileViewer] = useScreenState<LocalFileReference | null>('file-viewer', null)
   const [fileBrowserPath, setFileBrowserPath] = useScreenState<string | null>('file-browser', null)
-  const [linkViewer, setLinkViewer] = useScreenState<WebLinkReference | null>('link-viewer', null)
-  const [localhostPreview, setLocalhostPreview] = useScreenState<string | null>('localhost-preview', null)
+  const browserScope = selectedId ?? 'new'
+  const [browserTargets, setBrowserTargets] = useState<Record<string, string | null>>(() => window.self === window.top ? readScreenState('browser-targets', {}) : {})
+  useEffect(() => { if (window.self === window.top) writeScreenState('browser-targets', browserTargets) }, [browserTargets])
+  const localhostPreview = browserTargets[browserScope] ?? null
+  const setLocalhostPreview = useCallback((url: string | null) => {
+    setBrowserTargets(current => ({ ...current, [browserScope]: url }))
+  }, [browserScope, setBrowserTargets])
   const [renamingThread, setRenamingThread] = useState<Thread | null>(null)
   const { counts: unreadCounts, refresh: refreshUnread, clear: clearUnread } = useUnreadMessages(
     threads,
     session && pageVisible && historyReady && thread?.id === selectedId && !drawerOpen &&
-      !fileViewer && !fileBrowserPath && !linkViewer && localhostPreview === null && !renamingThread ? selectedId : null,
+      !fileViewer && !fileBrowserPath && localhostPreview === null && !renamingThread ? selectedId : null,
     Boolean(session?.csrf && online && pageVisible && cacheReady),
     session?.csrf,
     thread ? conversationItems(thread, transcripts[thread.id] ?? EMPTY_ITEMS)
@@ -656,19 +659,14 @@ export function App() {
   const stopState = selectedId && stopStates[selectedId]?.turnId === activeTurnId ? stopStates[selectedId] : undefined
   const closeFileViewer = useCallback(() => setFileViewer(null), [])
   const closeFileBrowser = useCallback(() => setFileBrowserPath(null), [])
-  const closeLocalhostPreview = useCallback(() => setLocalhostPreview(null), [])
-  const closeLinkViewer = useCallback(() => setLinkViewer(null), [])
+  const closeLocalhostPreview = useCallback(() => setLocalhostPreview(null), [setLocalhostPreview])
   const openFile = useCallback((reference: LocalFileReference) => {
-    setLinkViewer(null)
     setFileViewer(reference)
   }, [])
   const openLink = useCallback((reference: WebLinkReference) => {
     setFileViewer(null)
-    if (isLocalhostUrl(reference.url)) {
-      setLinkViewer(null)
-      setLocalhostPreview(reference.url)
-    } else setLinkViewer(reference)
-  }, [])
+    setLocalhostPreview(reference.url)
+  }, [setLocalhostPreview])
   const suggestPrompt = useCallback((prompt: string) => {
     setComposer(prompt)
     requestAnimationFrame(() => composerRef.current?.focus())
@@ -1567,7 +1565,7 @@ export function App() {
     setDraftOpen(false)
     draftRef.current = EMPTY_NEW_CONVERSATION
     setNewConversation(EMPTY_NEW_CONVERSATION)
-    setLocalhostPreview(null)
+    setBrowserTargets({})
     clearScreenState()
     sessionEpoch.current += 1
     sendingLocks.current.clear()
@@ -1590,7 +1588,6 @@ export function App() {
     setTranscripts({})
     setSentMessages({})
     setFileViewer(null)
-    setLinkViewer(null)
     setFileBrowserPath(null)
     setRenamingThread(null)
     for (const url of previewUrls.current) URL.revokeObjectURL(url)
@@ -1695,7 +1692,8 @@ export function App() {
 
         <nav className="view-tabs" aria-label="Conversation view">
           <span className="conversation-view-label">Conversation</span>
-          <button type="button" onClick={() => setLocalhostPreview('')}>Localhost</button>
+          <button type="button" onClick={() => setLocalhostPreview('')}>Browser</button>
+          <a className="services-nav-link" href="/services">Services</a>
           <button className="files-tab" type="button" disabled={!thread} onClick={() => thread && setFileBrowserPath(thread.cwd)}>Files</button>
         </nav>
 
@@ -1894,10 +1892,9 @@ export function App() {
             </div>
           </form>
         )}
-        {fileBrowserPath && <FileBrowser key={fileBrowserPath} initialPath={fileBrowserPath} covered={Boolean(fileViewer || linkViewer || localhostPreview !== null)} onClose={closeFileBrowser} onOpenFile={openFile} />}
+        {fileBrowserPath && <FileBrowser key={fileBrowserPath} initialPath={fileBrowserPath} covered={Boolean(fileViewer || localhostPreview !== null)} onClose={closeFileBrowser} onOpenFile={openFile} />}
         {fileViewer && <FileViewer key={fileViewer.path} reference={fileViewer} onClose={closeFileViewer} onOpenFile={setFileViewer} onOpenLink={openLink} />}
-        {localhostPreview !== null && <LocalhostPreview csrf={session.csrf} initialUrl={localhostPreview || undefined} onClose={closeLocalhostPreview} />}
-        {linkViewer && <LinkViewer reference={linkViewer} onClose={closeLinkViewer} />}
+        {localhostPreview !== null && <LocalhostPreview key={browserScope} scope={browserScope} onNavigate={setLocalhostPreview} csrf={session.csrf} initialUrl={localhostPreview || undefined} onClose={closeLocalhostPreview} />}
         {renamingThread && <RenameConversation key={renamingThread.id} thread={renamingThread} online={online && Boolean(session.csrf)} onSave={renameConversation} onClose={closeRename} />}
       </main>
     </div>

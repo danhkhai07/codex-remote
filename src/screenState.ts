@@ -30,6 +30,7 @@ export function validScreenValue(key: string, value: unknown): boolean {
   if (key === 'new-conversation-open') return typeof value === 'boolean'
   if (key === 'new-conversation') return Boolean(record && typeof record.name === 'string' && typeof record.groupId === 'string' && (record.thread === null || (typeof (record.thread as Record<string, unknown>)?.id === 'string' && typeof (record.thread as Record<string, unknown>)?.cwd === 'string')))
   if (key === 'draft-skills') return Boolean(record && Object.values(record).every(value => Array.isArray(value) && value.length <= 20 && value.every(skill => skill && typeof skill.name === 'string' && typeof skill.path === 'string')))
+  if (key === 'browser-targets') return Boolean(record && Object.values(record).every(value => value === null || typeof value === 'string'))
   if (key === 'drafts') return Boolean(record && Object.values(record).every(text => typeof text === 'string'))
   if (key === 'file-viewer') return value === null || Boolean(record && typeof record.path === 'string' && record.path.startsWith('/'))
   if (key === 'link-viewer') return value === null || Boolean(record && typeof record.url === 'string')
