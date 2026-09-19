@@ -93,6 +93,7 @@ export const api = {
   acknowledgeReplies: (id: string, ids: string[], csrf: string, signal?: AbortSignal) => request<ReplySnapshot>(`/api/threads/${encodeURIComponent(id)}/read-state`, {
     method: 'POST', body: JSON.stringify({ ids }), signal,
   }, csrf),
+  workspaceSkills: (workspaceId: string, refresh = false, signal?: AbortSignal) => request<SkillList>(`/api/workspace-skills?workspaceId=${encodeURIComponent(workspaceId)}${refresh ? '&refresh=1' : ''}`, { signal }),
   skills: (id: string, refresh = false, signal?: AbortSignal) => request<SkillList>(`/api/threads/${encodeURIComponent(id)}/skills${refresh ? '?refresh=1' : ''}`, { signal }),
   messageIds: (id: string, signal?: AbortSignal) => request<{ ids: string[] }>(`/api/threads/${encodeURIComponent(id)}/message-ids`, { signal }),
   thread: (id: string, signal?: AbortSignal) => request<ThreadResponse>(`/api/threads/${encodeURIComponent(id)}`, { signal }).then(response => ({ ...response, thread: limitConversation(response.thread) })),

@@ -251,6 +251,12 @@ export class RemoteController {
     await this.#readThreadMetadata(threadId)
   }
 
+  async listWorkspaceSkills(workspaceId: unknown, forceReload = false): Promise<SkillList> {
+    const cwd = this.#workspacePath(workspaceId)
+    const result = await this.appServer.request('skills/list', { cwds: [cwd], forceReload })
+    return normalizeSkills(result, cwd)
+  }
+
   async listSkills(threadId: string, forceReload = false): Promise<SkillList> {
     await this.assertThreadAccess(threadId)
     const cwd = String(this.#loadedThreads.get(threadId)?.cwd ?? '')

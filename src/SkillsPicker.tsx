@@ -2,8 +2,8 @@ import { useEffect, useRef, useState, type RefObject } from 'react'
 import { api } from './api'
 import type { SkillList, SkillSelection } from '../server/skills'
 
-export function SkillsPicker({ threadId, selected, onChange, onClose, disabled, triggerRef }: {
-  threadId: string; selected: SkillSelection[]; onChange: (skills: SkillSelection[]) => void; onClose: () => void; disabled: boolean; triggerRef: RefObject<HTMLButtonElement | null>
+export function SkillsPicker({ threadId, workspaceId, selected, onChange, onClose, disabled, triggerRef }: {
+  threadId?: string; workspaceId?: string; selected: SkillSelection[]; onChange: (skills: SkillSelection[]) => void; onClose: () => void; disabled: boolean; triggerRef: RefObject<HTMLButtonElement | null>
 }) {
   const panel = useRef<HTMLElement>(null)
   useEffect(() => {
@@ -30,11 +30,12 @@ export function SkillsPicker({ threadId, selected, onChange, onClose, disabled, 
   useEffect(() => {
     const controller = new AbortController()
     setResult(null); setError('')
-    void api.skills(threadId, attempt > 0, controller.signal).then(setResult).catch(reason => {
+    const request = threadId ? api.skills(threadId, attempt > 0, controller.signal) : api.workspaceSkills(workspaceId ?? '0', attempt > 0, controller.signal)
+    void request.then(setResult).catch(reason => {
       if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : 'Không tải được skills')
     })
     return () => controller.abort()
-  }, [threadId, attempt])
+  }, [threadId, workspaceId, attempt])
   const matches = result?.skills.filter(skill => `${skill.name} ${skill.description}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())) ?? []
   return <section ref={panel} id="skills-picker" className="skills-picker" aria-label="Available skills">
     <div className="skills-picker-heading"><strong>Skills</strong><button type="button" className="quiet-button" onClick={() => setAttempt(value => value + 1)}>Làm mới</button><button type="button" className="icon-button" onClick={() => { onClose(); triggerRef.current?.focus() }} aria-label="Close skills">×</button></div>

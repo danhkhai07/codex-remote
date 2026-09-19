@@ -191,6 +191,11 @@ describe('Codex Remote HTTP boundary', () => {
     expect((await fetchLocal(port, '/api/work-presence', { ...options, csrf: 'wrong', method: 'POST', body: presenceBody })).status).toBe(403)
     expect((await fetchLocal(port, '/api/work-presence', { ...options, method: 'POST', body: { ...presenceBody, visible: 'yes' } })).status).toBe(400)
 
+    const workspaceSkills = vi.spyOn(controller, 'listWorkspaceSkills').mockResolvedValue({ skills: [], errors: [] })
+    expect((await fetchLocal(port, '/api/workspace-skills?workspaceId=0')).status).toBe(401)
+    expect(workspaceSkills).not.toHaveBeenCalled()
+    expect((await fetchLocal(port, '/api/workspace-skills?workspaceId=0&refresh=1', { cookie })).status).toBe(200)
+    expect(workspaceSkills).toHaveBeenCalledWith('0', true)
     const skills = vi.spyOn(controller, 'listSkills').mockResolvedValue({ skills: [], errors: [] })
     expect((await fetchLocal(port, '/api/threads/chat/skills')).status).toBe(401)
     expect(skills).not.toHaveBeenCalled()

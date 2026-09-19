@@ -21,6 +21,7 @@ class StubAppServer extends CodexAppServer {
 
   override async request(method: string, params: unknown): Promise<unknown> {
     this.calls.push({ method, params })
+    if (method === 'skills/list') return { data: [] }
     if (method === 'thread/list') {
       return {
         data: [
@@ -75,6 +76,15 @@ class StubAppServer extends CodexAppServer {
 }
 
 describe('RemoteController', () => {
+  it('lists workspace skills without creating a conversation and rejects unknown workspaces', async () => {
+    const app = new StubAppServer()
+    const controller = new RemoteController(config, app)
+    await controller.listWorkspaceSkills('0', true)
+    expect(app.calls).toEqual([{ method: 'skills/list', params: { cwds: ['/workspace'], forceReload: true } }])
+    await expect(controller.listWorkspaceSkills('/outside')).rejects.toThrow()
+    expect(app.calls).toHaveLength(1)
+  })
+
   it('notifies once per successful final reply, never on progress or interrupted turns', async () => {
     const app = new StubAppServer()
     const controller = new RemoteController(config, app)

@@ -443,6 +443,10 @@ export function createRemoteHttpServer(
         json(res, 200, readState.acknowledge(readStateThreadId, body.ids as string[]))
         return
       }
+      if (url.pathname === '/api/workspace-skills' && method === 'GET') {
+        json(res, 200, await controller.listWorkspaceSkills(url.searchParams.get('workspaceId'), url.searchParams.get('refresh') === '1'))
+        return
+      }
       const skillsThreadId = routeThread(url.pathname, '/skills')
       if (skillsThreadId && method === 'GET') {
         json(res, 200, await controller.listSkills(skillsThreadId, url.searchParams.get('refresh') === '1'))
