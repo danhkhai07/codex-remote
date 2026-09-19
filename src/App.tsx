@@ -1,3 +1,4 @@
+import { EMPTY_NEW_CONVERSATION, NEW_CONVERSATION_KEY, prepareNewConversation, type NewConversation } from './newConversation'
 import { SkillsPicker } from './SkillsPicker'
 import type { SkillSelection } from '../server/skills'
 import { ChangeEvent, Fragment, FormEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -10,7 +11,7 @@ import { ConversationActions } from './ConversationActions'
 import { ConversationFolders } from './ConversationFolders'
 import { useConversationGroups } from './useConversationGroups'
 import { ThreadHistoryCache } from './threadHistoryCache'
-import { clearScreenState, flushScreenState, useScreenState } from './screenState'
+import { clearScreenState, flushScreenState, writeScreenState, useScreenState } from './screenState'
 import { useInterrupt, turnHasEnded } from './useInterrupt'
 import { isPreviewImage } from './attachmentFiles'
 import { useDraftImages, type ComposerImage } from './useDraftImages'
@@ -555,10 +556,17 @@ export function App() {
   const [authLoading, setAuthLoading] = useState(true)
   const [threads, setThreads] = useState<Thread[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [newConversation, setNewConversation] = useScreenState<NewConversation>('new-conversation', EMPTY_NEW_CONVERSATION)
+  const [draftOpen, setDraftOpen] = useScreenState('new-conversation-open', false)
+  const draftOpenRef = useRef(draftOpen)
+  draftOpenRef.current = draftOpen
+  const draftRef = useRef(newConversation)
+  draftRef.current = newConversation
+  const composerKey = draftOpen ? NEW_CONVERSATION_KEY : selectedId
   const [skillsOpen, setSkillsOpen] = useState(false)
   const skillsButtonRef = useRef<HTMLButtonElement>(null)
   const closeSkills = useCallback(() => setSkillsOpen(false), [])
-  const [selectedSkills, setSelectedSkills, setThreadSkills, clearSkills] = useThreadState<SkillSelection[]>(selectedId, EMPTY_SKILLS, 'draft-skills')
+  const [selectedSkills, setSelectedSkills, setThreadSkills, clearSkills] = useThreadState<SkillSelection[]>(composerKey, EMPTY_SKILLS, 'draft-skills')
   const [thread, setThread] = useState<Thread | null>(null)
   const [historyReady, setHistoryReady] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
@@ -570,19 +578,19 @@ export function App() {
   const [transcripts, setTranscripts] = useState<Record<string, TranscriptItem[]>>({})
   const [sentMessages, setSentMessages] = useState<Record<string, SentMessage>>({})
   const previewUrls = useRef(new Set<string>())
-  const [attachments, setAttachments, clearAttachments, imagesReady] = useDraftImages(selectedId, previewUrls)
-  const [uploadStatus, setUploadStatus, , clearUploadStatus] = useThreadState(selectedId, '')
-  const [sendError, setSendError, , clearSendErrors] = useThreadState(selectedId, '')
+  const [attachments, setAttachments, clearAttachments, imagesReady] = useDraftImages(composerKey, previewUrls)
+  const [uploadStatus, setUploadStatus, , clearUploadStatus] = useThreadState(composerKey, '')
+  const [sendError, setSendError, , clearSendErrors] = useThreadState(composerKey, '')
   const [pending, setPending] = useState<PendingRequest[]>([])
   const [models, setModels] = useState<ModelOption[]>([])
-  const { settings, update: setConversationSettings, migrateLegacy, saveError: settingsSaveError } = useConversationSettings(selectedId)
+  const { settings, update: setConversationSettings, migrateLegacy, saveForThread: saveThreadSettings, saveError: settingsSaveError } = useConversationSettings(composerKey)
   const selectedModel = settings?.model ?? null
   const selectedEffort = settings?.effort ?? null
   const [yoloMode, setYoloMode, yoloSaveError] = useYoloPreference()
   const [commandNotice, setCommandNotice] = useScreenState<CommandNotice | null>('command-notice', null)
   const [slashIndex, setSlashIndex] = useState(0)
   const [activeTurnId, , setThreadTurn, clearThreadTurns, activeTurns] = useThreadState<string | null>(selectedId, null)
-  const [composer, setComposer, , clearDrafts] = useThreadState(selectedId, '', 'drafts')
+  const [composer, setComposer, , clearDrafts] = useThreadState(composerKey, '', 'drafts')
   const [drawerOpen, setDrawerOpen] = useScreenState('drawer', false)
   const [connected, setConnected] = useState(false)
   const [cacheReady, setCacheReady] = useState(false)
@@ -596,7 +604,7 @@ export function App() {
   const [notificationBusy, setNotificationBusy] = useState(false)
   const [operationBusy, setBusy] = useState(false)
   const [sending, setSending] = useState<Record<string, boolean>>({})
-  const busy = operationBusy || !imagesReady || Boolean(selectedId && sending[selectedId])
+  const busy = operationBusy || !imagesReady || Boolean(composerKey && sending[composerKey])
   const [error, setError] = useState('')
   const [fileViewer, setFileViewer] = useScreenState<LocalFileReference | null>('file-viewer', null)
   const [fileBrowserPath, setFileBrowserPath] = useScreenState<string | null>('file-browser', null)
@@ -806,6 +814,9 @@ export function App() {
     historyRequest.current?.abort()
     const request = new AbortController()
     historyRequest.current = request
+    draftOpenRef.current = false
+    setDraftOpen(false)
+    setSkillsOpen(false)
     setSelectedId(target.id)
     selectedRef.current = target.id
     if (!preserveVisibleCache) setDrawerOpen(false)
@@ -855,10 +866,12 @@ export function App() {
         if (cached.thread) threadCache.current.remember(cached.thread)
         setThreads(cached.threads)
         migrateLegacy(cached.selectedId, cached.thread?.model)
-        setSelectedId(cached.selectedId)
-        selectedRef.current = cached.selectedId
-        setThread(cached.thread)
-        setHistoryReady(Boolean(cached.thread))
+        if (!draftOpenRef.current) {
+          setSelectedId(cached.selectedId)
+          selectedRef.current = cached.selectedId
+          setThread(cached.thread)
+          setHistoryReady(Boolean(cached.thread))
+        }
         setTranscripts(cached.transcripts)
         setThreadTurn(cached.selectedId, cached.activeTurnId)
         eventCursor.current = cached.lastEventId
@@ -875,7 +888,7 @@ export function App() {
         setPending(pendingResponse.data)
         setModels(modelResponse.data)
         const preferred = items.find((item) => item.id === cached?.selectedId) ?? items[0]
-        if (preferred && (!selectedRef.current || selectedRef.current === cached?.selectedId)) await openThread(preferred, session.csrf, preferred.id === cached?.selectedId)
+        if (!draftOpenRef.current && preferred && (!selectedRef.current || selectedRef.current === cached?.selectedId)) await openThread(preferred, session.csrf, preferred.id === cached?.selectedId)
       } catch (requestError) {
         if (!cancelled && !cached) setError(errorMessage(requestError))
       }
@@ -1091,8 +1104,8 @@ export function App() {
 
   const selectedPending = useMemo(() => pending.filter((request) => {
     const id = request.params.threadId
-    return !selectedId || typeof id !== 'string' || id === selectedId
-  }), [pending, selectedId])
+    return !draftOpen && (!selectedId || typeof id !== 'string' || id === selectedId)
+  }), [pending, selectedId, draftOpen])
   const effectiveModel = selectedModel ?? thread?.model ?? models.find((model) => model.isDefault)?.model ?? null
   const effectiveModelOption = models.find((model) => model.model === effectiveModel)
   const effortOptions = effectiveModelOption?.supportedReasoningEfforts ?? []
@@ -1157,20 +1170,32 @@ export function App() {
     return () => cancelAnimationFrame(frame)
   }, [composer, thread?.id])
 
-  async function createThread(groupId?: string) {
-    if (!session || busy) return
-    setBusy(true)
+  function createThread(groupId?: string) {
+    if (!session || busy || sendingLocks.current.has(NEW_CONVERSATION_KEY)) return
+    const previous = currentView.current
+    if (previous.thread && previous.ready) threadCache.current.remember(previous.thread)
+    historyRequest.current?.abort()
+    openSequence.current++
+    selectedRef.current = null
+    setSelectedId(null)
+    setThread(null)
+    setHistoryReady(false)
+    setHistoryLoading(false)
+    draftOpenRef.current = true
+    setDraftOpen(true)
+    if (groupId !== undefined) setNewConversation(current => ({ ...current, groupId }))
+    setDrawerOpen(false)
+    setSkillsOpen(false)
+    setCommandNotice(null)
     setError('')
-    try {
-      const response = await api.createThread(session.workspaces[0]?.id ?? '0', session.csrf, yoloMode, groupId)
-      await refreshGroups()
-      await refreshThreads()
-      await openThread(response.thread)
-    } catch (requestError) {
-      setError(errorMessage(requestError))
-    } finally {
-      setBusy(false)
-    }
+  }
+
+  function rememberNewThread(created: Thread) {
+    const next = { ...draftRef.current, thread: created }
+    draftRef.current = next
+    setNewConversation(next)
+    writeScreenState('new-conversation', next)
+    flushScreenState()
   }
 
   function showCommandNotice(title: string, lines: CommandNotice['lines']) {
@@ -1314,8 +1339,8 @@ export function App() {
 
   async function submitInstruction(event: FormEvent) {
     event.preventDefault()
-    if (!session || !thread || (!composer.trim() && attachments.length === 0)) return
-    if (!historyReady) { setSendError('Wait for this conversation to load. Your draft is kept.'); return }
+    if (!session || (!thread && !draftOpen) || (!composer.trim() && attachments.length === 0)) return
+    if (!draftOpen && !historyReady) { setSendError('Wait for this conversation to load. Your draft is kept.'); return }
     if (!online || !session.csrf) { setSendError('Reconnecting… Your draft is kept. Send it when the connection returns.'); return }
     const instruction = composer
     const slashCommand = parseSlashCommand(instruction)
@@ -1323,28 +1348,37 @@ export function App() {
       await executeSlashCommand(slashCommand.name, slashCommand.argument)
       return
     }
-    if (busy || sendingLocks.current.has(thread.id)) return
+    if (!composerKey || busy || sendingLocks.current.has(composerKey)) return
+    if (draftOpen && newConversation.thread && (activeTurns[newConversation.thread.id] || sendingLocks.current.has(newConversation.thread.id))) { setSendError('This conversation is already starting or working. Wait for it to finish before retrying.'); return }
+    if (draftOpen && !newConversation.name.trim()) { setSendError('Give this conversation a name before sending.'); return }
     if (activeTurnId) {
       setError('Your draft is saved here. Send it when this turn finishes, or stop the turn first.')
       return
     }
     if (effectiveModel) setConversationSettings({ model: effectiveModel, effort: effectiveEffort })
-    sendingLocks.current.add(thread.id)
+    const lockKey = composerKey
+    sendingLocks.current.add(lockKey)
     setSendError('')
-    setSending(current => ({ ...current, [thread.id]: true }))
-    setComposer('')
+    setSending(current => ({ ...current, [lockKey]: true }))
+    if (!draftOpen) setComposer('')
     setError('')
-    const sendingThreadId = thread.id
+    let sendingThreadId = thread?.id ?? newConversation.thread?.id ?? null
+    const reserveNewThread = (created: Thread) => {
+      sendingThreadId = created.id
+      sendingLocks.current.add(created.id)
+      setSending(current => ({ ...current, [created.id]: true }))
+    }
+    if (draftOpen && newConversation.thread) reserveNewThread(newConversation.thread)
     const epoch = sessionEpoch.current
     const sendingSkills = selectedSkills
     const sendingImages = attachments
-    setAttachments([])
+    if (!draftOpen) setAttachments([])
     const sent: SentMessage = {
       text: instruction,
       files: sendingImages.filter(image => !isPreviewImage(image.file)).map(image => ({ name: image.file.name, size: image.file.size })),
       images: sendingImages.filter(image => isPreviewImage(image.file)).map(image => ({ name: image.file.name, previewUrl: image.previewUrl })),
     }
-    setSentMessages(current => ({ ...current, [sendingThreadId]: sent }))
+    if (sendingThreadId) setSentMessages(current => ({ ...current, [sendingThreadId!]: sent }))
     const uploadedIds: string[] = []
     try {
       for (const [index, image] of sendingImages.entries()) {
@@ -1352,8 +1386,23 @@ export function App() {
         uploadedIds.push((await api.uploadAttachment(image.file, session.csrf)).id)
         if (epoch !== sessionEpoch.current) return
       }
+      let target = thread
+      if (draftOpen) {
+        setUploadStatus('Creating conversation…')
+        target = await prepareNewConversation(newConversation, session.workspaces[0]?.id ?? '0', session.csrf, yoloMode, created => {
+          if (epoch !== sessionEpoch.current) throw new Error('Session changed')
+          reserveNewThread(created)
+          rememberNewThread(created)
+        })
+        if (epoch !== sessionEpoch.current) return
+        sendingThreadId = target.id
+        if (effectiveModel) saveThreadSettings(target.id, { model: effectiveModel, effort: effectiveEffort })
+        setSentMessages(current => ({ ...current, [target!.id]: sent }))
+      }
+      if (!target) throw new Error('Conversation is unavailable')
+      const targetId = target.id
       setUploadStatus('Starting Codex…')
-      const response = await api.startTurn(thread.id, instruction, session.csrf, {
+      const response = await api.startTurn(targetId, instruction, session.csrf, {
         model: effectiveModel ?? undefined,
         effort: effectiveEffort ?? undefined,
         fullAccess: yoloMode,
@@ -1361,23 +1410,50 @@ export function App() {
         skills: sendingSkills,
       })
       if (epoch !== sessionEpoch.current) return
-      setThreadSkills(sendingThreadId, current => current.filter(skill => !sendingSkills.some(sent => sent.path === skill.path)))
+      setThreadSkills(lockKey, current => current.filter(skill => !sendingSkills.some(sent => sent.path === skill.path)))
       if (!completedTurns.current.has(response.turn.id)) {
-        setSentMessages(current => ({ ...current, [sendingThreadId]: { ...sent, turnId: response.turn.id } }))
-        setThreadTurn(sendingThreadId, response.turn.id)
+        setSentMessages(current => ({ ...current, [targetId]: { ...sent, turnId: response.turn.id } }))
+        setThreadTurn(targetId, response.turn.id)
+      }
+      if (draftOpen) {
+        setComposer('')
+        setAttachments([])
+        draftRef.current = EMPTY_NEW_CONVERSATION
+        setNewConversation(EMPTY_NEW_CONVERSATION)
+        writeScreenState('new-conversation', EMPTY_NEW_CONVERSATION)
+        // Navigation during a send must not pull the user away from another conversation.
+        if (draftOpenRef.current) {
+          draftOpenRef.current = false
+          setDraftOpen(false)
+          setSkillsOpen(false)
+          openSequence.current++
+          selectedRef.current = targetId
+          setSelectedId(targetId)
+          setThread(target)
+          setHistoryReady(true)
+          setHistoryLoading(false)
+        }
+        void refreshGroups()
+        void refreshThreads().catch(() => undefined)
       }
     } catch (requestError) {
       await Promise.allSettled(uploadedIds.map(id => api.deleteAttachment(id, session.csrf)))
       if (epoch !== sessionEpoch.current) return
-      setSentMessages(current => { const next = { ...current }; delete next[sendingThreadId]; return next })
-      setComposer(current => current ? `${instruction}\n${current}` : instruction)
-      setAttachments(current => [...sendingImages, ...current])
+      setSentMessages(current => { const next = { ...current }; if (sendingThreadId) delete next[sendingThreadId]; return next })
+      if (!draftOpen) setComposer(current => current ? `${instruction}\n${current}` : instruction)
+      if (!draftOpen) setAttachments(current => [...sendingImages, ...current])
       setSendError(errorMessage(requestError))
     } finally {
       if (epoch === sessionEpoch.current) {
         setUploadStatus('')
-        sendingLocks.current.delete(sendingThreadId)
-        setSending(current => { const next = { ...current }; delete next[sendingThreadId]; return next })
+        sendingLocks.current.delete(lockKey)
+        if (draftOpen && sendingThreadId) sendingLocks.current.delete(sendingThreadId)
+        setSending(current => {
+          const next = { ...current }
+          delete next[lockKey]
+          if (draftOpen && sendingThreadId) delete next[sendingThreadId]
+          return next
+        })
       }
     }
   }
@@ -1480,6 +1556,10 @@ export function App() {
     clearGroups()
     clearSkills()
     setSkillsOpen(false)
+    draftOpenRef.current = false
+    setDraftOpen(false)
+    draftRef.current = EMPTY_NEW_CONVERSATION
+    setNewConversation(EMPTY_NEW_CONVERSATION)
     clearScreenState()
     sessionEpoch.current += 1
     sendingLocks.current.clear()
@@ -1582,7 +1662,7 @@ export function App() {
           <button className="icon-button mobile-only" onClick={() => setDrawerOpen(true)} aria-label="Open conversations">☰</button>
           <div className="workspace-title">
             <div className="workspace-title-line">
-              <h1>{thread ? threadTitle(thread) : 'Codex Remote'}</h1>
+              <h1>{draftOpen ? 'New conversation' : thread ? threadTitle(thread) : 'Codex Remote'}</h1>
             </div>
             <p>
               {thread ? <>{shortWorkspace(thread.cwd)}{effectiveModel ? ` · ${effectiveModel}` : ''}{effectiveEffort ? ` · ${effectiveEffort}` : ''}</> : 'Private workspace agent'}
@@ -1629,7 +1709,31 @@ export function App() {
             />
           ))}
 
-          {!thread && threads.length === 0 && (
+          {draftOpen && <section className="new-conversation-setup" aria-label="New conversation setup">
+            <div className="new-conversation-heading"><h2>A fresh conversation</h2>
+              <button type="button" className="quiet-button" disabled={busy} onClick={() => {
+                if (threads[0]) void openThread(threads[0]).catch(reason => setError(errorMessage(reason)))
+                else { draftOpenRef.current = false; setDraftOpen(false) }
+              }}>Cancel</button>
+            </div>
+            <p>Name it, choose a folder, then send your first message.</p>
+            <div className="new-conversation-fields">
+              <label htmlFor="new-conversation-name">Conversation name
+                <input id="new-conversation-name" form="message-composer" autoFocus required={!parseSlashCommand(composer)} maxLength={200} placeholder="What are you working on?" value={newConversation.name} disabled={busy}
+                  onChange={event => setNewConversation(current => ({ ...current, name: event.target.value }))} />
+              </label>
+              <label htmlFor="new-conversation-folder">Conversation folder
+                <select aria-label="Conversation folder" id="new-conversation-folder" value={newConversation.groupId} disabled={busy || !groups.snapshot} onChange={event => setNewConversation(current => ({ ...current, groupId: event.target.value }))}>
+                  <option value="">Ungrouped</option>
+                  {newConversation.groupId && !groups.snapshot?.groups.some(group => group.id === newConversation.groupId) && <option value={newConversation.groupId}>Folder unavailable — choose another</option>}
+                  {groups.snapshot?.groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}
+                </select>
+              </label>
+            </div>
+            {groups.error && <p role="alert">{groups.error} <button className="quiet-button" type="button" onClick={() => void refreshGroups()}>Retry</button></p>}
+            <p className="new-conversation-hint">Created only when you send. Your draft stays on this device.</p>
+          </section>}
+          {!draftOpen && !thread && threads.length === 0 && (
             <div className="empty-state">
               <div className="empty-orbit" aria-hidden="true">✦</div>
               <h2>Start your first conversation</h2>
@@ -1637,7 +1741,7 @@ export function App() {
               <button className="primary-button" onClick={() => void createThread()} disabled={busy}>New conversation</button>
             </div>
           )}
-          {!thread && threads.length > 0 && <div className="loading-inline"><span className="spinner" /> Loading conversation…</div>}
+          {!draftOpen && !thread && threads.length > 0 && <div className="loading-inline"><span className="spinner" /> Loading conversation…</div>}
           {thread && !historyReady && <div className="loading-inline" role="status">
             {historyLoading ? <><span className="spinner" />Loading conversation…</> : <><span>{online ? 'Conversation could not be loaded.' : 'This conversation is not cached on this device yet.'}</span><button type="button" className="quiet-button" disabled={!online} onClick={() => void openThread(thread).catch(reason => setError(errorMessage(reason)))}>Retry</button></>}
           </div>}
@@ -1645,8 +1749,8 @@ export function App() {
           {thread && historyReady && <Conversation thread={thread} activeTurnId={activeTurnId} items={transcripts[thread.id] ?? EMPTY_ITEMS} pendingMessage={sentMessages[thread.id]} yoloMode={yoloMode} onOpenFile={openFile} onOpenLink={openLink} onSuggestion={suggestPrompt} />}
         </TranscriptViewport>
 
-        {thread && (
-          <form className="composer" onSubmit={submitInstruction}
+        {(thread || draftOpen) && (
+          <form id="message-composer" className="composer" onSubmit={submitInstruction}
             onDragOver={event => { if (event.dataTransfer.types.includes('Files')) event.preventDefault() }}
             onDrop={event => {
               if (!event.dataTransfer.files.length) return
@@ -1665,7 +1769,7 @@ export function App() {
                 className="composer-model"
                 aria-label="Model for future turns"
                 value={effectiveModel ?? ''}
-                disabled={models.length === 0}
+                disabled={(draftOpen && busy) || models.length === 0}
                 onChange={(event) => {
                   const selected = models.find((model) => model.model === event.target.value)
                   if (!selected) return
@@ -1686,7 +1790,7 @@ export function App() {
                 className="composer-effort"
                 aria-label="Reasoning effort for future turns"
                 value={effectiveEffort ?? ''}
-                disabled={!effectiveModel || effortOptions.length === 0}
+                disabled={(draftOpen && busy) || !effectiveModel || effortOptions.length === 0}
                 onChange={(event) => {
                   const selected = effortOptions.find((entry) => entry.reasoningEffort === event.target.value)
                   if (!selected || !effectiveModel) return
@@ -1704,7 +1808,7 @@ export function App() {
               <button type="button" className="composer-status" ref={skillsButtonRef} disabled={busy} aria-expanded={skillsOpen} aria-controls={skillsOpen ? 'skills-picker' : undefined} onClick={() => setSkillsOpen(value => !value)}>Skills{selectedSkills.length ? ` (${selectedSkills.length})` : ''}</button>
               <button type="button" className="composer-status" disabled={busy} onClick={() => void executeSlashCommand('status', '')}>Usage & status</button>
             </div>
-            {skillsOpen && thread && <SkillsPicker key={thread.id} threadId={thread.id} selected={selectedSkills} onChange={setSelectedSkills} onClose={closeSkills} triggerRef={skillsButtonRef} disabled={busy} />}
+            {skillsOpen && <SkillsPicker key={composerKey} threadId={draftOpen ? undefined : thread?.id} workspaceId={session.workspaces[0]?.id} selected={selectedSkills} onChange={setSelectedSkills} onClose={closeSkills} triggerRef={skillsButtonRef} disabled={busy} />}
             {selectedSkills.length > 0 && <div className="selected-skills" aria-label="Selected skills">{selectedSkills.map(skill => <button type="button" key={skill.path} disabled={busy} aria-label={`Remove skill ${skill.name}`} onClick={() => setSelectedSkills(current => current.filter(item => item.path !== skill.path))}>{skill.name} ×</button>)}</div>}
             {settingsSaveError && <p role="status" className="attachment-hint">{settingsSaveError}</p>}
             {commandNotice && <LocalCommandResult notice={commandNotice} onClose={() => setCommandNotice(null)} />}
@@ -1734,6 +1838,7 @@ export function App() {
                 id="instruction"
                 enterKeyHint="enter"
                 value={composer}
+                readOnly={draftOpen && busy}
                 onChange={(event) => setComposer(event.target.value)}
                 aria-expanded={slashOptions.length > 0}
                 aria-controls={slashOptions.length > 0 ? 'slash-command-menu' : undefined}
@@ -1771,7 +1876,7 @@ export function App() {
               {activeTurnId ? (
                 <button type="button" className="stop-button" onClick={() => void interrupt()} disabled={stopState?.phase === 'stopping' || !online || !session.csrf} aria-label={stopState?.phase === 'stopping' ? 'Stopping Codex' : stopState?.phase === 'error' ? 'Retry stop' : 'Stop Codex'} aria-busy={stopState?.phase === 'stopping'}>{stopState?.phase === 'stopping' ? <span className="spinner" /> : '■'}</button>
               ) : (
-                <button type="submit" className="send-button" disabled={busy || !historyReady || !online || !session.csrf || (!composer.trim() && attachments.length === 0)} aria-label="Send instruction">↑</button>
+                <button type="submit" className="send-button" disabled={busy || (!draftOpen && !historyReady) || !online || !session.csrf || (!composer.trim() && attachments.length === 0)} aria-label="Send instruction">↑</button>
               )}
             </div>
             <div className="composer-meta">

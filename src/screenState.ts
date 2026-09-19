@@ -27,6 +27,8 @@ export function validScreenValue(key: string, value: unknown): boolean {
   if (key.startsWith('pptx:') && key.endsWith(':page')) return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1
   if (key.startsWith('pptx:') && key.endsWith(':zoom')) return typeof value === 'number' && Number.isFinite(value) && value >= 0.5 && value <= 3
   const record = value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+  if (key === 'new-conversation-open') return typeof value === 'boolean'
+  if (key === 'new-conversation') return Boolean(record && typeof record.name === 'string' && typeof record.groupId === 'string' && (record.thread === null || (typeof (record.thread as Record<string, unknown>)?.id === 'string' && typeof (record.thread as Record<string, unknown>)?.cwd === 'string')))
   if (key === 'draft-skills') return Boolean(record && Object.values(record).every(value => Array.isArray(value) && value.length <= 20 && value.every(skill => skill && typeof skill.name === 'string' && typeof skill.path === 'string')))
   if (key === 'drafts') return Boolean(record && Object.values(record).every(text => typeof text === 'string'))
   if (key === 'file-viewer') return value === null || Boolean(record && typeof record.path === 'string' && record.path.startsWith('/'))

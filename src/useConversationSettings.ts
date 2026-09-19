@@ -55,5 +55,5 @@ export function useConversationSettings(threadId: string | null) {
     writeScreenState('model', null)
     writeScreenState('effort', null)
   }, [save])
-  return { settings: threadId ? values[threadId] : undefined, update, migrateLegacy, saveError }
+  return { settings: threadId ? values[threadId] : undefined, update, saveForThread: save, migrateLegacy, saveError }
 }
