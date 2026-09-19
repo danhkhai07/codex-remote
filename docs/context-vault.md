@@ -1,15 +1,39 @@
-# Shared conversation context
+# Shared knowledge vault
 
-Codex Remote keeps shared notes and exported conversation text in the configured context vault (default `/root/VAULTS/Codex-Context`). `CODEX_REMOTE_CONTEXT_VAULT` selects another absolute location.
+Codex Remote uses an Obsidian vault to accumulate the user's information, intentions, preferences, reusable patterns, ideas, projects, and decisions across conversations. The default location is `~/VAULTS/Codex-Context` (`/root/VAULTS/Codex-Context` on this server); `CODEX_REMOTE_CONTEXT_VAULT` selects another absolute location.
 
-- `Shared/Context.md` holds facts and preferences shared by every conversation.
-- `Groups/<id>/Context.md` holds notes shared by conversations assigned to that folder.
-- `Conversations/<id>/Context.md` holds the conversation's working notes and handoff.
-- `Index.md` and the group/conversation indexes link the generated user/assistant transcripts.
+Open that folder as a vault in Obsidian and start at `00_Home.md`. The vault contains Markdown notes, YAML properties, internal links, templates, and a minimal `.obsidian` configuration. It needs no community plugin. Obsidian supports both [wikilinks and Markdown internal links](https://obsidian.md/help/links), with [properties stored in YAML frontmatter](https://obsidian.md/help/properties).
 
-Before each turn, the server supplies fresh, bounded excerpts from shared, group, and conversation notes in a separate context message. The user's message remains unchanged. Codex can read the linked files and relevant histories when it needs more detail. This shares available context without loading every conversation into each prompt.
+```text
+Codex-Context/
+├── 00_Home.md             # Human-maintained entry point
+├── Index.md               # Generated map of topic notes and groups
+├── Profile/               # User facts, preferences, and constraints
+├── Patterns/              # Reusable approaches and observed patterns
+├── Projects/              # Goals, requirements, and domain understanding
+├── Ideas/                 # Ideas, motivation, and open questions
+├── Decisions/             # Decisions, rationale, and superseded choices
+├── References/            # Useful information and authoritative sources
+├── Inbox/                 # Observations that need clarification or a home
+├── Templates/             # Knowledge, pattern, idea, and decision templates
+├── Shared/Context.md      # Concise common orientation and links
+├── Groups/<id>/Context.md # Knowledge links and scope for a conversation group
+├── Conversations/<id>/    # Short task handoff and generated source history
+├── Sources.md             # Generated index of source conversations
+└── .obsidian/             # Obsidian preferences (existing settings preserved)
+```
 
-Edit `Context.md` notes deliberately, preserving other conversations' contributions. Generated indexes, transcript exports, and `.state` are managed by the application. Deleting a folder from the UI removes the grouping but retains its notes on disk.
+## Read and capture knowledge
+
+Before each turn, Codex receives the capture workflow plus bounded excerpts of the shared orientation, profile summary, knowledge map, group context, and task handoff. The note excerpts total at most 24 KB; workflow instructions and paths add overhead. Detailed topic notes and source transcripts are read from disk when relevant. This keeps the entire historical archive out of the prompt.
+
+The workflow instructs Codex to read relevant existing knowledge at task start and update topic notes before finishing a substantive task that establishes reusable knowledge, or whenever the user asks it to remember something. It should merge into the existing subject note, link related topics and its source conversation, and record scope and date. An explicit user decision is `confirmed`; an inferred recurring pattern is `observed`; an idea remains `proposed` until decided. Corrections supersede old knowledge. Routine acknowledgements and transient status messages need no new note.
+
+This capture is performed by the active Codex agent with its file tools. Exporting a transcript does not itself extract knowledge, and the gateway does not start extra model turns to summarize every message. Existing histories are evidence for deliberate distillation, not automatically confirmed facts. A group's Context.md connects its relevant project and topic notes; detailed knowledge lives independently of conversation membership.
+
+The agent can write topic folders even in workspace-write mode. The application refreshes the topic map before each turn, preserving human-written notes, source histories, assignments, and Obsidian settings. It only regenerates designated indexes and source exports. Deleting a conversation folder retains its context on disk.
+
+`Knowledge-Workflow.md` documents the note lifecycle and `Templates/` provides note shapes. Keep `Profile/Context.md` and `Shared/Context.md` short because they are read each turn. Read before editing, merge concurrent updates, and cite source evidence. Avoid copying secrets or treating assistant suggestions as user decisions.
 
 ## Import existing conversations
 
