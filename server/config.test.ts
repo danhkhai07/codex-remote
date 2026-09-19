@@ -14,3 +14,8 @@ it('defaults file access to workspaces and allows an independent filesystem root
   expect(config.workspaceRoots).toEqual(['/tmp'])
   expect(() => loadConfig({ ...env, CODEX_REMOTE_FILE_ROOTS: 'relative' })).toThrow('absolute')
 })
+
+it('accepts a new absolute context vault path without requiring it to exist', () => {
+  expect(loadConfig({ ...env, CODEX_REMOTE_CONTEXT_VAULT: '/tmp/new-context-vault' }).contextVaultPath).toBe('/tmp/new-context-vault')
+  expect(() => loadConfig({ ...env, CODEX_REMOTE_CONTEXT_VAULT: 'relative' })).toThrow('must be absolute')
+})

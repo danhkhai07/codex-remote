@@ -1,5 +1,6 @@
 import { realpathSync, statSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
+import { homedir } from 'node:os'
 
 export type RemoteConfig = {
   host: string
@@ -11,6 +12,7 @@ export type RemoteConfig = {
   codexBin: string
   workspaceRoots: string[]
   fileRoots?: string[]
+  contextVaultPath?: string
   production: boolean
 }
 
@@ -65,7 +67,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RemoteConfig {
     throw new Error('CODEX_REMOTE_PUBLIC_ORIGIN must not contain a path, query, or fragment')
   }
 
+  const contextVaultPath = env.CODEX_REMOTE_CONTEXT_VAULT?.trim() || resolve(homedir(), 'VAULTS', 'Codex-Context')
+  if (!isAbsolute(contextVaultPath)) throw new Error('CODEX_REMOTE_CONTEXT_VAULT must be absolute')
+
   return {
+    contextVaultPath: resolve(contextVaultPath),
     host: env.CODEX_REMOTE_HOST?.trim() || '127.0.0.1',
     port: parsePort(env.CODEX_REMOTE_PORT),
     publicOrigin,

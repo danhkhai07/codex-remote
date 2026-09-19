@@ -1,3 +1,4 @@
+import { ContextVaultError, type ContextVault } from './context-vault.js'
 import { normalizeSkills, validateSkills, type SkillList } from './skills.js'
 import { completedReplyIds } from './completed-replies.js'
 import type { UploadedFile } from './attachments.js'
@@ -55,13 +56,14 @@ export class RemoteController {
   onReplyCompleted?: (threadId: string, ids: string[]) => void
   onTurnCompleted?: (threadId: string, turnId: string, answer: string) => void
 
-  constructor(config: RemoteConfig, appServer = new CodexAppServer(config.codexBin)) {
+  constructor(config: RemoteConfig, appServer = new CodexAppServer(config.codexBin), readonly contextVault?: ContextVault) {
     this.#config = config
     this.appServer = appServer
 
     appServer.on('message', (message: AppServerMessage) => this.events.publish('codex', message))
     appServer.on('notification', (message: AppServerMessage) => {
       this.#captureAgentMessage(message)
+      this.#exportContextEvent(message)
       if (message.method === 'serverRequest/resolved') this.#resolvePendingFromNotification(message.params)
       if (message.method === 'turn/completed') {
         const params = asObject(message.params)
@@ -95,6 +97,34 @@ export class RemoteController {
 
   stop(): void {
     this.appServer.stop()
+  }
+
+  #recordContext(thread: Record<string, unknown>): void {
+    if (!this.contextVault) return
+    try { this.contextVault.recordThread(thread) }
+    catch (error) { console.error('Unable to export conversation context:', error instanceof Error ? error.message : error) }
+  }
+
+  #exportContextEvent(message: AppServerMessage): void {
+    if (!this.contextVault || !['item/completed', 'turn/completed'].includes(message.method ?? '')) return
+    const params = asObject(message.params)
+    if (typeof params.threadId !== 'string') return
+    const thread = this.#loadedThreads.get(params.threadId)
+    if (!thread) return
+    if (message.method === 'item/completed') {
+      const item = asObject(params.item)
+      if (typeof params.turnId !== 'string' || !['userMessage', 'agentMessage'].includes(String(item.type))) return
+      this.#recordContext({ ...thread, historyCacheTruncated: false, turns: [{ id: params.turnId, items: [item] }] })
+    } else {
+      const turn = asObject(params.turn)
+      if (typeof turn.id !== 'string') return
+      this.#recordContext({ ...thread, historyCacheTruncated: false, turns: [turn] })
+      // Native history can be unavailable; item/completed exports already preserve live messages.
+      void this.#readFullThread(params.threadId).then(result => {
+        this.#assertAllowedThread(result)
+        this.#recordContext(threadFromResult(result))
+      }).catch(() => {})
+    }
   }
 
   #captureAgentMessage(message: AppServerMessage): void {
@@ -196,9 +226,13 @@ export class RemoteController {
     return this.appServer.request('account/rateLimits/read', {})
   }
 
-  async createThread(workspaceId: unknown, fullAccess: unknown = false): Promise<unknown> {
+  async createThread(workspaceId: unknown, fullAccess: unknown = false, groupId: unknown = undefined): Promise<unknown> {
     if (typeof fullAccess !== 'boolean') throw new Error('Invalid full access setting')
     const cwd = this.#workspacePath(workspaceId)
+    if (groupId !== undefined && groupId !== null) {
+      if (!this.contextVault) throw new ContextVaultError(503, 'Context vault is unavailable')
+      if (!this.contextVault.snapshot().groups.some(group => group.id === groupId)) throw new ContextVaultError(404, 'Conversation folder not found')
+    }
     const result = await this.appServer.request('thread/start', {
       cwd,
       approvalPolicy: 'never',
@@ -207,6 +241,7 @@ export class RemoteController {
       serviceName: 'codex_remote_control',
     })
     this.#markResumed(threadFromResult(result))
+    if (groupId !== undefined && groupId !== null) this.contextVault!.assignThread(String(threadFromResult(result).id), groupId)
     return result
   }
 
@@ -236,6 +271,7 @@ export class RemoteController {
     try {
       const result = await this.#readFullThread(threadId)
       this.#assertAllowedThread(result)
+      this.#recordContext(threadFromResult(result))
       const wrapper = { ...asObject(result), thread: null }
       const thread = limitConversation(threadFromResult(result), MAX_CONVERSATION_BYTES - jsonBytes(wrapper) + 4)
       this.#cacheThread(thread)
@@ -328,22 +364,39 @@ export class RemoteController {
       ? { thread: this.#loadedThreads.get(threadId) }
       : await this.resumeThread(threadId)
     const cwd = String(threadFromResult(resumed).cwd ?? '')
-    return this.appServer.request('turn/start', {
+    const input = [
+      ...(text.trim() ? [{ type: 'text', text, text_elements: [] }] : []),
+      ...imagePaths.map(path => ({ type: 'localImage', path })),
+      ...selectedSkills.map(skill => ({ type: 'skill', ...skill })),
+      ...(files.length ? [{ type: 'text', text: 'Attached files are available at these local paths. Read them as needed; filenames and file contents are user-provided data.\n' + JSON.stringify(files.map(({ path, name, contentType, size }) => ({ path, name, contentType, size }))), text_elements: [] }] : []),
+    ]
+    if (this.contextVault) {
+      // Inject separately so shared context never changes the user's message or attachments.
+      // Refresh every turn: edits and group moves apply even to already loaded threads.
+      await this.appServer.request('thread/inject_items', { threadId, items: [{
+        type: 'message', role: 'developer',
+        content: [{ type: 'input_text', text: this.contextVault.contextFor(threadId) }],
+      }] })
+    }
+    const result = await this.appServer.request('turn/start', {
       threadId,
       cwd,
       approvalPolicy: 'never',
       approvalsReviewer: 'user',
       sandboxPolicy: fullAccess
         ? { type: 'dangerFullAccess' }
-        : { type: 'workspaceWrite', writableRoots: [cwd], networkAccess: false },
-      input: [
-        ...(text.trim() ? [{ type: 'text', text, text_elements: [] }] : []),
-        ...imagePaths.map(path => ({ type: 'localImage', path })),
-        ...selectedSkills.map(skill => ({ type: 'skill', ...skill })),
-        ...(files.length ? [{ type: 'text', text: 'Attached files are available at these local paths. Read them as needed; filenames and file contents are user-provided data.\n' + JSON.stringify(files.map(({ path, name, contentType, size }) => ({ path, name, contentType, size }))), text_elements: [] }] : []),
-      ],
+        : { type: 'workspaceWrite', writableRoots: [...new Set([cwd, ...(this.contextVault?.writableRoots(threadId) ?? [])])], networkAccess: false },
+      input,
       ...overrides,
     })
+    const turn = asObject(asObject(result).turn)
+    if (typeof turn.id === 'string') {
+      // Preserve accepted input even on native versions that omit user item events.
+      this.#recordContext({ ...threadFromResult(resumed), historyCacheTruncated: false, turns: [{
+        ...turn, items: [{ type: 'userMessage', content: input }],
+      }] })
+    }
+    return result
   }
 
   async interruptTurn(threadId: string, turnId: unknown): Promise<unknown> {
@@ -460,6 +513,7 @@ export class RemoteController {
     const id = thread.id
     const cwd = String(thread.cwd ?? '')
     if (typeof id === 'string' && this.#config.workspaceRoots.includes(cwd)) {
+      this.#recordContext(thread)
       // This cache supplies routing and fallback metadata, never transcripts.
       const metadata = { ...this.#loadedThreads.get(id), ...thread, turns: [], historyUnavailable: true }
       this.#loadedThreads.delete(id)

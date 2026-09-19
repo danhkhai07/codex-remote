@@ -1,3 +1,4 @@
+import { ContextVaultError } from './context-vault.js'
 import { ReadStateStore } from './read-state.js'
 import { HoursError, type WorkHoursStore } from './work-hours.js'
 import type { WorkPresence } from './work-presence.js'
@@ -186,7 +187,7 @@ export function createRemoteHttpServer(
   workHours?: WorkHoursStore,
   readState = new ReadStateStore(),
 ) {
-  const fileRoots = config.fileRoots ?? config.workspaceRoots
+  const fileRoots = [...new Set([...(config.fileRoots ?? config.workspaceRoots), ...(controller.contextVault ? [controller.contextVault.root] : [])])]
   const pptxPreviews = new PptxPreviewCache()
   const loginRateLimiter = new LoginRateLimiter()
   const headers = securityHeaders(config)
@@ -394,13 +395,36 @@ export function createRemoteHttpServer(
         json(res, 200, await controller.readRateLimits())
         return
       }
+      if (url.pathname === '/api/conversation-groups' && ['GET', 'POST'].includes(method)) {
+        if (!controller.contextVault) throw new HttpError(503, 'Context vault is unavailable')
+        json(res, method === 'POST' ? 201 : 200, method === 'GET'
+          ? controller.contextVault.snapshot() : controller.contextVault.createGroup((await readJson(req)).name))
+        return
+      }
+      const groupMatch = url.pathname.match(/^\/api\/conversation-groups\/([^/]+)$/)
+      if (groupMatch && ['PATCH', 'DELETE'].includes(method)) {
+        if (!controller.contextVault) throw new HttpError(503, 'Context vault is unavailable')
+        let id: string
+        try { id = decodeURIComponent(groupMatch[1]) } catch { throw new HttpError(400, 'Malformed folder ID') }
+        json(res, 200, method === 'DELETE' ? controller.contextVault.deleteGroup(id)
+          : controller.contextVault.renameGroup(id, (await readJson(req)).name))
+        return
+      }
+      const groupThreadId = routeThread(url.pathname, '/group')
+      if (groupThreadId && method === 'PUT') {
+        if (!controller.contextVault) throw new HttpError(503, 'Context vault is unavailable')
+        const body = await readJson(req)
+        await controller.assertThreadAccess(groupThreadId)
+        json(res, 200, controller.contextVault.assignThread(groupThreadId, body.groupId))
+        return
+      }
       if (url.pathname === '/api/threads' && method === 'GET') {
         json(res, 200, await controller.listThreads())
         return
       }
       if (url.pathname === '/api/threads' && method === 'POST') {
         const body = await readJson(req)
-        json(res, 201, await controller.createThread(body.workspaceId, body.fullAccess ?? false))
+        json(res, 201, await controller.createThread(body.workspaceId, body.fullAccess ?? false, ...(body.groupId === undefined ? [] : [body.groupId])))
         return
       }
 
@@ -483,7 +507,7 @@ export function createRemoteHttpServer(
         res.destroy(error instanceof Error ? error : undefined)
         return
       }
-      const status = error instanceof HttpError || error instanceof AttachmentError || error instanceof ServerFileError || error instanceof ThreadNameError ? error.status : 500
+      const status = error instanceof HttpError || error instanceof AttachmentError || error instanceof ServerFileError || error instanceof ThreadNameError || error instanceof ContextVaultError ? error.status : 500
       const message = error instanceof Error ? error.message : 'Unexpected server error'
       json(res, status, { error: status === 500 ? 'Unexpected server error' : message })
       if (status === 500) {

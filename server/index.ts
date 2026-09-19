@@ -1,3 +1,4 @@
+import { ContextVault } from './context-vault.js'
 import { ReadStateStore } from './read-state.js'
 import { homedir } from 'node:os'
 import { WorkHoursStore } from './work-hours.js'
@@ -23,7 +24,10 @@ const vite = config.production
 
 const hoursFile = process.env.CODEX_REMOTE_WORK_HOURS_FILE?.trim()
 const workHours = hoursFile ? new WorkHoursStore(hoursFile) : undefined
-const controller = new RemoteController(config)
+const contextVault = new ContextVault(config.contextVaultPath ?? resolve(homedir(), 'VAULTS', 'Codex-Context'), () => {
+  controller.events.publish('codex', { method: 'conversation-groups/changed', params: {} })
+})
+const controller = new RemoteController(config, undefined, contextVault)
 const readState = new ReadStateStore(process.env.CODEX_REMOTE_READ_STATE_FILE?.trim() ||
   resolve(homedir(), '.local/state/codex-remote/read-state.json'), () => {
     controller.events.publish('codex', { method: 'read-state/changed', params: {} })
