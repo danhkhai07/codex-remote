@@ -1693,7 +1693,6 @@ export function App() {
         <nav className="view-tabs" aria-label="Conversation view">
           <span className="conversation-view-label">Conversation</span>
           <button type="button" onClick={() => setLocalhostPreview('')}>Browser</button>
-          <a className="services-nav-link" href="/services">Services</a>
           <button className="files-tab" type="button" disabled={!thread} onClick={() => thread && setFileBrowserPath(thread.cwd)}>Files</button>
         </nav>
 

@@ -39,7 +39,6 @@
 .service-form-row { display: flex; gap: 10px; }
 .service-form-row > label { flex: 1; }
 .service-editor footer { justify-content: flex-end; }
-.services-nav-link { color: var(--muted); font-size: .8rem; padding: 10px 12px; text-decoration: none; }
 @media (max-width: 600px) {
   .services-page { padding-inline: 14px; }
   .services-heading { align-items: flex-start; flex-direction: column; }
