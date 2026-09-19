@@ -1,5 +1,6 @@
 import type { SkillList, SkillSelection } from '../server/skills'
 import type { ReplySnapshot } from '../server/read-state'
+import type { GroupSnapshot } from './conversationGroups'
 import type { DirectoryListing, ModelList, PendingRequest, RateLimitsResponse, ServerFileInfo, Session, ThreadList, ThreadResponse, TurnResponse } from './types'
 import { limitConversation } from '../server/conversation-size'
 
@@ -75,6 +76,19 @@ export const api = {
   }),
   logout: (csrf: string) => request<{ ok: boolean }>('/api/session/logout', { method: 'POST', body: '{}' }, csrf),
   threads: () => request<ThreadList>('/api/threads'),
+  conversationGroups: () => request<GroupSnapshot>('/api/conversation-groups'),
+  createConversationGroup: (name: string, csrf: string) => request<GroupSnapshot>('/api/conversation-groups', {
+    method: 'POST', body: JSON.stringify({ name }),
+  }, csrf),
+  renameConversationGroup: (id: string, name: string, csrf: string) => request<GroupSnapshot>(`/api/conversation-groups/${encodeURIComponent(id)}`, {
+    method: 'PATCH', body: JSON.stringify({ name }),
+  }, csrf),
+  deleteConversationGroup: (id: string, csrf: string) => request<GroupSnapshot>(`/api/conversation-groups/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  }, csrf),
+  moveConversation: (id: string, groupId: string | null, csrf: string) => request<GroupSnapshot>(`/api/threads/${encodeURIComponent(id)}/group`, {
+    method: 'PUT', body: JSON.stringify({ groupId }),
+  }, csrf),
   readState: (signal?: AbortSignal) => request<ReplySnapshot>('/api/read-state', { signal }),
   acknowledgeReplies: (id: string, ids: string[], csrf: string, signal?: AbortSignal) => request<ReplySnapshot>(`/api/threads/${encodeURIComponent(id)}/read-state`, {
     method: 'POST', body: JSON.stringify({ ids }), signal,
@@ -82,9 +96,9 @@ export const api = {
   skills: (id: string, refresh = false, signal?: AbortSignal) => request<SkillList>(`/api/threads/${encodeURIComponent(id)}/skills${refresh ? '?refresh=1' : ''}`, { signal }),
   messageIds: (id: string, signal?: AbortSignal) => request<{ ids: string[] }>(`/api/threads/${encodeURIComponent(id)}/message-ids`, { signal }),
   thread: (id: string, signal?: AbortSignal) => request<ThreadResponse>(`/api/threads/${encodeURIComponent(id)}`, { signal }).then(response => ({ ...response, thread: limitConversation(response.thread) })),
-  createThread: (workspaceId: string, csrf: string, fullAccess = false) => request<ThreadResponse>('/api/threads', {
+  createThread: (workspaceId: string, csrf: string, fullAccess = false, groupId?: string) => request<ThreadResponse>('/api/threads', {
     method: 'POST',
-    body: JSON.stringify({ workspaceId, fullAccess }),
+    body: JSON.stringify({ workspaceId, fullAccess, ...(groupId ? { groupId } : {}) }),
   }, csrf),
   resumeThread: (id: string, csrf: string) => request<ThreadResponse>(`/api/threads/${encodeURIComponent(id)}/resume`, {
     method: 'POST',

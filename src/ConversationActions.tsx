@@ -1,10 +1,11 @@
 import { useEffect, useId, useRef, useState } from 'react'
 
-export function ConversationActions({ title, archiveDisabled, onRename, onArchive }: {
+export function ConversationActions({ title, archiveDisabled, onRename, onArchive, onMove }: {
   title: string
   archiveDisabled: boolean
   onRename: () => void
   onArchive: () => void
+  onMove?: () => void
 }) {
   const id = useId()
   const panel = useRef<HTMLDivElement>(null)
@@ -29,11 +30,12 @@ export function ConversationActions({ title, archiveDisabled, onRename, onArchiv
       aria-label={`Actions for ${title}`} title="Conversation actions" onClick={event => {
         const rect = event.currentTarget.getBoundingClientRect()
         setPosition({ left: Math.max(8, Math.min(rect.right - 176, window.innerWidth - 184)),
-          top: rect.bottom + 116 <= window.innerHeight ? rect.bottom + 4 : Math.max(8, rect.top - 112) })
+          top: rect.bottom + (onMove ? 160 : 116) <= window.innerHeight ? rect.bottom + 4 : Math.max(8, rect.top - (onMove ? 156 : 112)) })
       }}>⋯</button>
     <div id={id} ref={panel} popover="auto" role="group" aria-label={`Actions for ${title}`}
       className="thread-actions-popover" style={position} onToggle={event => setOpen(event.newState === 'open')}>
       <button type="button" onClick={() => choose(onRename)}>Rename</button>
+      {onMove && <button type="button" onClick={() => choose(onMove)}>Move to folder</button>}
       <button type="button" disabled={archiveDisabled} onClick={() => choose(onArchive)}>Archive</button>
     </div>
   </>

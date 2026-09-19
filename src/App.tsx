@@ -7,6 +7,8 @@ import { useThreadState } from './useThreadState'
 import { useUnreadMessages } from './useUnreadMessages'
 import { RenameConversation } from './RenameConversation'
 import { ConversationActions } from './ConversationActions'
+import { ConversationFolders } from './ConversationFolders'
+import { useConversationGroups } from './useConversationGroups'
 import { ThreadHistoryCache } from './threadHistoryCache'
 import { clearScreenState, flushScreenState, useScreenState } from './screenState'
 import { useInterrupt, turnHasEnded } from './useInterrupt'
@@ -146,6 +148,10 @@ function ThreadSidebar({
   onArchive,
   canArchive,
   workspaceLabel,
+  groups,
+  groupsDisabled,
+  onOpenContext,
+  onOpenVault,
 }: {
   threads: Thread[]
   unreadCounts: Record<string, number>
@@ -155,7 +161,7 @@ function ThreadSidebar({
   open: boolean
   busy: boolean
   onClose: () => void
-  onCreate: () => void
+  onCreate: (groupId?: string) => void
   onLock: () => void
   notificationsEnabled: boolean
   notificationBusy: boolean
@@ -165,6 +171,10 @@ function ThreadSidebar({
   onArchive: (thread: Thread) => void
   canArchive: (thread: Thread) => boolean
   workspaceLabel: string
+  groups: ReturnType<typeof useConversationGroups>
+  groupsDisabled: boolean
+  onOpenContext: (path: string) => void
+  onOpenVault: (path: string) => void
 }) {
   const [query, setQuery] = useState('')
   const actionsRef = useRef<HTMLDetailsElement>(null)
@@ -233,7 +243,7 @@ function ThreadSidebar({
             </div>
           </details>
         </div>
-        <button className="primary-button new-thread-button" onClick={onCreate} disabled={busy}>＋ New conversation</button>
+        <button className="primary-button new-thread-button" onClick={() => onCreate()} disabled={busy}>＋ New conversation</button>
         <label className="thread-search">
           <span className="sr-only">Search conversations</span>
           <span aria-hidden="true">⌕</span>
@@ -247,7 +257,10 @@ function ThreadSidebar({
         <div className="thread-list" aria-label="Conversation list">
           {threads.length === 0 && <p className="empty-copy">No conversations in this workspace yet.</p>}
           {threads.length > 0 && visibleThreads.length === 0 && <p className="empty-copy">No conversations match “{query}”.</p>}
-          {visibleThreads.map((thread) => (
+          <ConversationFolders snapshot={groups.snapshot} error={groups.error} threads={visibleThreads} selectedId={selectedId}
+            searching={Boolean(query.trim())} disabled={groupsDisabled} createDisabled={busy} operations={groups}
+            onRefresh={() => void groups.refresh()} onCreate={onCreate} onContext={onOpenContext} onVault={onOpenVault}
+            renderThread={(thread, onMove) => (
             <div className={`thread-row-entry ${selectedId === thread.id ? 'is-selected' : ''}`} key={thread.id}>
             <button
               className="thread-row"
@@ -263,9 +276,9 @@ function ThreadSidebar({
               </span>
             </button>
             <ConversationActions title={threadTitle(thread)} archiveDisabled={!canArchive(thread)}
-              onRename={() => onRename(thread)} onArchive={() => onArchive(thread)} />
+              onRename={() => onRename(thread)} onArchive={() => onArchive(thread)} onMove={onMove} />
             </div>
-          ))}
+          )} />
         </div>
       </aside>
     </>
@@ -575,6 +588,8 @@ export function App() {
   const [cacheReady, setCacheReady] = useState(false)
   const [pageVisible, setPageVisible] = useState(() => document.visibilityState !== 'hidden')
   const [online, setOnline] = useState(() => navigator.onLine)
+  const groups = useConversationGroups(Boolean(session?.csrf && online && pageVisible), session?.csrf)
+  const { refresh: refreshGroups, clear: clearGroups } = groups
   const [installPrompt, setInstallPrompt] = useState<PwaInstallPrompt | null>(null)
   const [updateWorker, setUpdateWorker] = useState<ServiceWorker | null>(null)
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
@@ -970,7 +985,7 @@ export function App() {
       })
       for (const event of batch) handleEvent(event)
     }
-    source.onopen = () => setConnected(true)
+    source.onopen = () => { setConnected(true); void refreshGroups() }
     source.onerror = () => { assembler.reset(); setConnected(false) }
     source.addEventListener('stream-state', message => {
       try {
@@ -1005,6 +1020,7 @@ export function App() {
       }
 
       const method = eventMethod(event)
+      if (method === 'conversation-groups/changed') void refreshGroups()
       const params = object(object(event.payload).params)
       const eventThread = eventThreadId(event)
       if (method === 'thread/name/updated' && eventThread && (typeof params.threadName === 'string' || params.threadName === null)) {
@@ -1071,7 +1087,7 @@ export function App() {
       source.close()
       setConnected(false)
     }
-  }, [keepLive, online, cacheReady, session, refreshThreads, setThreadTurn, confirmStop, applyThreadName, refreshUnread])
+  }, [keepLive, online, cacheReady, session, refreshThreads, setThreadTurn, confirmStop, applyThreadName, refreshUnread, refreshGroups])
 
   const selectedPending = useMemo(() => pending.filter((request) => {
     const id = request.params.threadId
@@ -1141,12 +1157,13 @@ export function App() {
     return () => cancelAnimationFrame(frame)
   }, [composer, thread?.id])
 
-  async function createThread() {
+  async function createThread(groupId?: string) {
     if (!session || busy) return
     setBusy(true)
     setError('')
     try {
-      const response = await api.createThread(session.workspaces[0]?.id ?? '0', session.csrf, yoloMode)
+      const response = await api.createThread(session.workspaces[0]?.id ?? '0', session.csrf, yoloMode, groupId)
+      await refreshGroups()
       await refreshThreads()
       await openThread(response.thread)
     } catch (requestError) {
@@ -1460,6 +1477,7 @@ export function App() {
     setHistoryReady(false)
     setHistoryLoading(false)
     clearUnread()
+    clearGroups()
     clearSkills()
     setSkillsOpen(false)
     clearScreenState()
@@ -1543,7 +1561,7 @@ export function App() {
         open={drawerOpen}
         busy={busy}
         onClose={() => setDrawerOpen(false)}
-        onCreate={() => void createThread()}
+        onCreate={groupId => void createThread(groupId)}
         onLock={() => void logout()}
         notificationsEnabled={notificationsEnabled}
         notificationBusy={notificationBusy}
@@ -1553,6 +1571,10 @@ export function App() {
         onArchive={target => void archive(target)}
         canArchive={canArchive}
         workspaceLabel={session.workspaces[0]?.label || shortWorkspace(session.workspaces[0]?.path ?? '') || 'Workspace'}
+        groups={groups}
+        groupsDisabled={!online || !session.csrf}
+        onOpenContext={path => { setDrawerOpen(false); openFile({ path }) }}
+        onOpenVault={path => { setDrawerOpen(false); setFileBrowserPath(path) }}
       />
 
       <main className="workspace-shell">
