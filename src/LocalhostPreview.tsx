@@ -3,7 +3,7 @@ import { api } from './api'
 import { parseLocalhostAddress } from './localhostAddress'
 import { useScreenState } from './screenState'
 
-type Preview = { url: string; viewUrl: string; address: string; port: number }
+type Preview = { url: string; viewUrl: string; address: string; port: number; loadId: number }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Không thể mở preview. Hãy thử lại.'
@@ -131,7 +131,7 @@ export function LocalhostPreview({ csrf, onClose, initialUrl }: {
       } else {
         setLoaded(false)
         setSlow(false)
-        setPreview({ ...result, address: value })
+        setPreview(current => ({ ...result, address: value, loadId: (current?.loadId ?? 0) + 1 }))
       }
     } catch (reason) {
       opened?.close()
@@ -202,7 +202,7 @@ export function LocalhostPreview({ csrf, onClose, initialUrl }: {
         {!preview && <div className="file-viewer-empty"><strong>Xem localhost ngay tại đây</strong><p>Nhập port của app, ví dụ 3000 hoặc 5174, rồi mở preview.</p></div>}
         {preview && <>
           {!loaded && <div className="localhost-preview-loading" role="status"><span className="spinner" aria-hidden="true" />{slow ? 'Trang tải lâu. Có thể thử Open browser.' : 'Đang tải ứng dụng…'}</div>}
-          <iframe key={preview.url} src={preview.url} title={`Localhost port ${preview.port}`} sandbox="allow-same-origin allow-scripts allow-forms allow-downloads allow-popups allow-popups-to-escape-sandbox" referrerPolicy="no-referrer" onLoad={() => setLoaded(true)} onError={() => {
+          <iframe key={preview.loadId} src={preview.url} title={`Localhost port ${preview.port}`} sandbox="allow-same-origin allow-scripts allow-forms allow-downloads allow-popups allow-popups-to-escape-sandbox" referrerPolicy="no-referrer" onLoad={() => setLoaded(true)} onError={() => {
             setLoaded(true)
             setError('Không thể tải ứng dụng trong khung xem. Thử Reload hoặc Open browser.')
           }} />
