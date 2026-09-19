@@ -1,3 +1,4 @@
+import { validatePreviewOriginTemplate } from './localhost-preview.js'
 import { realpathSync, statSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
 import { homedir } from 'node:os'
@@ -12,6 +13,7 @@ export type RemoteConfig = {
   codexBin: string
   workspaceRoots: string[]
   fileRoots?: string[]
+  previewOriginTemplate?: string
   contextVaultPath?: string
   production: boolean
 }
@@ -71,6 +73,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RemoteConfig {
   if (!isAbsolute(contextVaultPath)) throw new Error('CODEX_REMOTE_CONTEXT_VAULT must be absolute')
 
   return {
+    previewOriginTemplate: env.CODEX_REMOTE_PREVIEW_ORIGIN_TEMPLATE?.trim() ? validatePreviewOriginTemplate(env.CODEX_REMOTE_PREVIEW_ORIGIN_TEMPLATE.trim()) : undefined,
     contextVaultPath: resolve(contextVaultPath),
     host: env.CODEX_REMOTE_HOST?.trim() || '127.0.0.1',
     port: parsePort(env.CODEX_REMOTE_PORT),

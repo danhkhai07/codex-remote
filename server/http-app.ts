@@ -1,3 +1,4 @@
+import { LocalhostPreview, LocalhostPreviewError } from './localhost-preview.js'
 import { ContextVaultError } from './context-vault.js'
 import { ReadStateStore } from './read-state.js'
 import { HoursError, type WorkHoursStore } from './work-hours.js'
@@ -193,7 +194,17 @@ export function createRemoteHttpServer(
   const headers = securityHeaders(config)
   const secureCookie = config.publicOrigin.protocol === 'https:'
 
-  return createServer(async (req, res) => {
+  const preview = config.previewOriginTemplate ? new LocalhostPreview({
+    originTemplate: config.previewOriginTemplate,
+    sessionSecret: config.sessionSecret,
+    blockedPorts: [config.port, Number(config.publicOrigin.port || (secureCookie ? 443 : 80))],
+  }) : null
+  if (preview?.matchesHost(config.publicOrigin.host)) throw new Error('Preview apps must use a separate origin from Codex Remote')
+  if (secureCookie && config.previewOriginTemplate?.startsWith('http:')) throw new Error('HTTPS Codex Remote requires HTTPS preview origins')
+
+  const server = createServer(async (req, res) => {
+    // Preview apps own their isolated origin. Never apply the Codex app CSP or routing there.
+    if (preview?.matchesHost(req.headers.host)) { preview.handle(req, res); return }
     for (const [name, value] of Object.entries(headers)) res.setHeader(name, value)
     if (secureCookie) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
 
@@ -251,6 +262,17 @@ export function createRemoteHttpServer(
       if (method !== 'GET' && method !== 'HEAD') {
         if (!isAllowedOrigin(req, config)) throw new HttpError(403, 'Origin is not allowed')
         if (req.headers['x-csrf-token'] !== session.csrf) throw new HttpError(403, 'Invalid CSRF token')
+      }
+
+      if (url.pathname === '/api/localhost-preview' && method === 'GET') {
+        json(res, 200, { enabled: Boolean(preview) })
+        return
+      }
+      if (url.pathname === '/api/localhost-preview' && method === 'POST') {
+        if (!preview) throw new HttpError(503, 'Preview chưa được cấu hình domain trên server.')
+        const body = await readJson(req)
+        json(res, 201, preview.createLaunch(body.port, body.path ?? '/', session.expiresAt))
+        return
       }
 
       if (url.pathname === '/api/working-hours' && ['GET', 'POST'].includes(method)) {
@@ -511,7 +533,7 @@ export function createRemoteHttpServer(
         res.destroy(error instanceof Error ? error : undefined)
         return
       }
-      const status = error instanceof HttpError || error instanceof AttachmentError || error instanceof ServerFileError || error instanceof ThreadNameError || error instanceof ContextVaultError ? error.status : 500
+      const status = error instanceof HttpError || error instanceof AttachmentError || error instanceof ServerFileError || error instanceof ThreadNameError || error instanceof ContextVaultError || error instanceof LocalhostPreviewError ? error.status : 500
       const message = error instanceof Error ? error.message : 'Unexpected server error'
       json(res, status, { error: status === 500 ? 'Unexpected server error' : message })
       if (status === 500) {
@@ -520,4 +542,12 @@ export function createRemoteHttpServer(
       }
     }
   })
+  if (preview) {
+    server.on('upgrade', (req, socket, head) => {
+      if (preview.matchesHost(req.headers.host)) preview.handleUpgrade(req, socket, head)
+      else socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
+    })
+    server.on('close', () => preview.close())
+  }
+  return server
 }

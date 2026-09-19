@@ -22,6 +22,7 @@ type Response = {
 
 function fetchLocal(port: number, path: string, options: {
   method?: string
+  host?: string
   origin?: string
   cookie?: string
   csrf?: string
@@ -38,7 +39,7 @@ function fetchLocal(port: number, path: string, options: {
       path,
       method: options.method ?? 'GET',
       headers: {
-        Host: 'remote.example.test',
+        Host: options.host ?? 'remote.example.test',
         ...(options.origin ? { Origin: options.origin } : {}),
         ...(options.cookie ? { Cookie: options.cookie } : {}),
         ...(options.csrf ? { 'X-CSRF-Token': options.csrf } : {}),
@@ -68,6 +69,42 @@ describe('Codex Remote HTTP boundary', () => {
 
   afterEach(async () => {
     await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()))
+  })
+
+  it('requires a Codex login and CSRF token to launch an isolated localhost preview', async () => {
+    const base = await fs.mkdtemp(join(tmpdir(), 'remote-preview-'))
+    const config: RemoteConfig = {
+      host: '127.0.0.1', port: 5173, publicOrigin: new URL('https://remote.example.test'),
+      password: 'correct horse battery staple', sessionSecret: 's'.repeat(48), sessionTtlSeconds: 600,
+      codexBin: 'unused', workspaceRoots: [base], production: true,
+      previewOriginTemplate: 'https://p{port}.preview.example.test',
+    }
+    const server = createRemoteHttpServer(config, new RemoteController(config, new CodexAppServer('unused')), base, null)
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as AddressInfo).port
+    cleanups.push(async () => { await new Promise<void>(resolve => server.close(() => resolve())); await fs.rm(base, { recursive: true, force: true }) })
+    expect((await fetchLocal(port, '/api/localhost-preview')).status).toBe(401)
+    const login = await fetchLocal(port, '/api/session/login', { method: 'POST', origin: config.publicOrigin.origin, body: { password: config.password } })
+    const cookie = login.headers['set-cookie']?.[0].split(';', 1)[0]
+    const options = { cookie, csrf: JSON.parse(login.body).csrf, origin: config.publicOrigin.origin }
+    expect(JSON.parse((await fetchLocal(port, '/api/localhost-preview', options)).body)).toEqual({ enabled: true })
+    const body = { port: 3000, path: '/dashboard?q=hello#chart' }
+    expect((await fetchLocal(port, '/api/localhost-preview', { ...options, csrf: 'wrong', method: 'POST', body })).status).toBe(403)
+    expect((await fetchLocal(port, '/api/localhost-preview', { ...options, origin: 'https://p3000.preview.example.test', method: 'POST', body })).status).toBe(403)
+    const launch = await fetchLocal(port, '/api/localhost-preview', { ...options, method: 'POST', body })
+    expect(launch.status).toBe(201)
+    const result = JSON.parse(launch.body)
+    expect(result.viewUrl).toBe('https://p3000.preview.example.test/dashboard?q=hello#chart')
+    expect(new URL(result.url).hostname).toBe('p3000.preview.example.test')
+    expect((await fetchLocal(port, '/api/localhost-preview', { ...options, method: 'POST', body: { port: 5173 } })).status).toBe(400)
+    expect((await fetchLocal(port, '/api/localhost-preview', { ...options, method: 'POST', body: { port: 3000, path: '//evil.test/' } })).status).toBe(400)
+    // A Codex session cookie alone never authenticates a preview origin.
+    expect((await fetchLocal(port, '/', { cookie, host: 'p3000.preview.example.test' })).status).toBe(401)
+    const url = new URL(result.url)
+    const enter = await fetchLocal(port, url.pathname + url.search, { host: url.host })
+    expect(enter.status).toBe(303)
+    expect(enter.headers.location).toBe('/dashboard?q=hello#chart')
+    expect(enter.headers['content-security-policy']).toBeUndefined()
   })
 
   it('uses separate file roots for authenticated browsing and previews outside the workspace', async () => {
@@ -177,6 +214,7 @@ describe('Codex Remote HTTP boundary', () => {
     const cookie = login.headers['set-cookie']?.[0].split(';', 1)[0]
     expect(cookie).toBeTruthy()
     expect((await fetchLocal(port, '/api/session', { cookie })).status).toBe(200)
+    expect(JSON.parse((await fetchLocal(port, '/api/localhost-preview', { cookie })).body)).toEqual({ enabled: false })
     const csrf = JSON.parse(login.body).csrf as string
     const options = { cookie, csrf, origin: config.publicOrigin.origin }
     expect((await fetchLocal(port, '/api/working-hours')).status).toBe(401)

@@ -151,3 +151,38 @@ and sends native skill inputs to Codex; arbitrary client-supplied skill paths ar
 ### Direct working-hours link
 
 Open `/working-hours` (or `/working-hours/`) to access the shared working-hours dashboard directly. It uses the existing Codex login, requires authentication before loading the private dashboard, and uses the same JSON database and timer as the file preview. `/workboard` is a separate existing application and is not mapped to this dashboard.
+
+## Private localhost previews
+
+The **Localhost** button opens a running HTTP app on the Codex Remote VPS. Enter
+`3000`, `localhost:3000`, or `http://127.0.0.1:3000/path?query=value`. Localhost
+links in conversation replies also open this viewer. Keep the app running on the
+VPS; this feature forwards traffic and does not start or deploy that app.
+
+Each target port has its own HTTPS origin, for example
+`p3000.preview.example.com`. This preserves root-relative assets, API paths,
+client-side routing and WebSocket connections while separating app JavaScript
+from the Codex session. Preview sessions require a launch from the authenticated
+Codex app; copying a preview URL does not grant someone else access. Use **Open
+browser** if an upstream app forbids embedding or needs a top-level browser tab.
+
+One-time server setup:
+
+1. Point `*.preview.example.com` to this VPS and install a TLS certificate covering
+   that wildcard. Wildcard certificates from Let's Encrypt require
+   [DNS-01 validation](https://letsencrypt.org/docs/challenge-types/#dns-01-challenge).
+2. Adapt [`deploy/nginx/localhost-preview.conf`](deploy/nginx/localhost-preview.conf)
+   to the chosen domain and certificate paths. Preserve the Host header and
+   [WebSocket upgrade headers](https://nginx.org/en/docs/http/websocket.html).
+   Forward all preview paths to the Codex gateway; it enforces authentication.
+3. Set `CODEX_REMOTE_PREVIEW_ORIGIN_TEMPLATE=https://p{port}.preview.example.com`
+   in the private server environment, then restart with `scripts/restart-when-idle.mjs`
+   after active turns complete. Without this setting, the viewer reports that
+   domain setup is still needed.
+
+Only HTTP services at literal `127.0.0.1`, ports 1024–65535, are supported; the
+Codex gateway and public listener ports are excluded. Apps that hard-code local
+URLs, require HTTPS upstream, or enforce a fixed public Origin may need their own
+public-URL/HMR configuration. The gateway forwards bytes without rewriting app
+JavaScript. If Codex Remote runs inside Docker, localhost is that container's
+network namespace; use host networking on Linux to reach host-only services.
