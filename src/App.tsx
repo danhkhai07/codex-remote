@@ -633,6 +633,32 @@ export function App() {
   }, [])
   const selectedRef = useRef<string | null>(null)
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
+  const resizeComposer = useCallback(() => {
+    const textarea = composerRef.current
+    if (!textarea) return
+    textarea.style.overflowY = 'hidden'
+    textarea.style.height = 'auto'
+    // Leave room for fractional line-height rounding before applying the cap.
+    textarea.style.height = `${Math.min(textarea.scrollHeight + 1, 180)}px`
+    textarea.style.overflowY = textarea.scrollHeight > textarea.clientHeight ? 'auto' : 'hidden'
+  }, [])
+  const attachComposer = useCallback((textarea: HTMLTextAreaElement | null) => {
+    composerRef.current = textarea
+    if (!textarea) return
+    resizeComposer()
+    let width = textarea.getBoundingClientRect().width
+    const observer = new ResizeObserver(() => {
+      const nextWidth = textarea.getBoundingClientRect().width
+      if (nextWidth === width) return
+      width = nextWidth
+      resizeComposer()
+    })
+    observer.observe(textarea)
+    return () => {
+      observer.disconnect()
+      composerRef.current = null
+    }
+  }, [resizeComposer])
   const attachmentInputRef = useRef<HTMLInputElement | null>(null)
   const readingPositions = useRef(new Map<string, ReadingPosition>())
   const notificationOperation = useRef(false)
@@ -1166,14 +1192,9 @@ export function App() {
   useEffect(() => setSlashIndex(0), [composer])
 
   useEffect(() => {
-    const textarea = composerRef.current
-    if (!textarea) return
-    const frame = requestAnimationFrame(() => {
-      textarea.style.height = 'auto'
-      textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`
-    })
+    const frame = requestAnimationFrame(resizeComposer)
     return () => cancelAnimationFrame(frame)
-  }, [composer, thread?.id])
+  }, [composer, thread?.id, resizeComposer])
 
   function createThread(groupId?: string) {
     if (!session || busy || sendingLocks.current.has(NEW_CONVERSATION_KEY)) return
@@ -1840,7 +1861,7 @@ export function App() {
               <button className="attach-button" type="button" onClick={() => attachmentInputRef.current?.click()} disabled={busy || attachments.length >= MAX_COMPOSER_FILES} aria-label="Attach files" title="Attach files">＋</button>
               <label htmlFor="instruction" className="sr-only">Instruction for Codex</label>
               <textarea
-                ref={composerRef}
+                ref={attachComposer}
                 id="instruction"
                 enterKeyHint="enter"
                 value={composer}

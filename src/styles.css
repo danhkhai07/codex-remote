@@ -1828,6 +1828,7 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
 .composer-surface textarea {
   min-height: 42px;
   max-height: 180px;
+  overflow-y: hidden;
   resize: none;
   padding: 11px 9px;
   border: 0;
