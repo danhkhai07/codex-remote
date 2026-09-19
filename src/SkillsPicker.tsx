@@ -3,7 +3,7 @@ import { api } from './api'
 import type { SkillList, SkillSelection } from '../server/skills'
 
 export function SkillsPicker({ threadId, workspaceId, selected, onChange, onClose, disabled, triggerRef }: {
-  threadId?: string; workspaceId?: string; selected: SkillSelection[]; onChange: (skills: SkillSelection[]) => void; onClose: () => void; disabled: boolean; triggerRef: RefObject<HTMLButtonElement | null>
+  threadId?: string; workspaceId?: string; selected: SkillSelection[]; onChange: (skills: SkillSelection[]) => void; onClose: () => void; disabled: boolean; triggerRef: RefObject<HTMLElement | null>
 }) {
   const panel = useRef<HTMLElement>(null)
   useEffect(() => {

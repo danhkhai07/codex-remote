@@ -564,7 +564,6 @@ export function App() {
   draftRef.current = newConversation
   const composerKey = draftOpen ? NEW_CONVERSATION_KEY : selectedId
   const [skillsOpen, setSkillsOpen] = useState(false)
-  const skillsButtonRef = useRef<HTMLButtonElement>(null)
   const closeSkills = useCallback(() => setSkillsOpen(false), [])
   const [selectedSkills, setSelectedSkills, setThreadSkills, clearSkills] = useThreadState<SkillSelection[]>(composerKey, EMPTY_SKILLS, 'draft-skills')
   const [thread, setThread] = useState<Thread | null>(null)
@@ -1832,10 +1831,9 @@ export function App() {
                   <option value={entry.reasoningEffort} key={entry.reasoningEffort}>{entry.reasoningEffort}</option>
                 ))}
               </select>
-              <button type="button" className="composer-status" ref={skillsButtonRef} disabled={busy} aria-expanded={skillsOpen} aria-controls={skillsOpen ? 'skills-picker' : undefined} onClick={() => setSkillsOpen(value => !value)}>Skills{selectedSkills.length ? ` (${selectedSkills.length})` : ''}</button>
               <button type="button" className="composer-status" disabled={busy} onClick={() => void executeSlashCommand('status', '')}>Usage & status</button>
             </div>
-            {skillsOpen && <SkillsPicker key={composerKey} threadId={draftOpen ? undefined : thread?.id} workspaceId={session.workspaces[0]?.id} selected={selectedSkills} onChange={setSelectedSkills} onClose={closeSkills} triggerRef={skillsButtonRef} disabled={busy} />}
+            {skillsOpen && <SkillsPicker key={composerKey} threadId={draftOpen ? undefined : thread?.id} workspaceId={session.workspaces[0]?.id} selected={selectedSkills} onChange={setSelectedSkills} onClose={closeSkills} triggerRef={composerRef} disabled={busy} />}
             {selectedSkills.length > 0 && <div className="selected-skills" aria-label="Selected skills">{selectedSkills.map(skill => <button type="button" key={skill.path} disabled={busy} aria-label={`Remove skill ${skill.name}`} onClick={() => setSelectedSkills(current => current.filter(item => item.path !== skill.path))}>{skill.name} ×</button>)}</div>}
             {settingsSaveError && <p role="status" className="attachment-hint">{settingsSaveError}</p>}
             {commandNotice && <LocalCommandResult notice={commandNotice} onClose={() => setCommandNotice(null)} />}
