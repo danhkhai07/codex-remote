@@ -154,35 +154,35 @@ Open `/working-hours` (or `/working-hours/`) to access the shared working-hours 
 
 ## Private localhost previews
 
-The **Localhost** button opens a running HTTP app on the Codex Remote VPS. Enter
-`3000`, `localhost:3000`, or `http://127.0.0.1:3000/path?query=value`. Localhost
-links in conversation replies also open this viewer. Keep the app running on the
-VPS; this feature forwards traffic and does not start or deploy that app.
+Open **Localhost** or navigate directly to `/preview/<port>/`, for example
+`https://codex.example.com/preview/3000/`. This uses the existing Codex domain and
+login, with no extra DNS, certificate, or ngrok setup. The app must keep running
+on the VPS; the proxy does not start it. Localhost links in replies open the same
+viewer. You can run previews for different ports concurrently.
 
-Each target port has its own HTTPS origin, for example
-`p3000.preview.example.com`. This preserves root-relative assets, API paths,
-client-side routing and WebSocket connections while separating app JavaScript
-from the Codex session. Preview sessions require a launch from the authenticated
-Codex app; copying a preview URL does not grant someone else access. Use **Open
-browser** if an upstream app forbids embedding or needs a top-level browser tab.
+Requests are forwarded to `127.0.0.1:<port>` after removing the preview prefix.
+The gateway adjusts common HTML/CSS asset paths and JavaScript module imports;
+an injected adapter routes fetch, XMLHttpRequest, EventSource and WebSocket
+requests through the prefix. Binary files and event streams are forwarded as-is.
+Codex auth cookies are never sent to the upstream app, and upstream cookies and
+service-worker scope are restricted to the selected preview path. The Codex PWA
+excludes preview routes from its offline cache.
 
-One-time server setup:
+Path previews share the Codex browser origin, so use apps you trust. They are
+not a sandbox for untrusted HTML. Apps with restrictive CSP, custom client-side
+routing or hard-coded navigation may need their base/public path configured as
+`/preview/<port>/`. For Vite, for example, use `vite --base=/preview/3000/` when
+running on port 3000. Keep the application's upstream HTTP port between 1024 and
+65535; the gateway's own port is excluded. Text resources rewritten by the proxy
+are limited to 16 MB. Only HTTP upstreams are supported.
 
-1. Point `*.preview.example.com` to this VPS and install a TLS certificate covering
-   that wildcard. Wildcard certificates from Let's Encrypt require
-   [DNS-01 validation](https://letsencrypt.org/docs/challenge-types/#dns-01-challenge).
-2. Adapt [`deploy/nginx/localhost-preview.conf`](deploy/nginx/localhost-preview.conf)
-   to the chosen domain and certificate paths. Preserve the Host header and
-   [WebSocket upgrade headers](https://nginx.org/en/docs/http/websocket.html).
-   Forward all preview paths to the Codex gateway; it enforces authentication.
-3. Set `CODEX_REMOTE_PREVIEW_ORIGIN_TEMPLATE=https://p{port}.preview.example.com`
-   in the private server environment, then restart with `scripts/restart-when-idle.mjs`
-   after active turns complete. Without this setting, the viewer reports that
-   domain setup is still needed.
+Nginx must forward WebSocket Upgrade headers on the existing Codex vhost; see
+[`deploy/nginx/codex-remote.conf`](deploy/nginx/codex-remote.conf). Backend updates
+still use `scripts/restart-when-idle.mjs` to wait for active turns.
 
-Only HTTP services at literal `127.0.0.1`, ports 1024–65535, are supported; the
-Codex gateway and public listener ports are excluded. Apps that hard-code local
-URLs, require HTTPS upstream, or enforce a fixed public Origin may need their own
-public-URL/HMR configuration. The gateway forwards bytes without rewriting app
-JavaScript. If Codex Remote runs inside Docker, localhost is that container's
-network namespace; use host networking on Linux to reach host-only services.
+An optional separate-origin mode remains available via
+`CODEX_REMOTE_PREVIEW_ORIGIN_TEMPLATE=https://p{port}.preview.example.com` for
+stronger browser isolation. Only that optional mode requires wildcard DNS/TLS
+and [`deploy/nginx/localhost-preview.conf`](deploy/nginx/localhost-preview.conf).
+If Codex runs inside Docker, localhost is the container's network namespace;
+use host networking on Linux to reach host-only services.
