@@ -1,4 +1,5 @@
 import type { SkillList, SkillSelection } from '../server/skills'
+import type { ServiceInput, ServicesSnapshot } from '../server/services'
 import type { ReplySnapshot } from '../server/read-state'
 import type { GroupSnapshot } from './conversationGroups'
 import type { DirectoryListing, ModelList, PendingRequest, RateLimitsResponse, ServerFileInfo, Session, ThreadList, ThreadResponse, TurnResponse } from './types'
@@ -49,6 +50,9 @@ async function requestBlob(path: string, signal?: AbortSignal): Promise<Blob> {
 }
 
 export const api = {
+  services: () => request<ServicesSnapshot>('/api/services'),
+  saveService: (service: ServiceInput, csrf: string) => request('/api/services', { method: 'PUT', body: JSON.stringify(service) }, csrf),
+  removeService: (key: string, csrf: string) => request(`/api/services?${new URLSearchParams({ key })}`, { method: 'DELETE' }, csrf),
   localhostPreviewStatus: () => request<{ enabled: boolean }>('/api/localhost-preview'),
   launchLocalhostPreview: (port: number, path: string, csrf: string, signal?: AbortSignal) => request<{ url: string; viewUrl: string; port: number; expiresAt: number }>('/api/localhost-preview', {
     method: 'POST', body: JSON.stringify({ port, path }), signal,
