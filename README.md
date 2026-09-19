@@ -186,3 +186,41 @@ stronger browser isolation. Only that optional mode requires wildcard DNS/TLS
 and [`deploy/nginx/localhost-preview.conf`](deploy/nginx/localhost-preview.conf).
 If Codex runs inside Docker, localhost is the container's network namespace;
 use host networking on Linux to reach host-only services.
+
+## Services registry and Browser
+
+`/services` lists hosted localhost apps and named paths on Codex Remote (such as
+`/working-hours`). Entries persist on the server in
+`~/.local/state/codex-remote/services.json` (override with
+`CODEX_REMOTE_SERVICES_FILE`). The authenticated page supports add/edit/remove,
+search, PR links, branch/worktree details, and checks registered loopback ports
+every 30 seconds while visible. Removing a listing does not stop its process.
+
+Whenever hosting an app or adding a path, register its name, purpose and PR before
+handing over the link. Explicitly use `Không có PR` or `Chưa xác định PR` when
+appropriate; never invent a PR association. From this repository:
+
+```sh
+npm run services -- register --port 5183 --name 'Kiotclone · PRINT-01' \
+  --summary 'Review custom print templates by branch' --pr 'PR #125 · PRINT-01' \
+  --pr-url 'https://github.com/iTCuong090/PhuTungOToTinhMo/pull/125' \
+  --branch 'feat/print-01-custom-templates' \
+  --directory '/root/GITHUB/PhuTungOToTinhMo-worktrees/print-01'
+npm run services -- register --path /working-hours --name 'Working hours' \
+  --summary 'Shared working hours' --pr 'Không có PR'
+npm run services -- list
+npm run services -- remove --key port:5183
+```
+
+The helper uses the gateway's existing `.env` locally and never prints session
+credentials. Use the API/helper for updates instead of editing the live JSON.
+Updates to the same port or internal path replace that entry. A stopped app stays
+listed as stopped until removed; register new metadata when reusing its port.
+
+The Browser entry in conversations opens HTTP/HTTPS URLs, root-relative paths,
+or VPS localhost ports. Conversation links use the same viewer. Each conversation
+retains its own last address on that device (seven-day screen cache), restored on
+reopening. Website framing policies and HTTPS mixed-content restrictions still
+apply; **Mở tab ngoài** opens sites that do not permit embedding. Internal pages
+permit only same-origin framing. URLs are cached, not external page content or
+cross-origin browser navigation history.

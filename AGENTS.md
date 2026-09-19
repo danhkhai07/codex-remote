@@ -8,3 +8,7 @@
 - Use a descriptive commit message. Push without force unless the user explicitly requests rewriting published history; for such rewrites, verify the remote tip and use an explicit `--force-with-lease` value. Otherwise, if the remote has advanced, integrate its changes without overwriting others' work, then rerun affected checks.
 - Verify the push succeeded and report the commit hash and branch. If checks, commit, or push are blocked, report the exact blocker and what remains; do not claim completion.
 - Build client updates before reporting them available. For backend updates, restart only after all active turns have finished, using `scripts/restart-when-idle.mjs`; never interrupt an active conversation to deploy.
+
+# Hosted services
+
+- Whenever hosting a localhost app or adding a user-facing route on Codex Remote, register/update it on `/services` before handing over its URL. Include the service name, port or path, work summary, and the verified PR number/link (or explicitly no/unknown PR), plus branch/worktree when applicable. Use `npm run services -- register ...` as documented in README.md. Update the registry if a port changes ownership or a service is retired; do not silently leave stale metadata.
