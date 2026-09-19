@@ -49,6 +49,10 @@ async function requestBlob(path: string, signal?: AbortSignal): Promise<Blob> {
 }
 
 export const api = {
+  localhostPreviewStatus: () => request<{ enabled: boolean }>('/api/localhost-preview'),
+  launchLocalhostPreview: (port: number, path: string, csrf: string, signal?: AbortSignal) => request<{ url: string; viewUrl: string; port: number; expiresAt: number }>('/api/localhost-preview', {
+    method: 'POST', body: JSON.stringify({ port, path }), signal,
+  }, csrf),
   workHours: () => request<{ revision: number; totals: Record<string, number>; timer: unknown; serverNow: number }>('/api/working-hours'),
   changeWorkHours: (body: Record<string, unknown>, csrf: string) => request<{ revision: number; totals: Record<string, number>; timer: unknown; serverNow: number }>('/api/working-hours', { method: 'POST', body: JSON.stringify(body) }, csrf),
   directory: (path: string, options: { search: string; hidden: boolean; offset: number }, signal?: AbortSignal) => request<DirectoryListing>(`/api/files/list?${new URLSearchParams({ path, search: options.search, hidden: options.hidden ? '1' : '0', offset: String(options.offset) })}`, { signal }),

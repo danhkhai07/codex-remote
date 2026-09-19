@@ -33,7 +33,7 @@ export function validScreenValue(key: string, value: unknown): boolean {
   if (key === 'drafts') return Boolean(record && Object.values(record).every(text => typeof text === 'string'))
   if (key === 'file-viewer') return value === null || Boolean(record && typeof record.path === 'string' && record.path.startsWith('/'))
   if (key === 'link-viewer') return value === null || Boolean(record && typeof record.url === 'string')
-  if (['file-browser', 'model', 'effort'].includes(key)) return value === null || typeof value === 'string'
+  if (['file-browser', 'model', 'effort', 'localhost-preview', 'localhost-address'].includes(key)) return value === null || typeof value === 'string'
   if (key === 'drawer' || key.endsWith(':metadata') || key.endsWith(':hidden')) return typeof value === 'boolean'
   if (key === 'command-notice') return value === null || Boolean(record && typeof record.title === 'string' && Array.isArray(record.lines) && record.lines.every(line => line && typeof line.label === 'string' && typeof line.value === 'string'))
   if (key.startsWith('reading:')) return Boolean(record && typeof record.top === 'number' && Number.isFinite(record.top) && typeof record.following === 'boolean')
