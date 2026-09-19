@@ -120,8 +120,9 @@ export function LocalhostPreview({ csrf, onClose, initialUrl }: {
       const url = new URL(result.url)
       const viewUrl = new URL(result.viewUrl)
       const allowedProtocol = url.protocol === 'https:' || (window.location.protocol === 'http:' && url.protocol === 'http:')
-      if (!allowedProtocol || url.origin === window.location.origin || viewUrl.origin !== url.origin) {
-        throw new Error('Preview cần domain HTTPS riêng trên server.')
+      const localPath = url.origin === window.location.origin && url.pathname.startsWith(`/preview/${parsed.port}/`)
+      if (!allowedProtocol || (!localPath && url.origin === window.location.origin) || viewUrl.origin !== url.origin) {
+        throw new Error('Địa chỉ preview không hợp lệ.')
       }
       if (opened) {
         if (opened.closed) throw new Error('Tab preview đã đóng. Hãy mở lại.')

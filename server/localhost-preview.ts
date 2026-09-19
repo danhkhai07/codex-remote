@@ -1,3 +1,5 @@
+import { getSession } from './auth.js'
+import { previewPath, rewritePreviewText } from './preview-paths.js'
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { request, type ClientRequest, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
@@ -91,6 +93,7 @@ function socketError(socket: Duplex, status: number, message: string): void {
 }
 
 export class LocalhostPreview {
+  readonly #pathOrigin: string | null
   readonly #template: string
   readonly #hostPattern: RegExp
   readonly #secret: string
@@ -100,19 +103,22 @@ export class LocalhostPreview {
   readonly #sockets = new Set<Duplex>()
   readonly #secure: boolean
 
-  constructor(options: { originTemplate: string; sessionSecret: string; blockedPorts: number[] }) {
-    this.#template = validatePreviewOriginTemplate(options.originTemplate)
+  constructor(options: { originTemplate?: string; publicOrigin?: string; sessionSecret: string; blockedPorts: number[] }) {
+    this.#pathOrigin = options.originTemplate ? null : new URL(options.publicOrigin!).origin
+    this.#template = options.originTemplate ? validatePreviewOriginTemplate(options.originTemplate) : 'http://p{port}.unused.invalid'
     const template = parsedTemplate(this.#template)
     const escapedHost = template.host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace('preview-port-placeholder', '([1-9][0-9]{3,4})')
     this.#hostPattern = new RegExp(`^${escapedHost}$`, 'i')
     this.#secret = options.sessionSecret
     this.#blockedPorts = new Set(options.blockedPorts)
-    this.#secure = template.protocol === 'https:'
+    this.#secure = new URL(this.#pathOrigin ?? this.#template.replace('{port}', '3000')).protocol === 'https:'
   }
 
   matchesHost(host: string | undefined): boolean {
-    return typeof host === 'string' && this.#hostPattern.test(host)
+    return !this.#pathOrigin && typeof host === 'string' && this.#hostPattern.test(host)
   }
+
+  matchesPath(path: string | undefined): boolean { return Boolean(this.#pathOrigin && path?.startsWith('/preview/')) }
 
   #port(value: unknown): number {
     if (typeof value !== 'number' || !Number.isInteger(value) || value < 1024 || value > 65535) {
@@ -122,11 +128,15 @@ export class LocalhostPreview {
     return value
   }
 
-  #origin(port: number): string { return this.#template.replace('{port}', String(port)) }
+  #origin(port: number): string { return this.#pathOrigin ?? this.#template.replace('{port}', String(port)) }
 
   createLaunch(portValue: unknown, pathValue: unknown, sessionExpiresAt: number): { url: string; viewUrl: string; port: number; expiresAt: number } {
     const port = this.#port(portValue), path = relativePath(pathValue), now = Math.floor(Date.now() / 1000)
     if (!Number.isFinite(sessionExpiresAt) || sessionExpiresAt <= now) throw new LocalhostPreviewError(401, 'Your Codex Remote session has expired')
+    if (this.#pathOrigin) {
+      const url = this.#pathOrigin + `/preview/${port}` + path
+      return { url, viewUrl: url, port, expiresAt: sessionExpiresAt }
+    }
     for (const [key, ticket] of this.#tickets) if (ticket.expiresAt <= now) this.#tickets.delete(key)
     if (this.#tickets.size >= 1024) throw new LocalhostPreviewError(429, 'Too many pending previews. Try again in a minute.')
     const ticket = randomBytes(32).toString('base64url')
@@ -147,6 +157,7 @@ export class LocalhostPreview {
   }
 
   #authenticated(req: IncomingMessage, port: number): boolean {
+    if (this.#pathOrigin) return Boolean(getSession(req, this.#secret))
     const name = this.#secure ? HTTPS_COOKIE : HTTP_COOKIE
     const entries = (req.headers.cookie ?? '').split(';').map(part => part.trim()).filter(part => part.startsWith(`${name}=`))
     if (entries.length !== 1) return false
@@ -161,12 +172,15 @@ export class LocalhostPreview {
   }
 
   #route(req: IncomingMessage): { port: number; url: URL; origin: string } {
-    const match = (req.headers.host ?? '').match(this.#hostPattern)
-    if (!match) throw new LocalhostPreviewError(400, 'Unrecognized preview host')
+    const match = this.#pathOrigin ? (req.url ?? '').match(/^\/preview\/([1-9][0-9]{3,4})(?=\/|\?|$)/) : (req.headers.host ?? '').match(this.#hostPattern)
+    if (!match) throw new LocalhostPreviewError(400, 'Invalid preview address')
     const port = this.#port(Number(match[1])), origin = this.#origin(port)
     if (req.headers.origin !== undefined && req.headers.origin !== origin) throw new LocalhostPreviewError(403, 'Preview origin is not allowed')
     if (!req.url?.startsWith('/') || req.url.startsWith('//') || unsafePathCharacters(req.url)) throw new LocalhostPreviewError(400, 'Invalid preview request path')
-    return { port, origin, url: new URL(req.url, origin) }
+    const incoming = new URL(req.url, origin)
+    const upstreamPath = this.#pathOrigin ? incoming.pathname.slice(`/preview/${port}`.length) || '/' : incoming.pathname
+    if (upstreamPath.startsWith('//')) throw new LocalhostPreviewError(400, 'Invalid preview path')
+    return { port, origin, url: new URL(origin + upstreamPath + incoming.search) }
   }
 
   #requestHeaders(req: IncomingMessage, port: number, origin: string): Headers {
@@ -177,9 +191,11 @@ export class LocalhostPreview {
     const cookie = applicationCookies(typeof headers.cookie === 'string' ? headers.cookie : undefined)
     if (cookie) headers.cookie = cookie
     else delete headers.cookie
+    if (this.#pathOrigin) headers['accept-encoding'] = 'identity'
     headers.host = `127.0.0.1:${port}`
     headers['x-forwarded-host'] = new URL(origin).host
     headers['x-forwarded-proto'] = this.#secure ? 'https' : 'http'
+    if (this.#pathOrigin) headers['x-forwarded-prefix'] = `/preview/${port}`
     if (req.headers.origin) headers.origin = `http://127.0.0.1:${port}`
     return headers
   }
@@ -187,7 +203,7 @@ export class LocalhostPreview {
   #responseHeaders(response: IncomingMessage, port: number, origin: string): Headers {
     const headers = cleanHeaders(response.headers)
     if (Array.isArray(headers['set-cookie'])) {
-      const cookies = applicationSetCookies(headers['set-cookie'])
+      const cookies = applicationSetCookies(headers['set-cookie']).map(cookie => this.#pathOrigin ? cookie.replace(/;\s*path=[^;]*/ig, '') + `; Path=/preview/${port}/` : cookie)
       if (cookies.length) headers['set-cookie'] = cookies
       else delete headers['set-cookie']
     }
@@ -196,9 +212,15 @@ export class LocalhostPreview {
         const location = new URL(headers.location, `http://127.0.0.1:${port}`)
         const locationPort = Number(location.port || (location.protocol === 'https:' ? 443 : 80))
         if (['http:', 'https:'].includes(location.protocol) && ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname) && locationPort === port) {
-          headers.location = `${origin}${location.pathname}${location.search}${location.hash}`
+          headers.location = `${origin}${this.#pathOrigin ? previewPath(port, location.pathname + location.search + location.hash) : location.pathname + location.search + location.hash}`
         }
       } catch { /* Preserve upstream redirects that are not URLs. */ }
+    }
+    if (this.#pathOrigin) {
+      headers['cache-control'] = 'no-store'
+      headers['service-worker-allowed'] = `/preview/${port}/`
+      headers['referrer-policy'] = 'same-origin'
+      delete headers['clear-site-data']
     }
     return headers
   }
@@ -212,7 +234,7 @@ export class LocalhostPreview {
     try {
       const { port, url, origin } = this.#route(req)
       if (req.method === 'CONNECT' || req.headers.upgrade) throw new LocalhostPreviewError(405, 'Use HTTP or a WebSocket upgrade for this preview')
-      if (url.pathname === LAUNCH_PATH) {
+      if (!this.#pathOrigin && url.pathname === LAUNCH_PATH) {
         if (req.method !== 'GET') throw new LocalhostPreviewError(405, 'Open preview links with GET')
         const key = url.searchParams.get('ticket') ?? '', ticket = this.#tickets.get(key)
         if (!ticket || ticket.expiresAt <= Date.now() / 1000) {
@@ -232,6 +254,9 @@ export class LocalhostPreview {
         return
       }
       if (!this.#authenticated(req, port)) throw new LocalhostPreviewError(401, 'Open this localhost preview from Codex Remote to sign in.')
+      if (this.#pathOrigin && req.url?.match(/^\/preview\/\d+(?:\?|$)/)) {
+        res.writeHead(307, { Location: `/preview/${port}/` + url.search, 'Cache-Control': 'no-store' }); res.end(); return
+      }
       if (url.pathname.startsWith('/__codex_preview__/')) throw new LocalhostPreviewError(404, 'Unknown preview endpoint')
       const upstream = request({ hostname: '127.0.0.1', port, path: `${url.pathname}${url.search}`, method: req.method, headers: this.#requestHeaders(req, port, origin), agent: false })
       this.#track(upstream)
@@ -239,9 +264,29 @@ export class LocalhostPreview {
       timeout.unref()
       upstream.once('response', response => {
         clearTimeout(timeout)
-        res.writeHead(response.statusCode ?? 502, this.#responseHeaders(response, port, origin))
+        const headers = this.#responseHeaders(response, port, origin)
+        const type = String(headers['content-type'] ?? '')
         response.on('error', () => res.destroy())
-        response.pipe(res)
+        if (this.#pathOrigin && /text\/html|text\/css|javascript|ecmascript/.test(type) && !headers['content-encoding'] && req.method !== 'HEAD') {
+          const chunks: Buffer[] = []
+          let size = 0
+          response.on('data', chunk => {
+            size += chunk.length
+            if (size > 16 * 1024 * 1024) { httpError(res, new LocalhostPreviewError(413, 'Preview text exceeds 16 MB')); response.destroy(); return }
+            chunks.push(Buffer.from(chunk))
+          })
+          response.on('end', () => {
+            if (res.writableEnded || res.destroyed) return
+            const body = Buffer.from(rewritePreviewText(Buffer.concat(chunks).toString('utf8'), type, port))
+            delete headers.etag
+            headers['content-length'] = String(body.length)
+            res.writeHead(response.statusCode ?? 502, headers)
+            res.end(body)
+          })
+        } else {
+          res.writeHead(response.statusCode ?? 502, headers)
+          response.pipe(res)
+        }
       })
       upstream.once('error', error => { clearTimeout(timeout); httpError(res, error) })
       upstream.once('close', () => clearTimeout(timeout))

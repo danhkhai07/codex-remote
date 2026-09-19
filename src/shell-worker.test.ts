@@ -12,7 +12,7 @@ function harness() {
     api: {} as { cacheApplicationShell: () => Promise<void>; networkFirst: (request: string, fallback: string) => Promise<Response> },
   }
   runInNewContext(readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8') + '\napi.cacheApplicationShell = cacheApplicationShell; api.networkFirst = networkFirst;', context)
-  return { cache, fetch, api: context.api }
+  return { cache, fetch, api: context.api, listeners: context.self.addEventListener }
 }
 
 function shell() {
@@ -40,4 +40,15 @@ describe('recoverable application shell', () => {
     expect(await (await api.networkFirst('https://remote.test/', '/')).text()).toContain('Working cached shell')
     expect(cache.put).not.toHaveBeenCalled()
   })
+})
+
+it('leaves authenticated preview requests out of the app shell and offline cache', () => {
+  const { listeners, fetch } = harness()
+  const onFetch = listeners.mock.calls.find(([name]) => name === 'fetch')![1]
+  for (const path of ['/preview/3000/', '/preview/3000/assets/app.js', '/preview/5174/api/data']) {
+    const respondWith = vi.fn()
+    onFetch({ request: { method: 'GET', url: 'https://remote.test' + path, mode: 'navigate' }, respondWith })
+    expect(respondWith).not.toHaveBeenCalled()
+  }
+  expect(fetch).not.toHaveBeenCalled()
 })

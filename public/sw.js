@@ -111,7 +111,7 @@ async function cacheFirst(request) {
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url)
-  if (event.request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return
+  if (event.request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/') || url.pathname.startsWith('/preview/')) return
 
   if (event.request.mode === 'navigate') {
     event.respondWith(networkFirst(event.request, '/'))

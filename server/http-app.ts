@@ -194,11 +194,12 @@ export function createRemoteHttpServer(
   const headers = securityHeaders(config)
   const secureCookie = config.publicOrigin.protocol === 'https:'
 
-  const preview = config.previewOriginTemplate ? new LocalhostPreview({
+  const preview = new LocalhostPreview({
+    publicOrigin: config.publicOrigin.origin,
     originTemplate: config.previewOriginTemplate,
     sessionSecret: config.sessionSecret,
     blockedPorts: [config.port, Number(config.publicOrigin.port || (secureCookie ? 443 : 80))],
-  }) : null
+  })
   if (preview?.matchesHost(config.publicOrigin.host)) throw new Error('Preview apps must use a separate origin from Codex Remote')
   if (secureCookie && config.previewOriginTemplate?.startsWith('http:')) throw new Error('HTTPS Codex Remote requires HTTPS preview origins')
 
@@ -211,6 +212,11 @@ export function createRemoteHttpServer(
     try {
       if (!isAllowedHost(req, config)) throw new HttpError(400, 'Unrecognized host')
       const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
+      if (preview.matchesPath(req.url)) {
+        for (const name of Object.keys(headers)) res.removeHeader(name)
+        preview.handle(req, res)
+        return
+      }
       const method = req.method ?? 'GET'
 
       if (url.pathname === '/api/healthz' && method === 'GET') {
@@ -544,7 +550,7 @@ export function createRemoteHttpServer(
   })
   if (preview) {
     server.on('upgrade', (req, socket, head) => {
-      if (preview.matchesHost(req.headers.host)) preview.handleUpgrade(req, socket, head)
+      if (preview.matchesHost(req.headers.host) || (isAllowedHost(req, config) && preview.matchesPath(req.url))) preview.handleUpgrade(req, socket, head)
       else socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
     })
     server.on('close', () => preview.close())
