@@ -1,4 +1,5 @@
 import { LocalhostPreview, LocalhostPreviewError } from './localhost-preview.js'
+import { ServiceError, type ServicesStore } from './services.js'
 import { ContextVaultError } from './context-vault.js'
 import { ReadStateStore } from './read-state.js'
 import { HoursError, type WorkHoursStore } from './work-hours.js'
@@ -108,11 +109,11 @@ function requestIp(req: IncomingMessage): string {
 function securityHeaders(config: RemoteConfig): Record<string, string> {
   const script = config.production ? "script-src 'self'" : "script-src 'self' 'unsafe-eval'"
   return {
-    'Content-Security-Policy': `default-src 'self'; ${script}; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' ws: wss:; frame-src 'self' https: http:; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`,
+    'Content-Security-Policy': `default-src 'self'; ${script}; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' ws: wss:; frame-src 'self' https: http:; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'self'`,
     'Cross-Origin-Opener-Policy': 'same-origin',
     'Referrer-Policy': 'no-referrer',
     'X-Content-Type-Options': 'nosniff',
-    'X-Frame-Options': 'DENY',
+    'X-Frame-Options': 'SAMEORIGIN',
   }
 }
 
@@ -187,6 +188,7 @@ export function createRemoteHttpServer(
   workPresence?: WorkPresence,
   workHours?: WorkHoursStore,
   readState = new ReadStateStore(),
+  services?: ServicesStore,
 ) {
   const fileRoots = [...new Set([...(config.fileRoots ?? config.workspaceRoots), ...(controller.contextVault ? [controller.contextVault.root] : [])])]
   const pptxPreviews = new PptxPreviewCache()
@@ -270,6 +272,14 @@ export function createRemoteHttpServer(
         if (req.headers['x-csrf-token'] !== session.csrf) throw new HttpError(403, 'Invalid CSRF token')
       }
 
+      if (url.pathname === '/api/services' && ['GET', 'PUT', 'DELETE'].includes(method)) {
+        if (!services) throw new HttpError(503, 'Danh sách dịch vụ đang chờ cập nhật máy chủ. Hãy thử lại sau.')
+        try {
+          if (method === 'DELETE') { services.remove(url.searchParams.get('key') ?? ''); json(res, 200, { ok: true }); return }
+          json(res, 200, method === 'GET' ? await services.snapshot() : { service: services.upsert(await readJson(req)) })
+        } catch (error) { if (error instanceof ServiceError) throw new HttpError(error.status, error.message); throw error }
+        return
+      }
       if (url.pathname === '/api/localhost-preview' && method === 'GET') {
         json(res, 200, { enabled: Boolean(preview) })
         return

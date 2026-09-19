@@ -1,4 +1,5 @@
 import { WorkHoursStore } from './work-hours.js'
+import { ServicesStore } from './services.js'
 import { WorkPresence } from './work-presence.js'
 import { promises as fs } from 'node:fs'
 import { request } from 'node:http'
@@ -431,4 +432,41 @@ describe('Codex Remote HTTP boundary', () => {
     expect(lockedLogin.status).toBe(429)
     expect(JSON.parse(lockedLogin.body)).toEqual({ error: 'Too many login attempts. Try again later.' })
   }, 30_000)
+})
+
+it('protects services edits and serves internal pages with same-origin framing', async () => {
+  const base = await fs.mkdtemp(join(tmpdir(), 'remote-services-'))
+  await fs.writeFile(join(base, 'index.html'), '<main>Services shell</main>')
+  const config: RemoteConfig = {
+    host: '127.0.0.1', port: 5173, publicOrigin: new URL('https://remote.example.test'),
+    password: 'fixture-password-long', sessionSecret: 'fixture-secret-'.repeat(4), sessionTtlSeconds: 600,
+    codexBin: 'unused', workspaceRoots: [base], production: true,
+  }
+  const services = new ServicesStore(join(base, 'services.json'), async () => true, [5173])
+  const server = createRemoteHttpServer(config, new RemoteController(config, new CodexAppServer('unused')), base, null, undefined, undefined, undefined, undefined, undefined, services)
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  try {
+    expect((await fetchLocal(port, '/api/services')).status).toBe(401)
+    const shell = await fetchLocal(port, '/services')
+    expect(shell.status).toBe(200)
+    expect(shell.headers['x-frame-options']).toBe('SAMEORIGIN')
+    expect(shell.headers['content-security-policy']).toContain("frame-ancestors 'self'")
+    const login = await fetchLocal(port, '/api/session/login', { method: 'POST', origin: config.publicOrigin.origin, body: { password: config.password } })
+    const options = { cookie: login.headers['set-cookie']?.[0].split(';', 1)[0], csrf: JSON.parse(login.body).csrf, origin: config.publicOrigin.origin }
+    const body = { port: 5183, name: 'Kiotclone', summary: 'PRINT-01 review', prLabel: 'PR #125' }
+    expect((await fetchLocal(port, '/api/services', { ...options, method: 'PUT', csrf: 'wrong', body })).status).toBe(403)
+    expect((await fetchLocal(port, '/api/services', { ...options, method: 'PUT', origin: 'https://evil.test', body })).status).toBe(403)
+    expect((await fetchLocal(port, '/api/services', { ...options, method: 'PUT', body: { ...body, port: 5173 } })).status).toBe(400)
+    expect((await fetchLocal(port, '/api/services', { ...options, method: 'PUT', body })).status).toBe(200)
+    expect((await fetchLocal(port, '/api/services', { ...options, method: 'PUT', body: { ...body, port: null, path: '/working-hours' } })).status).toBe(200)
+    const result = JSON.parse((await fetchLocal(port, '/api/services', options)).body)
+    expect(result.services).toHaveLength(2)
+    expect(result.services.find((entry: { port: number }) => entry.port === 5183).running).toBe(true)
+    expect((await fetchLocal(port, '/api/services?key=port:5183', { ...options, method: 'DELETE' })).status).toBe(200)
+    expect(new ServicesStore(join(base, 'services.json')).list()).toHaveLength(1)
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    await fs.rm(base, { recursive: true, force: true })
+  }
 })

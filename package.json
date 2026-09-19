@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "NODE_ENV=development node --env-file-if-exists=.env --watch --experimental-strip-types server/index.ts",
     "start": "NODE_ENV=production node --env-file-if-exists=.env dist-server/index.js",
+    "services": "node --env-file-if-exists=.env scripts/services.mjs",
     "status": "node --env-file-if-exists=.env scripts/status.mjs",
     "typecheck": "tsc -b",
     "build:client": "vite build",

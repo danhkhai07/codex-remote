@@ -1,5 +1,6 @@
 import { ContextVault } from './context-vault.js'
 import { ReadStateStore } from './read-state.js'
+import { ServicesStore } from './services.js'
 import { homedir } from 'node:os'
 import { WorkHoursStore } from './work-hours.js'
 import { WorkPresence } from './work-presence.js'
@@ -56,7 +57,9 @@ controller.onTurnCompleted = (threadId, turnId, answer) => {
 await controller.start()
 push.start()
 
-const server = createRemoteHttpServer(config, controller, distRoot, vite, push, attachments, workPresence, workHours, readState)
+const services = new ServicesStore(process.env.CODEX_REMOTE_SERVICES_FILE?.trim() ||
+  resolve(homedir(), '.local/state/codex-remote/services.json'), undefined, [config.port])
+const server = createRemoteHttpServer(config, controller, distRoot, vite, push, attachments, workPresence, workHours, readState, services)
 server.listen(config.port, config.host, () => {
   console.log(`Codex Remote listening on http://${config.host}:${config.port}`)
   console.log(`Public origin: ${config.publicOrigin.origin}`)
