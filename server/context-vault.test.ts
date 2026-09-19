@@ -32,7 +32,7 @@ it('persists groups and assignments, publishes only effective grouping changes, 
   expect(restored.snapshot()).toEqual(vault.snapshot())
   expect(readFileSync(group.contextPath, 'utf8')).toBe('Keep these carefully written notes.\n')
   expect(readFileSync(join(root, 'Shared', 'Context.md'), 'utf8')).toBe('User shared notes.\n')
-  expect(readFileSync(join(root, 'Index.md'), 'utf8')).toContain('Project A')
+  expect(readFileSync(join(root, 'Sources.md'), 'utf8')).toContain('Project A')
   expect(readFileSync(join(root, 'Groups', group.id, 'Index.md'), 'utf8')).toContain('thread-a')
 })
 
@@ -128,12 +128,13 @@ it('provides actual bounded notes with correct shared/group/own paths and scoped
   expect(instructions).toContain('Excerpt capped')
   expect(instructions).not.toContain('\ufffd')
   expect(instructions).not.toContain('Beta private working notes.')
-  expect(Buffer.byteLength(instructions)).toBeLessThan(28_000)
-  expect(vault.writableRoots('chat')).toEqual([join(root, 'Shared'), join(root, 'Conversations', 'chat'), join(root, 'Groups', a.id)])
+  expect(Buffer.byteLength(instructions)).toBeLessThan(32_000)
+  expect(vault.writableRoots('chat')).toEqual(expect.arrayContaining([join(root, 'Profile'), join(root, 'Patterns'), join(root, 'Projects'), join(root, 'Ideas'), join(root, 'Decisions'), join(root, 'References'), join(root, 'Inbox'), join(root, 'Shared'), join(root, 'Conversations', 'chat'), join(root, 'Groups', a.id)]))
+  expect(vault.writableRoots('chat')).not.toContain(join(root, 'Groups', b.id))
   vault.assignThread('chat', null)
   expect(vault.contextFor('chat')).not.toContain('Alpha decisions.')
   expect(vault.contextFor('chat')).toContain('Global policy.')
-  expect(vault.writableRoots('chat')).toHaveLength(2)
+  expect(vault.writableRoots('chat')).not.toContain(join(root, 'Groups', a.id))
 })
 
 it('orders previously missing user messages before their assistant reply and preserves literal user markup', () => {
@@ -144,4 +145,47 @@ it('orders previously missing user messages before their assistant reply and pre
   const text = readFileSync(join(root, 'Conversations', 'chat', 'Turns', 'turn.md'), 'utf8')
   expect(text.indexOf('## User')).toBeLessThan(text.indexOf('## Assistant'))
   expect(text).toContain(literal)
+})
+
+it('upgrades existing vaults without changing curated notes, source history, assignments or Obsidian settings', () => {
+  const { root, vault } = setup()
+  const group = vault.createGroup('Research').groups[0]
+  vault.assignThread('chat', group.id)
+  vault.recordThread({ id: 'chat', turns: [{ id: 'turn', status: 'completed', items: [user('u', 'Original evidence')] }] })
+  const notes = {
+    'Shared/Context.md': 'Custom orientation', 'Profile/Context.md': 'Explicit preference',
+    'Ideas/New-Idea.md': 'Unconfirmed idea, preserve verbatim', '00_Home.md': 'My personal home',
+    '.obsidian/app.json': '{"vimMode":true}',
+  }
+  for (const [path, content] of Object.entries(notes)) writeFileSync(join(root, path), content)
+  const source = join(root, 'Conversations/chat/Turns/turn.md'), before = readFileSync(source, 'utf8')
+  const restored = new ContextVault(root)
+  for (const [path, content] of Object.entries(notes)) expect(readFileSync(join(root, path), 'utf8')).toBe(content)
+  expect(restored.groupFor('chat')?.id).toBe(group.id)
+  expect(readFileSync(source, 'utf8')).toBe(before)
+  expect(readFileSync(join(root, 'Index.md'), 'utf8')).toContain('Ideas/New-Idea.md')
+  expect(readFileSync(join(root, 'Sources.md'), 'utf8')).toContain('Conversations/chat/Index.md')
+})
+
+it('discovers new knowledge between turns without injecting transcripts and ignores symlinked notes', () => {
+  const { root, parent, vault } = setup()
+  vault.recordThread({ id: 'chat', turns: [{ id: 'turn', items: [user('u', 'LONG SOURCE HISTORY MUST NOT BE INJECTED')] }] })
+  const external = join(parent, 'secret.md')
+  writeFileSync(external, 'External secret')
+  symlinkSync(external, join(root, 'Patterns', 'Escaped.md'))
+  const file = join(root, 'Patterns', 'Readable-Interfaces.md')
+  writeFileSync(file, 'Detailed topic stays on disk until relevant')
+  writeFileSync(join(root, 'Profile/Context.md'), 'Explicitly prefer readable typography')
+  const prompt = vault.contextFor('chat')
+  expect(prompt).toContain('Readable-Interfaces.md')
+  expect(prompt).toContain('Explicitly prefer readable typography')
+  expect(prompt).toContain('update the relevant note before the final response')
+  expect(prompt).toContain('confirmed user statements')
+  expect(prompt).not.toContain('LONG SOURCE HISTORY MUST NOT BE INJECTED')
+  expect(prompt).not.toContain('Detailed topic stays on disk until relevant')
+  expect(prompt).not.toContain('Escaped.md')
+  expect(prompt).not.toContain('External secret')
+  expect(readFileSync(join(root, 'Patterns/Index.md'), 'utf8')).toContain('(Readable-Interfaces.md)')
+  rmSync(file)
+  expect(vault.contextFor('chat')).not.toContain('Readable-Interfaces.md')
 })

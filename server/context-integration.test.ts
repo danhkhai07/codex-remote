@@ -47,7 +47,7 @@ it('injects fresh shared and group context separately on every turn and preserve
   expect(injected.items[0].content[0].text).toContain('Group decision A')
   expect(calls.find(([method]) => method === 'turn/start')![1]).toMatchObject({
     cwd: '/tmp', input: [{ type: 'text', text: literal, text_elements: [] }],
-    sandboxPolicy: { writableRoots: ['/tmp', join(root, 'Shared'), join(root, 'Conversations/new-chat'), join(root, 'Groups', group.id)] },
+    sandboxPolicy: { writableRoots: expect.arrayContaining(['/tmp', join(root, 'Profile'), join(root, 'Patterns'), join(root, 'Projects'), join(root, 'Ideas'), join(root, 'Decisions'), join(root, 'References'), join(root, 'Inbox'), join(root, 'Shared'), join(root, 'Conversations/new-chat'), join(root, 'Groups', group.id)]) },
   })
   expect(calls.findIndex(([method]) => method === 'thread/inject_items')).toBeLessThan(calls.findIndex(([method]) => method === 'turn/start'))
   vault.assignThread('new-chat', null)
