@@ -22,11 +22,13 @@ export function LocalhostPreview({ csrf, onClose, initialUrl }: {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [preview, setPreview] = useState<Preview | null>(null)
+  const [controlsOpen, setControlsOpen] = useState(true)
   const [loaded, setLoaded] = useState(false)
   const [slow, setSlow] = useState(false)
   const closeButton = useRef<HTMLButtonElement>(null)
   const backdrop = useRef<HTMLDivElement>(null)
   const dialog = useRef<HTMLElement>(null)
+  const controls = useRef<HTMLDivElement>(null)
   const request = useRef<AbortController | null>(null)
   const popup = useRef<Window | null>(null)
   const autoOpened = useRef<string | null>(null)
@@ -132,6 +134,9 @@ export function LocalhostPreview({ csrf, onClose, initialUrl }: {
         setLoaded(false)
         setSlow(false)
         setPreview(current => ({ ...result, address: value, loadId: (current?.loadId ?? 0) + 1 }))
+        // Move focus before hiding the address form, also dismissing mobile keyboards.
+        if (controls.current?.contains(document.activeElement)) closeButton.current?.focus()
+        setControlsOpen(false)
       }
     } catch (reason) {
       opened?.close()
@@ -174,25 +179,28 @@ export function LocalhostPreview({ csrf, onClose, initialUrl }: {
       <header className="file-viewer-header">
         <div className="link-viewer-identity">
           <span className="file-viewer-title" id="localhost-preview-title">Localhost preview</span>
-          <span className="file-viewer-path">Ứng dụng đang chạy trên VPS</span>
         </div>
+        {preview && <div className="localhost-preview-actions">
+          <button className="quiet-button localhost-preview-address-toggle" type="button" aria-expanded={controlsOpen} aria-controls="localhost-preview-controls" onClick={() => setControlsOpen(value => !value)} title="Đổi port hoặc địa chỉ">:{preview.port} <span aria-hidden="true">⌄</span></button>
+          <button className="quiet-button" type="button" disabled={busy || !enabled || !csrf} onClick={() => void launch(preview.address)} aria-label="Reload preview" title="Reload">↻</button>
+          <button className="quiet-button" type="button" disabled={busy || !enabled || !csrf} onClick={() => void launch(preview.address, true)} aria-label="Open preview in browser" title="Open browser">↗</button>
+        </div>}
         <button ref={closeButton} className="icon-button" type="button" onClick={onClose} aria-label="Close localhost preview">×</button>
       </header>
-      <div className="localhost-preview-controls">
-        <form onSubmit={submit}>
+      <div ref={controls} id="localhost-preview-controls" className="localhost-preview-controls" hidden={!controlsOpen && !error && !statusError}>
+        <form onSubmit={submit} hidden={!controlsOpen}>
           <label htmlFor="localhost-preview-address">Port hoặc địa chỉ localhost</label>
           <div className="localhost-preview-address-row">
             <input id="localhost-preview-address" value={address} onChange={event => setAddress(event.target.value)} placeholder="3000 hoặc http://localhost:5174" autoCapitalize="none" autoCorrect="off" spellCheck={false} disabled={busy} aria-describedby="localhost-preview-help" />
             <button className="primary-button" type="submit" disabled={!enabled || busy || !csrf}>{busy ? 'Đang mở…' : 'Open preview'}</button>
           </div>
         </form>
-        <div className="localhost-preview-toolbar">
+        {controlsOpen && <div className="localhost-preview-toolbar">
           <p id="localhost-preview-help">Giữ app trên VPS chạy trong lúc xem.</p>
           <div className="localhost-preview-actions">
-            {preview && <button className="quiet-button" type="button" disabled={busy || !enabled || !csrf} onClick={() => void launch(preview.address)}>Reload</button>}
             <button className="quiet-button" type="button" disabled={busy || !enabled || !csrf} onClick={() => void launch(address, true)}>Open browser ↗</button>
           </div>
-        </div>
+        </div>}
         {enabled === null && !statusError && <p className="localhost-preview-status" role="status">Đang kiểm tra preview…</p>}
         {enabled === false && <p className="localhost-preview-status" role="status">Preview chưa được cấu hình domain trên server.</p>}
         {statusError && <div className="localhost-preview-error" role="alert"><span>{statusError}</span><button className="quiet-button" type="button" onClick={() => setStatusAttempt(value => value + 1)}>Thử lại</button></div>}
@@ -208,7 +216,6 @@ export function LocalhostPreview({ csrf, onClose, initialUrl }: {
           }} />
         </>}
       </div>
-      {preview && <p className="localhost-preview-footer">Nếu khung xem không tải được hoặc bị chặn cookie, chọn Open browser.</p>}
     </section>
   </div>
 }
