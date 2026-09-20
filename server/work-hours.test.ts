@@ -31,3 +31,36 @@ it('rejects malformed totals and preserves corrupt data rather than resetting it
  const f=fixture();for(const totals of [{'2026-02-30':1},{'2026-09-16':25},{'2026-09-16':NaN}])expect(()=>f.store.change({action:'replace-totals',expectedRevision:0,totals})).toThrow()
  writeFileSync(f.file,'broken');expect(()=>f.store.read()).toThrow()
 })
+
+it('continues automatic activity after entering, increasing, decreasing, and zeroing hours', () => {
+ const f = fixture(), day = '2026-09-16'
+ const estimate = (hours: number) => writeFileSync(join(f.file, '..', 'data.json'), JSON.stringify({days: [{date: day, estimatedHours: hours}]}))
+ estimate(2)
+ f.store.change({action: 'replace-totals', expectedRevision: 0, totals: {[day]: 4}})
+ estimate(3)
+ expect(f.store.read().totals[day]).toBe(5)
+ f.store.change({action: 'replace-totals', expectedRevision: 1, totals: {[day]: 1}})
+ estimate(3.5)
+ expect(f.store.read().totals[day]).toBe(1.5)
+ f.store.change({action: 'replace-totals', expectedRevision: 2, totals: {[day]: 0}})
+ estimate(4)
+ expect(new WorkHoursStore(f.file).read().totals[day]).toBe(.5)
+})
+it('resumes estimates after a timer without counting its estimated activity twice', () => {
+ const f = fixture(), day = '2026-09-16'
+ const estimate = (hours: number) => writeFileSync(join(f.file, '..', 'data.json'), JSON.stringify({days: [{date: day, estimatedHours: hours}]}))
+ estimate(2)
+ f.store.change({action: 'start', expectedRevision: 0})
+ f.advance(3600000); estimate(3)
+ expect(f.store.change({action: 'stop', expectedRevision: 1}).totals[day]).toBe(3)
+ estimate(3.5)
+ expect(f.store.read().totals[day]).toBe(3.5)
+})
+it('preserves legacy totals and enables further automatic activity on first read', () => {
+ const f = fixture(), day = '2026-09-16', dataFile = join(f.file, '..', 'data.json')
+ writeFileSync(f.file, JSON.stringify({revision: 4, totals: {[day]: 6}, timer: null}))
+ writeFileSync(dataFile, JSON.stringify({days: [{date: day, estimatedHours: 2}]}))
+ expect(f.store.read().totals[day]).toBe(6)
+ writeFileSync(dataFile, JSON.stringify({days: [{date: day, estimatedHours: 3}]}))
+ expect(f.store.read().totals[day]).toBe(7)
+})
