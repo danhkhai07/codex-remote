@@ -372,7 +372,7 @@ export class RemoteController {
     if (this.#archivingThreads.has(threadId) || this.#renamingThreads.has(threadId)) throw new ContextVaultError(409, 'Conversation management is in progress')
     this.#renamingThreads.add(threadId)
     try {
-      if (!this.#loadedThreads.has(threadId)) await this.#readThreadMetadata(threadId)
+      if (!this.#loadedThreads.has(threadId)) await this.#readThreadMetadata(threadId, false)
       guard?.()
       await this.appServer.request('thread/name/set', { threadId, name }, 10_000)
       const cached = this.#loadedThreads.get(threadId)
@@ -397,7 +397,7 @@ export class RemoteController {
     try {
       if (guard) {
         // Fresh authoritative status, not the UI/cache; unknown/error states fail closed.
-        const thread = threadFromResult(await this.#readThreadMetadata(threadId))
+        const thread = threadFromResult(await this.#readThreadMetadata(threadId, false))
         guard()
         if (!['idle', 'notLoaded'].includes(String(asObject(thread.status).type)) || this.#activeTurns.has(threadId) || this.#turnStarts.has(threadId)
           || (Array.isArray(thread.turns) && thread.turns.some(turn => asObject(turn).status === 'inProgress'))
@@ -617,10 +617,10 @@ export class RemoteController {
     return this.#config.workspaceRoots[index]
   }
 
-  async #readThreadMetadata(threadId: string): Promise<unknown> {
+  async #readThreadMetadata(threadId: string, reconcileActivity = true): Promise<unknown> {
     const result = await this.appServer.request('thread/read', { threadId, includeTurns: false })
     this.#assertAllowedThread(result)
-    this.#cacheThread(threadFromResult(result))
+    this.#cacheThread(threadFromResult(result), reconcileActivity)
     return result
   }
 
@@ -633,11 +633,13 @@ export class RemoteController {
     return request
   }
 
-  #cacheThread(thread: Record<string, unknown>): void {
+  #cacheThread(thread: Record<string, unknown>, reconcileActivity = true): void {
     const id = thread.id
     const cwd = String(thread.cwd ?? '')
     if (typeof id === 'string' && this.#config.workspaceRoots.includes(cwd)) {
-      if (['idle', 'notLoaded', 'systemError'].includes(String(asObject(thread.status).type)) && !this.#turnStarts.has(id)) this.#activeTurns.delete(id)
+      // Management reads establish access/status, but must not erase a live-turn
+      // lock with an idle snapshot that can predate a turn/started notification.
+      if (reconcileActivity && ['idle', 'notLoaded', 'systemError'].includes(String(asObject(thread.status).type)) && !this.#turnStarts.has(id)) this.#activeTurns.delete(id)
       this.#recordContext(thread)
       // This cache supplies routing and fallback metadata, never transcripts.
       const metadata = { ...this.#loadedThreads.get(id), ...thread, turns: [], historyUnavailable: true }

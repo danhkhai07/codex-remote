@@ -230,3 +230,29 @@ it('renames the active leader itself without clearing the live-turn lock from st
   await expect(f.controller.startTurn('leader', 'Must not overlap')).rejects.toMatchObject({ status: 409 })
   expect(f.rpc.mock.calls.some(([method]) => ['turn/start', 'turn/interrupt', 'thread/resume'].includes(method))).toBe(false)
 })
+
+it('preserves a live turn when self-rename must reload evicted metadata', async () => {
+  const f = setup()
+  f.vault.setLeader(f.group.id, 'leader')
+  f.app.emit('notification', { method: 'turn/started', params: { threadId: 'leader', turn: { id: 'live', status: 'inProgress' } } })
+  // No cached metadata (also possible after eviction); the read returns an older idle snapshot.
+  const orchestra = f.controller.orchestration!, cap = orchestra.context('leader', { fullAccess: false }, true).match(/--capability ([\w-]+)/)![1]
+  await orchestra.command(cap, { action: 'rename', threadId: 'leader', name: 'Coordinator' })
+  await expect(f.controller.startTurn('leader', 'Must not overlap')).rejects.toMatchObject({ status: 409 })
+  expect(f.rpc.mock.calls.some(([method]) => method === 'turn/start')).toBe(false)
+})
+
+it('does not archive after a live-turn notification overtakes the idle metadata response', async () => {
+  const f = setup(), original = f.rpc.getMockImplementation()!
+  f.vault.setLeader(f.group.id, 'leader')
+  const orchestra = f.controller.orchestration!, cap = orchestra.context('leader', { fullAccess: false }, true).match(/--capability ([\w-]+)/)![1]
+  f.rpc.mockImplementation(async (method, input, timeout) => {
+    const snapshot = await original(method, input, timeout)
+    if (method === 'thread/read') f.app.emit('notification', { method: 'turn/started', params: { threadId: 'worker', turn: { id: 'live', status: 'inProgress' } } })
+    return snapshot
+  })
+  await expect(orchestra.command(cap, { action: 'archive', threadId: 'worker', requestId: 'newer-turn' })).rejects.toMatchObject({ status: 409 })
+  expect(f.rpc.mock.calls.some(([method]) => ['thread/archive', 'turn/interrupt'].includes(method))).toBe(false)
+  expect(f.vault.groupFor('worker')?.id).toBe(f.group.id)
+  expect(orchestra.snapshot('leader').archives).toEqual([])
+})
