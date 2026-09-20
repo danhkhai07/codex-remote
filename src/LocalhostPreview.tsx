@@ -26,7 +26,6 @@ export function LocalhostPreview({ csrf, onClose, initialUrl, scope = 'services'
   const [loaded, setLoaded] = useState(false)
   const [slow, setSlow] = useState(false)
   const closeButton = useRef<HTMLButtonElement>(null)
-  const backdrop = useRef<HTMLDivElement>(null)
   const dialog = useRef<HTMLElement>(null)
   const controls = useRef<HTMLDivElement>(null)
   const request = useRef<AbortController | null>(null)
@@ -38,23 +37,6 @@ export function LocalhostPreview({ csrf, onClose, initialUrl, scope = 'services'
   close.current = onClose
 
   useEffect(() => { setSavedAddress(address) }, [address, setSavedAddress])
-
-  useEffect(() => {
-    const viewport = window.visualViewport
-    if (!viewport) return
-    const resize = () => {
-      if (!backdrop.current) return
-      backdrop.current.style.setProperty('--localhost-preview-height', `${viewport.height}px`)
-      backdrop.current.style.top = `${viewport.offsetTop}px`
-    }
-    resize()
-    viewport.addEventListener('resize', resize)
-    viewport.addEventListener('scroll', resize)
-    return () => {
-      viewport.removeEventListener('resize', resize)
-      viewport.removeEventListener('scroll', resize)
-    }
-  }, [])
 
   useEffect(() => {
     const previousFocus = document.activeElement
@@ -168,7 +150,7 @@ export function LocalhostPreview({ csrf, onClose, initialUrl, scope = 'services'
     if (!busy) void launch(address)
   }
 
-  return <div ref={backdrop} className="file-viewer-backdrop localhost-preview-backdrop" onMouseDown={event => {
+  return <div className="file-viewer-backdrop localhost-preview-backdrop" onMouseDown={event => {
     if (event.currentTarget === event.target) onClose()
   }}>
     <section ref={dialog} className="file-viewer localhost-preview" role="dialog" aria-modal="true" aria-labelledby="localhost-preview-title">
