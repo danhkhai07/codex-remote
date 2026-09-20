@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { request } from 'node:http'
@@ -122,4 +122,111 @@ it('inherits Plan mode for workers and result wakeups, including native plan-onl
   f.app.emit('notification', { method: 'turn/completed', params: { threadId: 'leader', turn: { id: 'turn-1', status: 'completed' } } })
   await f.controller.orchestration!.pump()
   expect(starts().at(-1)).toMatchObject({ threadId: 'leader', collaborationMode: { mode: 'plan' }, input: [{ text: expect.stringContaining('A verified plan') }] })
+})
+
+
+it('renames through native RPC/events and archives without deleting vault context or source history', async () => {
+  const f = setup(), names = new Map<string, string>()
+  f.vault.setLeader(f.group.id, 'leader')
+  const orchestra = f.controller.orchestration!, cap = orchestra.context('leader', { fullAccess: false }, true).match(/--capability ([\w-]+)/)![1]
+  f.rpc.mockImplementation(async (method, input) => {
+    const params = input as Record<string, unknown>
+    if (method === 'thread/read') return { thread: { id: params.threadId, name: names.get(String(params.threadId)), cwd: f.root, status: { type: 'idle' },
+      turns: [{ id: 'history', status: 'completed', items: [{ id: 'answer', type: 'agentMessage', text: 'Preserve this source history' }] }] } }
+    if (method === 'thread/name/set') names.set(String(params.threadId), String(params.name))
+    return {}
+  })
+  await f.controller.readThread('worker')
+  const note = join(f.root, 'vault/Conversations/worker/Context.md')
+  writeFileSync(note, '# Keep this context\nUseful knowledge survives archival.\n')
+  const sources = join(f.root, 'vault/Conversations/worker/Turns')
+  const before = readdirSync(sources).map(name => [name, readFileSync(join(sources, name), 'utf8')])
+  const publish = vi.spyOn(f.controller.events, 'publish')
+  await expect(orchestra.command(cap, { action: 'rename', threadId: 'worker', name: '  Worker QA  ' })).resolves.toMatchObject({ name: 'Worker QA' })
+  expect(f.rpc).toHaveBeenCalledWith('thread/name/set', { threadId: 'worker', name: 'Worker QA' }, 10_000)
+  expect(publish).toHaveBeenCalledWith('codex', { method: 'thread/name/updated', params: { threadId: 'worker', threadName: 'Worker QA' } })
+  await expect(f.controller.readThread('worker')).resolves.toMatchObject({ thread: { name: 'Worker QA' } })
+  await expect(orchestra.command(cap, { action: 'archive', threadId: 'worker', requestId: 'remove-worker' })).resolves.toMatchObject({ archived: true })
+  expect(f.vault.groupFor('worker')).toBeNull()
+  expect(publish).toHaveBeenCalledWith('codex', { method: 'thread/archived', params: { threadId: 'worker' } })
+  expect(readFileSync(note, 'utf8')).toContain('Useful knowledge survives archival.')
+  expect(readdirSync(sources).map(name => [name, readFileSync(join(sources, name), 'utf8')])).toEqual(before)
+  expect(f.rpc.mock.calls.filter(([method]) => method === 'thread/archive')).toHaveLength(1)
+  expect(f.rpc.mock.calls.some(([method]) => ['thread/resume', 'turn/start', 'turn/interrupt'].includes(method))).toBe(false)
+})
+
+it.each(['rename', 'archive'])('rechecks %s authority after metadata reads, before any mutating RPC', async action => {
+  const f = setup()
+  f.vault.setLeader(f.group.id, 'leader')
+  const orchestra = f.controller.orchestration!, cap = orchestra.context('leader', { fullAccess: false }, true).match(/--capability ([\w-]+)/)![1]
+  f.rpc.mockImplementation(async (method, input) => {
+    if (method === 'thread/read') {
+      f.vault.setLeader(f.group.id, 'second')
+      return { thread: { id: (input as { threadId: string }).threadId, cwd: f.root, status: { type: 'idle' }, turns: [] } }
+    }
+    throw Error('Mutation must never dispatch')
+  })
+  await expect(orchestra.command(cap, { action, threadId: 'worker', name: 'No', requestId: 'no' })).rejects.toMatchObject({ status: 403 })
+  expect(f.rpc.mock.calls.every(([method]) => method === 'thread/read')).toBe(true)
+  expect(orchestra.snapshot('second').archives).toEqual([])
+  f.vault.setLeader(f.group.id, 'leader')
+  await expect(orchestra.command(cap, { action, threadId: 'worker', name: 'Still no', requestId: 'no' })).rejects.toMatchObject({ status: 403 })
+})
+
+it.each(['active', 'systemError', 'unknown', 'turn', 'pending', 'manual', 'move'])('rejects archive on fresh %s state without sending archive or interrupt', async scenario => {
+  const f = setup()
+  f.vault.setLeader(f.group.id, 'leader')
+  const orchestra = f.controller.orchestration!, cap = orchestra.context('leader', { fullAccess: false }, true).match(/--capability ([\w-]+)/)![1]
+  f.rpc.mockImplementation(async (method, input) => {
+    if (method === 'thread/read') {
+      if (scenario === 'pending') f.app.emit('serverRequest', { id: 'needs-answer', method: 'item/tool/requestUserInput', params: { threadId: 'worker' } })
+      if (scenario === 'manual') orchestra.userStop('worker')
+      if (scenario === 'move') f.vault.assignThread('worker', null)
+      return { thread: { id: (input as { threadId: string }).threadId, cwd: f.root,
+        status: { type: ['active', 'systemError', 'unknown'].includes(scenario) ? scenario : 'idle' },
+        turns: scenario === 'turn' ? [{ id: 'running', status: 'inProgress' }] : [] } }
+    }
+    throw Error('No mutating RPC expected')
+  })
+  await expect(orchestra.command(cap, { action: 'archive', threadId: 'worker', requestId: scenario })).rejects.toMatchObject({ status: scenario === 'move' ? 403 : 409 })
+  expect(f.rpc.mock.calls.every(([method]) => method === 'thread/read')).toBe(true)
+  expect(orchestra.snapshot('leader').archives).toEqual([])
+})
+
+it.each(['role', 'move', 'manual'])('excludes new turns while archiving and flags a mid-RPC %s change without overwriting newer state', async scenario => {
+  const f = setup(), original = f.rpc.getMockImplementation()!
+  f.vault.setLeader(f.group.id, 'leader')
+  const orchestra = f.controller.orchestration!, cap = orchestra.context('leader', { fullAccess: false }, true).match(/--capability ([\w-]+)/)![1]
+  let release!: () => void, dispatched!: () => void
+  const started = new Promise<void>(resolve => { dispatched = resolve }), waiting = new Promise<void>(resolve => { release = resolve })
+  f.rpc.mockImplementation(async (method, params, timeout) => {
+    if (method === 'thread/archive') { dispatched(); await waiting; return {} }
+    return original(method, params, timeout)
+  })
+  const command = { action: 'archive', threadId: 'worker', requestId: 'race' }
+  const operation = orchestra.command(cap, command), failure = expect(operation).rejects.toMatchObject({ status: scenario === 'manual' ? 409 : 403 })
+  await started
+  await expect(f.controller.startTurn('worker', 'Direct user message')).rejects.toMatchObject({ status: 409 })
+  await expect(f.controller.renameThread('worker', 'User title')).rejects.toMatchObject({ status: 409 })
+  if (scenario === 'move') f.vault.assignThread('worker', f.vault.createGroup('Other').groups.at(-1)!.id)
+  if (scenario === 'role') f.vault.setLeader(f.group.id, 'second')
+  if (scenario === 'manual') orchestra.userStop('worker')
+  release(); await failure
+  expect(f.vault.groupFor('worker')?.name).toBe(scenario === 'move' ? 'Other' : 'Project')
+  expect(orchestra.snapshot('leader').archives[0].status).toBe('review')
+  await expect(orchestra.command(cap, command)).rejects.toMatchObject({ status: scenario === 'role' ? 403 : 409 })
+  expect(f.rpc.mock.calls.filter(([method]) => method === 'thread/archive')).toHaveLength(1)
+  expect(f.rpc.mock.calls.some(([method]) => ['turn/start', 'turn/interrupt'].includes(method))).toBe(false)
+})
+
+
+it('renames the active leader itself without clearing the live-turn lock from stale cached metadata', async () => {
+  const f = setup()
+  f.vault.setLeader(f.group.id, 'leader')
+  await f.controller.readThread('leader') // Authoritative idle metadata before the turn started.
+  f.app.emit('notification', { method: 'turn/started', params: { threadId: 'leader', turn: { id: 'live', status: 'inProgress' } } })
+  const orchestra = f.controller.orchestration!, cap = orchestra.context('leader', { fullAccess: false }, true).match(/--capability ([\w-]+)/)![1]
+  await expect(orchestra.command(cap, { action: 'rename', threadId: 'leader', name: 'Project coordinator' })).resolves.toMatchObject({ name: 'Project coordinator' })
+  await expect(f.controller.startTurn('leader', 'Must not overlap')).rejects.toMatchObject({ status: 409 })
+  expect(f.rpc.mock.calls.some(([method]) => ['turn/start', 'turn/interrupt', 'thread/resume'].includes(method))).toBe(false)
 })

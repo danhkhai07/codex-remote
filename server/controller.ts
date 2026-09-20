@@ -56,6 +56,8 @@ export class RemoteController {
   readonly #agentMessages = new Map<string, AgentMessages>()
   readonly #interrupts = new Map<string, Promise<unknown>>()
   readonly #threadReads = new Map<string, Promise<unknown>>()
+  readonly #archivingThreads = new Set<string>()
+  readonly #renamingThreads = new Set<string>()
   readonly #turnStarts = new Set<string>()
   readonly #activeTurns = new Map<string, string>()
   readonly #completedTurns = new Set<string>()
@@ -72,7 +74,9 @@ export class RemoteController {
       read: async threadId => threadFromResult(await this.readThread(threadId)) as { id: string },
       inspect: async threadId => threadFromResult(await this.#readThreadMetadata(threadId)) as { id: string },
       create: async (workspaceId, groupId, settings) => threadFromResult(await this.createThread(workspaceId, settings.fullAccess, groupId)) as { id: string },
-      rename: (threadId, name) => this.renameThread(threadId, name),
+      normalizeName: normalizeThreadName,
+      rename: (threadId, name, guard) => this.renameThread(threadId, name, guard),
+      archive: (threadId, guard, onDispatch) => this.archiveThread(threadId, guard, onDispatch),
       start: async (threadId, text, settings, guard) => {
         const result = await this.startTurn(threadId, text, settings.model, settings.effort, settings.fullAccess, [], [], undefined, settings.mode ?? 'default', guard)
         const id = asObject(asObject(result).turn).id
@@ -362,27 +366,60 @@ export class RemoteController {
     return { ...asObject(result), thread: resumed }
   }
 
-  async renameThread(threadId: string, value: unknown): Promise<{ name: string }> {
+  async renameThread(threadId: string, value: unknown, guard?: () => void): Promise<{ name: string }> {
     const name = normalizeThreadName(value)
-    if (!this.#loadedThreads.has(threadId)) await this.#readThreadMetadata(threadId)
-    await this.appServer.request('thread/name/set', { threadId, name }, 10_000)
-    const cached = this.#loadedThreads.get(threadId)
-    if (cached) this.#cacheThread({ ...cached, name })
-    this.events.publish('codex', { method: 'thread/name/updated', params: { threadId, threadName: name } })
-    return { name }
+    guard?.()
+    if (this.#archivingThreads.has(threadId) || this.#renamingThreads.has(threadId)) throw new ContextVaultError(409, 'Conversation management is in progress')
+    this.#renamingThreads.add(threadId)
+    try {
+      if (!this.#loadedThreads.has(threadId)) await this.#readThreadMetadata(threadId)
+      guard?.()
+      await this.appServer.request('thread/name/set', { threadId, name }, 10_000)
+      const cached = this.#loadedThreads.get(threadId)
+      if (cached) {
+        // A name update is not an authoritative status read. Preserve active-turn
+        // tracking even when cached metadata predates the current leader turn.
+        const renamed = { ...cached, name }
+        this.#loadedThreads.set(threadId, renamed)
+        this.#recordContext(renamed)
+      }
+      this.events.publish('codex', { method: 'thread/name/updated', params: { threadId, threadName: name } })
+      // An accepted RPC cannot be undone, but no subsequent command may retain a stale role.
+      guard?.()
+      return { name }
+    } finally { this.#renamingThreads.delete(threadId) }
   }
 
-  async archiveThread(threadId: string): Promise<unknown> {
-    if (!this.#loadedThreads.has(threadId)) await this.#readThreadMetadata(threadId)
-    const result = await this.appServer.request('thread/archive', { threadId })
-    this.contextVault?.assignThread(threadId, null)
-    this.orchestration?.changed()
-    this.#loadedThreads.delete(threadId)
-    this.#resumedThreads.delete(threadId)
-    return result
+  async archiveThread(threadId: string, guard?: () => void, onDispatch?: () => void): Promise<unknown> {
+    guard?.()
+    if (this.#archivingThreads.has(threadId) || this.#renamingThreads.has(threadId)) throw new ContextVaultError(409, 'Conversation management is in progress')
+    this.#archivingThreads.add(threadId)
+    try {
+      if (guard) {
+        // Fresh authoritative status, not the UI/cache; unknown/error states fail closed.
+        const thread = threadFromResult(await this.#readThreadMetadata(threadId))
+        guard()
+        if (!['idle', 'notLoaded'].includes(String(asObject(thread.status).type)) || this.#activeTurns.has(threadId) || this.#turnStarts.has(threadId)
+          || (Array.isArray(thread.turns) && thread.turns.some(turn => asObject(turn).status === 'inProgress'))
+          || [...this.#pending.values()].some(request => request.params.threadId === threadId)) throw new ContextVaultError(409, 'Conversation is busy or requires attention')
+      } else if (!this.#loadedThreads.has(threadId)) await this.#readThreadMetadata(threadId)
+      guard?.()
+      onDispatch?.()
+      const result = await this.appServer.request('thread/archive', { threadId })
+      this.#loadedThreads.delete(threadId)
+      this.#resumedThreads.delete(threadId)
+      this.events.publish('codex', { method: 'thread/archived', params: { threadId } })
+      // If the user changed roles/membership while the RPC was in flight, preserve
+      // their newer state and let the archive receipt require review instead of replay.
+      guard?.()
+      this.contextVault?.assignThread(threadId, null)
+      this.orchestration?.changed()
+      return result
+    } finally { this.#archivingThreads.delete(threadId) }
   }
 
   async startTurn(threadId: string, text: unknown, model: unknown = undefined, effort: unknown = undefined, fullAccess: unknown = false, imagePaths: readonly string[] = [], files: readonly UploadedFile[] = [], skills: unknown = undefined, mode: unknown = undefined, guard?: () => void): Promise<unknown> {
+    if (this.#archivingThreads.has(threadId)) throw new ContextVaultError(409, 'Conversation archive is in progress')
     if (this.#turnStarts.has(threadId) || this.#activeTurns.has(threadId)) throw new ContextVaultError(409, 'Conversation is busy')
     this.#turnStarts.add(threadId)
     try { return await this.#startTurn(threadId, text, model, effort, fullAccess, imagePaths, files, skills, mode, guard) }
