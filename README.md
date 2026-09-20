@@ -71,6 +71,34 @@ state lives in the vault's generated `.state/Orchestration.json`, separate from
 knowledge notes. Use stable `requestId` values when retrying commands. Code tasks
 must follow the existing rule of separate worktrees and hosted-service registration.
 
+Leaders in **Code** mode can also manage conversations through that same private
+command capability:
+
+```json
+{"action":"rename","threadId":"worker-id","name":"A clear conversation name"}
+{"action":"archive","threadId":"worker-id","requestId":"archive-worker-once"}
+```
+
+Rename accepts the same trimmed, single-line 1–200-character names as the UI and
+may rename the leader itself. Archive hides an unnecessary worker using native
+`thread/archive`; it does not permanently delete history, vault notes or completed
+task reports. **Prefer retaining conversations/context and renaming for clarity;
+do not automatically bulk-archive.** Neither command overrides a worker under
+manual user control. Archive cannot target the current leader, a busy/starting
+conversation, unfinished work, or undelivered/unconfirmed results. It never
+interrupts work to make it archivable. Plan mode rejects both mutations.
+
+Use the same `requestId` to retry an archive. `status` includes archive receipts:
+100 recent completions are retained; the total is capped at 200 including uncertain
+operations. A retry acknowledges the original completion only while the target
+remains unassigned, and never touches a restored/moved conversation. Old receipts
+are not an indefinite retry guarantee. In-flight/uncertain attempts are not replayed,
+even after restart; `review` requires inspecting the outcome. An already dispatched
+native RPC cannot be revoked. If roles/membership change during it, the newer folder
+state is preserved and the receipt is flagged for review. Automatic delegation is
+blocked for a conversation with an unresolved archive outcome. The user can still
+inspect/manage it directly through the app.
+
 The **Files** button opens a read-only browser at the selected conversation's working
 directory. Navigate folders, enter a workspace path, search filenames, show hidden
 files, or page through large directories. Selecting a file opens the same preview
