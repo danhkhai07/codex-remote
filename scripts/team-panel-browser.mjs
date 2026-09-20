@@ -96,7 +96,7 @@ try {
     await body.evaluate(el => { el.scrollTop = el.scrollHeight })
     const bodyTop = await body.evaluate(el => el.scrollTop)
     const refreshed = page.waitForResponse(response => response.url().endsWith('/orchestration'))
-    controller.events.publish('orchestration/changed', {})
+    controller.events.publish('codex', { method: 'orchestration/changed', params: {} })
     await refreshed
     assert.equal(await team.getAttribute('open'), '', 'Team stays open during live refresh')
     assert.equal(await body.evaluate(el => el.scrollTop), bodyTop, 'Live refresh preserves team reading position')
@@ -119,6 +119,29 @@ try {
     await layout()
     assert.equal(await isOnscreen(page.locator('.plan-question').getByRole('button', { name: 'Send', exact: true })), true, 'Plan answer remains reachable with team expanded')
     if (shots) await page.screenshot({ path: resolve(shots, `team-${viewport.width}x${viewport.height}.png`) })
+    if (viewport.height === 600) {
+      // Combined integration: reload from the logo while a native question and
+      // expanded team share the short viewport. No real conversation is used.
+      await page.getByRole('button', { name: 'Open conversations', exact: true }).click()
+      await page.getByRole('button', { name: 'App menu', exact: true }).click()
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: 'load' }),
+        page.getByRole('button', { name: 'Reload app', exact: true }).click(),
+      ])
+      await composer.waitFor()
+      await page.waitForFunction(() => document.querySelector('.workspace-title h1')?.textContent === 'Plan question fixture')
+      assert.equal(await composer.inputValue(), 'Draft stays while reviewing work')
+      assert.equal(controller.listPending().length, 1, 'Reload must not resolve/interrupt native input')
+      if (await page.locator('.drawer-scrim').count()) {
+        await page.locator('.drawer-scrim').click({ position: { x: 380, y: 550 } })
+        await page.waitForFunction(() => document.querySelector('.thread-sidebar').getBoundingClientRect().right <= 0)
+      }
+      await summary.click()
+      await page.locator('.plan-question').getByRole('radio', { name: 'First', exact: true }).click()
+      await layout()
+      assert.equal(await isOnscreen(page.locator('.plan-question').getByRole('button', { name: 'Send', exact: true })), true)
+      if (shots) await page.screenshot({ path: resolve(shots, 'combined-after-reload-390x600.png') })
+    }
     await page.getByRole('button', { name: 'Stop Codex', exact: true }).click()
     await page.locator('.plan-question').waitFor({ state: 'detached' })
     assert.equal(await composer.inputValue(), 'Draft stays while reviewing work')
