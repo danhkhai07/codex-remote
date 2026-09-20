@@ -1770,13 +1770,16 @@ export function App() {
           <button className="files-tab" type="button" disabled={!thread} onClick={() => thread && setFileBrowserPath(thread.cwd)}>Files</button>
         </nav>
 
-        <TranscriptViewport key={`${selectedId}-conversation`} viewKey={`${selectedId}-conversation`} ready={Boolean(thread) && historyReady} positions={readingPositions.current}>
+        {(groups.leaderError || (!draftOpen && thread && selectedGroup?.leaderThreadId)) && <section className="conversation-team-region" aria-label="Conversation team">
           {groups.leaderError && <p className="error-banner" role="alert">{groups.leaderError}</p>}
           {!draftOpen && thread && selectedGroup?.leaderThreadId && <ConversationTeam key={`${thread.id}:${selectedGroup.id}`} threadId={thread.id} group={selectedGroup} threads={threads}
             csrf={session.csrf} enabled={online && pageVisible} revision={teamRevision} onOpen={id => {
               const target = threads.find(thread => thread.id === id)
               void (target ? openThread(target) : api.thread(id).then(response => openThread(response.thread))).catch(error => setError(errorMessage(error)))
             }} />}
+        </section>}
+
+        <TranscriptViewport key={`${selectedId}-conversation`} viewKey={`${selectedId}-conversation`} ready={Boolean(thread) && historyReady} positions={readingPositions.current}>
           {updateWorker && (
             <div className="update-banner" role="status">
               <div><strong>Update ready</strong><span>A fresher Codex Remote is available.</span></div>
