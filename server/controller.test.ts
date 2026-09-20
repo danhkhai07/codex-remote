@@ -273,6 +273,7 @@ describe('RemoteController', () => {
         input: [{ type: 'text', text: 'review this' }],
       },
     })
+    appServer.emit('notification', { method: 'turn/completed', params: { threadId: 'thread-new', turn: { id: 'turn-new', status: 'completed' } } })
     await expect(controller.startTurn('thread-new', 'review this', 'model-hidden', 'low'))
       .rejects.toThrow('Unknown model')
     await expect(controller.startTurn('thread-new', 'review deeply', 'model-fast', 'ultra'))
@@ -293,6 +294,7 @@ describe('RemoteController', () => {
         sandboxPolicy: { type: 'dangerFullAccess' },
       },
     })
+    appServer.emit('notification', { method: 'turn/completed', params: { threadId: 'thread-new', turn: { id: 'turn-new', status: 'completed' } } })
     await expect(controller.startTurn('thread-new', 'unsafe value', undefined, undefined, 'always'))
       .rejects.toThrow('Invalid full access setting')
   })
@@ -307,6 +309,7 @@ describe('RemoteController', () => {
       method: 'turn/start',
       params: { input: [{ type: 'localImage', path: '/tmp/remote-image.png' }] },
     })
+    appServer.emit('notification', { method: 'turn/completed', params: { threadId: 'thread-new', turn: { id: 'turn-new', status: 'completed' } } })
     await expect(controller.startTurn('thread-new', '')).rejects.toThrow('text or an attachment')
   })
 
@@ -356,5 +359,6 @@ it('preserves raw instruction text and passes generic uploads as file metadata, 
   expect(input[1].type).toBe('text')
   expect(input[1].text).toContain(JSON.stringify({ path: file.path, name: file.name, contentType: file.contentType, size: file.size }))
   expect(input.some(item => item.type === 'localImage')).toBe(false)
+  appServer.emit('notification', { method: 'turn/completed', params: { threadId: 'thread-new', turn: { id: 'turn-new', status: 'completed' } } })
   await expect(controller.startTurn('thread-new', '', undefined, undefined, false, [], [file])).resolves.toBeDefined()
 })

@@ -5,9 +5,9 @@ import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, rea
 import { dirname, join, parse, relative, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
-export type ContextGroup = { id: string; name: string; contextPath: string }
+export type ContextGroup = { id: string; name: string; contextPath: string; leaderThreadId?: string; leaderEpoch?: number }
 export type GroupSnapshot = { revision: number; vaultPath: string; sharedContextPath: string; groups: ContextGroup[]; assignments: Record<string, string> }
-type GroupState = { revision: number; groups: Array<{ id: string; name: string }>; assignments: Record<string, string> }
+type GroupState = { revision: number; groups: Array<Omit<ContextGroup, 'contextPath'>>; assignments: Record<string, string> }
 type ThreadMetadata = { id: string; name: string; cwd: string; turns: Array<{ id: string; startedAt?: number }> }
 type Message = { id: string; role: 'User' | 'Assistant'; text: string; partial: boolean }
 type TurnExport = { id: string; status: string; messages: Message[] }
@@ -102,7 +102,11 @@ export class ContextVault {
     const groups = value.groups.map(group => {
       if (!record(group)) throw new Error('Invalid context group')
       requireId(group.id)
-      return { id: group.id, name: groupName(group.name) }
+      if (group.leaderThreadId !== undefined) requireId(group.leaderThreadId)
+      if (group.leaderEpoch !== undefined && (!Number.isSafeInteger(group.leaderEpoch) || (group.leaderEpoch as number) < 0)) throw new Error('Invalid leader epoch')
+      return { id: group.id, name: groupName(group.name),
+        ...(group.leaderThreadId ? { leaderThreadId: group.leaderThreadId as string } : {}),
+        ...(group.leaderEpoch !== undefined ? { leaderEpoch: group.leaderEpoch as number } : {}) }
     })
     const ids = new Set(groups.map(group => group.id))
     if (ids.size !== groups.length) throw new Error('Duplicate context group')
@@ -169,6 +173,10 @@ export class ContextVault {
       if (!state.groups.some(group => group.id === groupId)) throw new ContextVaultError(404, 'Conversation folder not found')
     }
     if ((state.assignments[threadId] ?? null) === groupId) return this.snapshot()
+    for (const group of state.groups) if (group.leaderThreadId === threadId) {
+      delete group.leaderThreadId
+      group.leaderEpoch = (group.leaderEpoch ?? 0) + 1
+    }
     if (groupId === null) delete state.assignments[threadId]
     else state.assignments[threadId] = groupId
     this.recordThread({ id: threadId })
@@ -178,6 +186,20 @@ export class ContextVault {
     requireId(threadId)
     const state = this.snapshot()
     return state.groups.find(group => group.id === state.assignments[threadId]) ?? null
+  }
+  setLeader(groupId: string, threadId: unknown): GroupSnapshot {
+    requireId(groupId)
+    const state = this.state(), group = state.groups.find(group => group.id === groupId)
+    if (!group) throw new ContextVaultError(404, 'Conversation folder not found')
+    if (threadId !== null) {
+      requireId(threadId)
+      if (state.assignments[threadId] !== groupId) throw new ContextVaultError(400, 'Leader must belong to this folder')
+    }
+    if ((group.leaderThreadId ?? null) === threadId) return this.snapshot()
+    if (threadId === null) delete group.leaderThreadId
+    else group.leaderThreadId = threadId
+    group.leaderEpoch = (group.leaderEpoch ?? 0) + 1
+    return this.changed(state)
   }
   writableRoots(threadId: string): string[] {
     requireId(threadId)

@@ -23,6 +23,7 @@ it('uses the conversation cwd, refreshes selection and sends native skill inputs
   expect(request).toHaveBeenCalledWith('turn/start', expect.objectContaining({ input: [
     { type: 'text', text: 'Review this', text_elements: [] }, { type: 'skill', name: skill.name, path: skill.path },
   ] }))
+  app.emit('notification', { method: 'turn/completed', params: { threadId: 'a', turn: { id: 'turn', status: 'completed' } } })
   request.mockClear()
   await expect(controller.startTurn('a', 'Review', undefined, undefined, false, [], [], [{ ...skill, path: '/fake' }])).rejects.toThrow('unavailable')
   expect(request.mock.calls.some(([method]) => method === 'turn/start')).toBe(false)

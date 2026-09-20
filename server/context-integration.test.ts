@@ -35,7 +35,7 @@ function setup() {
 }
 
 it('injects fresh shared and group context separately on every turn and preserves the original prompt', async () => {
-  const { root, request, vault, controller } = setup()
+  const { root, app, request, vault, controller } = setup()
   const group = vault.createGroup('Project').groups[0]
   writeFileSync(group.contextPath, 'Group decision A')
   await controller.createThread('0', false, group.id)
@@ -52,6 +52,7 @@ it('injects fresh shared and group context separately on every turn and preserve
   expect(calls.findIndex(([method]) => method === 'thread/inject_items')).toBeLessThan(calls.findIndex(([method]) => method === 'turn/start'))
   vault.assignThread('new-chat', null)
   writeFileSync(join(root, 'Shared/Context.md'), 'Updated common fact')
+  app.emit('notification', { method: 'turn/completed', params: { threadId: 'new-chat', turn: { id: 'new-turn', status: 'completed' } } })
   request.mockClear()
   await controller.startTurn('new-chat', 'Next')
   const next = JSON.stringify(request.mock.calls.find(([method]) => method === 'thread/inject_items')![1])

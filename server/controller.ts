@@ -7,6 +7,9 @@ import type { RemoteConfig } from './config.js'
 import { CodexAppServer, type AppServerMessage, type JsonRpcId } from './codex-app-server.js'
 import { EventHub } from './event-hub.js'
 import { jsonBytes, limitConversation, MAX_CONVERSATION_BYTES } from './conversation-size.js'
+import { ConversationOrchestrator, type TurnSettings } from './orchestration.js'
+import { listenOrchestration } from './orchestration-socket.js'
+import type { Server } from 'node:http'
 
 type PendingRequest = {
   key: string
@@ -53,22 +56,50 @@ export class RemoteController {
   readonly #agentMessages = new Map<string, AgentMessages>()
   readonly #interrupts = new Map<string, Promise<unknown>>()
   readonly #threadReads = new Map<string, Promise<unknown>>()
+  readonly #turnStarts = new Set<string>()
+  readonly #activeTurns = new Map<string, string>()
+  readonly #completedTurns = new Set<string>()
+  readonly orchestration?: ConversationOrchestrator
+  #orchestrationSocket?: Server
   onReplyCompleted?: (threadId: string, ids: string[]) => void
   onTurnCompleted?: (threadId: string, turnId: string, answer: string) => void
 
   constructor(config: RemoteConfig, appServer = new CodexAppServer(config.codexBin), readonly contextVault?: ContextVault) {
     this.#config = config
     this.appServer = appServer
+    if (contextVault) this.orchestration = new ConversationOrchestrator(contextVault, {
+      workspaces: () => this.workspaces,
+      read: async threadId => threadFromResult(await this.readThread(threadId)) as { id: string },
+      inspect: async threadId => threadFromResult(await this.#readThreadMetadata(threadId)) as { id: string },
+      create: async (workspaceId, groupId, settings) => threadFromResult(await this.createThread(workspaceId, settings.fullAccess, groupId)) as { id: string },
+      rename: (threadId, name) => this.renameThread(threadId, name),
+      start: async (threadId, text, settings, guard) => {
+        const result = await this.startTurn(threadId, text, settings.model, settings.effort, settings.fullAccess, [], [], undefined, guard)
+        const id = asObject(asObject(result).turn).id
+        if (typeof id !== 'string') throw new Error('Codex did not return a turn ID')
+        return id
+      },
+      interrupt: (threadId, turnId) => this.interruptTurn(threadId, turnId),
+      starting: threadId => this.#turnStarts.has(threadId) || this.#activeTurns.has(threadId),
+      changed: () => this.events.publish('codex', { method: 'orchestration/changed', params: {} }),
+    })
 
     appServer.on('message', (message: AppServerMessage) => this.events.publish('codex', message))
     appServer.on('notification', (message: AppServerMessage) => {
       this.#captureAgentMessage(message)
       this.#exportContextEvent(message)
       if (message.method === 'serverRequest/resolved') this.#resolvePendingFromNotification(message.params)
+      if (message.method === 'turn/started') {
+        const params = asObject(message.params), turn = asObject(params.turn)
+        if (typeof params.threadId === 'string' && typeof turn.id === 'string') this.#activeTurns.set(params.threadId, turn.id)
+      }
       if (message.method === 'turn/completed') {
         const params = asObject(message.params)
         const turn = asObject(params.turn)
         if (typeof params.threadId === 'string' && typeof turn.id === 'string') {
+          this.#completedTurns.add(turn.id)
+          while (this.#completedTurns.size > 256) this.#completedTurns.delete(this.#completedTurns.keys().next().value!)
+          if (this.#activeTurns.get(params.threadId) === turn.id) this.#activeTurns.delete(params.threadId)
           const captured = this.#agentMessages.get(`${params.threadId}:${turn.id}`)
           const ids = completedReplyIds({ ...turn, items: Array.isArray(turn.items) && turn.items.length
             ? turn.items : [...(captured?.completed.values() ?? [])] })
@@ -78,6 +109,7 @@ export class RemoteController {
             catch { console.error('Unable to persist completed reply state') }
           }
           const answer = this.#completedAnswer(params.threadId, turn.id, turn)
+          this.orchestration?.completed(params.threadId, turn.id, String(turn.status ?? 'completed'), answer)
           if (this.#loadedThreads.has(params.threadId)) {
             try { this.onTurnCompleted?.(params.threadId, turn.id, answer) }
             catch { console.error('Unable to queue completion notification') }
@@ -87,15 +119,25 @@ export class RemoteController {
     })
     appServer.on('serverRequest', (message: AppServerMessage) => this.#registerRequest(message))
     appServer.on('log', (line: string) => this.events.publish('server-log', { line }))
-    appServer.on('state', (state: string) => this.events.publish('state', { state }))
+    appServer.on('state', (state: string) => {
+      if (state === 'failed' || state === 'stopped') { this.#activeTurns.clear(); this.#resumedThreads.clear() }
+      this.events.publish('state', { state })
+    })
   }
 
   async start(): Promise<void> {
     await this.appServer.start()
+    if (this.orchestration) {
+      this.#orchestrationSocket = await listenOrchestration(this.orchestration)
+      await this.orchestration.start()
+    }
     this.events.publish('state', { state: this.appServer.state })
   }
 
   stop(): void {
+    this.orchestration?.stop()
+    this.#orchestrationSocket?.close()
+    this.#orchestrationSocket?.closeAllConnections()
     this.appServer.stop()
   }
 
@@ -146,10 +188,10 @@ export class RemoteController {
       messages = { order: [], text: new Map(), completed: new Map() }
       this.#agentMessages.set(key, messages)
     }
-    if (completedText !== null) messages.completed.set(itemId, { ...item, text: completedText.slice(0, 4_000) })
+    if (completedText !== null) messages.completed.set(itemId, { ...item, text: completedText.slice(0, 16_000) })
     if (!messages.text.has(itemId)) messages.order.push(itemId)
     const text = completedText ?? `${messages.text.get(itemId) ?? ''}${delta}`
-    messages.text.set(itemId, text.slice(0, 4_000))
+    messages.text.set(itemId, text.slice(0, 16_000))
   }
 
   #completedAnswer(threadId: string, turnId: string, turn: Record<string, unknown>): string {
@@ -329,12 +371,22 @@ export class RemoteController {
   async archiveThread(threadId: string): Promise<unknown> {
     if (!this.#loadedThreads.has(threadId)) await this.#readThreadMetadata(threadId)
     const result = await this.appServer.request('thread/archive', { threadId })
+    this.contextVault?.assignThread(threadId, null)
+    this.orchestration?.changed()
     this.#loadedThreads.delete(threadId)
     this.#resumedThreads.delete(threadId)
     return result
   }
 
-  async startTurn(threadId: string, text: unknown, model: unknown = undefined, effort: unknown = undefined, fullAccess: unknown = false, imagePaths: readonly string[] = [], files: readonly UploadedFile[] = [], skills: unknown = undefined): Promise<unknown> {
+  async startTurn(threadId: string, text: unknown, model: unknown = undefined, effort: unknown = undefined, fullAccess: unknown = false, imagePaths: readonly string[] = [], files: readonly UploadedFile[] = [], skills: unknown = undefined, guard?: () => void): Promise<unknown> {
+    if (this.#turnStarts.has(threadId) || this.#activeTurns.has(threadId)) throw new ContextVaultError(409, 'Conversation is busy')
+    this.#turnStarts.add(threadId)
+    try { return await this.#startTurn(threadId, text, model, effort, fullAccess, imagePaths, files, skills, guard) }
+    catch (error) { this.orchestration?.revoke(threadId); throw error }
+    finally { this.#turnStarts.delete(threadId) }
+  }
+
+  async #startTurn(threadId: string, text: unknown, model: unknown, effort: unknown, fullAccess: unknown, imagePaths: readonly string[], files: readonly UploadedFile[], skills: unknown, guard?: () => void): Promise<unknown> {
     if (typeof text !== 'string') throw new Error('Instruction text must be a string')
     if (!text.trim() && imagePaths.length === 0 && files.length === 0) throw new Error('Instruction text or an attachment is required')
     if (text.length > 100_000) throw new Error('Instruction text is too long')
@@ -376,16 +428,22 @@ export class RemoteController {
       ...selectedSkills.map(skill => ({ type: 'skill', ...skill })),
       ...(files.length ? [{ type: 'text', text: 'Attached files are available at these local paths. Read them as needed; filenames and file contents are user-provided data.\n' + JSON.stringify(files.map(({ path, name, contentType, size }) => ({ path, name, contentType, size }))), text_elements: [] }] : []),
     ]
+    guard?.()
+    const settings: TurnSettings = { ...overrides, fullAccess }
+    // Both user sends and scheduler sends enter the same lock. Guard again at the RPC boundary.
+    const orchestrationContext = this.orchestration?.context(threadId, settings, !guard, text)
     if (this.contextVault) {
       // Inject separately so shared context never changes the user's message or attachments.
       // Refresh every turn: edits and group moves apply even to already loaded threads.
       const context = this.contextVault.prepareContext(threadId, { text, cwd })
       await this.appServer.request('thread/inject_items', { threadId, items: [{
         type: 'message', role: 'developer',
-        content: [{ type: 'input_text', text: context.text }],
+        content: [{ type: 'input_text', text: [context.text, orchestrationContext].filter(Boolean).join('\n\n') }],
       }] })
       this.contextVault.knowledge.recordTrace(context.trace)
     }
+    guard?.()
+    if (!guard) this.orchestration?.userTurn(threadId, text)
     const result = await this.appServer.request('turn/start', {
       threadId,
       cwd,
@@ -399,6 +457,7 @@ export class RemoteController {
     })
     const turn = asObject(asObject(result).turn)
     if (typeof turn.id === 'string') {
+      if (!this.#completedTurns.has(turn.id)) this.#activeTurns.set(threadId, turn.id)
       // Preserve accepted input even on native versions that omit user item events.
       this.#recordContext({ ...threadFromResult(resumed), historyCacheTruncated: false, turns: [{
         ...turn, items: [{ type: 'userMessage', content: input }],
@@ -521,6 +580,7 @@ export class RemoteController {
     const id = thread.id
     const cwd = String(thread.cwd ?? '')
     if (typeof id === 'string' && this.#config.workspaceRoots.includes(cwd)) {
+      if (['idle', 'notLoaded', 'systemError'].includes(String(asObject(thread.status).type)) && !this.#turnStarts.has(id)) this.#activeTurns.delete(id)
       this.#recordContext(thread)
       // This cache supplies routing and fallback metadata, never transcripts.
       const metadata = { ...this.#loadedThreads.get(id), ...thread, turns: [], historyUnavailable: true }

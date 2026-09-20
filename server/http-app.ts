@@ -483,6 +483,35 @@ export function createRemoteHttpServer(
           ? controller.contextVault.snapshot() : controller.contextVault.createGroup((await readJson(req)).name))
         return
       }
+      const leaderMatch = url.pathname.match(/^\/api\/conversation-groups\/([^/]+)\/leader$/)
+      if (leaderMatch && method === 'PUT') {
+        if (!controller.contextVault) throw new HttpError(503, 'Context vault is unavailable')
+        const body = await readJson(req)
+        if (body.threadId !== null) {
+          if (typeof body.threadId !== 'string') throw new HttpError(400, 'Provide a conversation ID or null')
+          await controller.assertThreadAccess(body.threadId)
+        }
+        json(res, 200, controller.contextVault.setLeader(decodeURIComponent(leaderMatch[1]), body.threadId))
+        controller.orchestration?.changed()
+        return
+      }
+      const teamThreadId = routeThread(url.pathname, '/orchestration')
+      if (teamThreadId && ['GET', 'POST'].includes(method)) {
+        if (!controller.orchestration) throw new HttpError(503, 'Conversation orchestration is unavailable')
+        await controller.assertThreadAccess(teamThreadId)
+        if (method === 'POST') {
+          const body = await readJson(req)
+          if (body.action === 'release') controller.orchestration.release(teamThreadId)
+          else if (body.action === 'cancel' && typeof body.taskId === 'string') {
+            const task = controller.orchestration.snapshot(teamThreadId).tasks.find(task => task.id === body.taskId)
+            if (!task) throw new HttpError(404, 'Task not found in this folder')
+            controller.orchestration.userStop(task.threadId)
+            await controller.orchestration.cancel(task.id)
+          } else throw new HttpError(400, 'Unknown team action')
+        }
+        json(res, 200, controller.orchestration.snapshot(teamThreadId))
+        return
+      }
       const groupMatch = url.pathname.match(/^\/api\/conversation-groups\/([^/]+)$/)
       if (groupMatch && ['PATCH', 'DELETE'].includes(method)) {
         if (!controller.contextVault) throw new HttpError(503, 'Context vault is unavailable')
@@ -490,6 +519,7 @@ export function createRemoteHttpServer(
         try { id = decodeURIComponent(groupMatch[1]) } catch { throw new HttpError(400, 'Malformed folder ID') }
         json(res, 200, method === 'DELETE' ? controller.contextVault.deleteGroup(id)
           : controller.contextVault.renameGroup(id, (await readJson(req)).name))
+        controller.orchestration?.changed()
         return
       }
       const groupThreadId = routeThread(url.pathname, '/group')
@@ -498,6 +528,7 @@ export function createRemoteHttpServer(
         const body = await readJson(req)
         await controller.assertThreadAccess(groupThreadId)
         json(res, 200, controller.contextVault.assignThread(groupThreadId, body.groupId))
+        controller.orchestration?.changed()
         return
       }
       if (url.pathname === '/api/threads' && method === 'GET') {
@@ -575,6 +606,8 @@ export function createRemoteHttpServer(
       const interruptThreadId = routeThread(url.pathname, '/interrupt')
       if (interruptThreadId && method === 'POST') {
         const body = await readJson(req)
+        await controller.assertThreadAccess(interruptThreadId)
+        controller.orchestration?.userStop(interruptThreadId)
         json(res, 200, await controller.interruptTurn(interruptThreadId, body.turnId))
         return
       }
