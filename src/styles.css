@@ -2938,3 +2938,9 @@ html.browser-scroll-locked, html.browser-scroll-locked body { overflow: hidden; 
 @media (max-width: 760px) {
   .localhost-preview-controls { padding-inline: 12px; }
 }
+
+/* Native Codex collaboration mode, scoped to the current conversation. */
+.composer-controls .composer-mode { flex: 0 0 auto; min-width: 48px; white-space: nowrap; }
+.composer-controls .composer-mode.is-plan { color: var(--accent); background: var(--panel-soft); }
+.plan-mode-hint { margin: 6px 0; font-size: 13px; color: var(--muted); }
+.plan-implementation { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 8px 0; }

@@ -74,3 +74,12 @@ describe('live conversation', () => {
     expect(items[0].text).toBe('Final')
   })
 })
+
+it('streams and completes native plan text as a plan item', () => {
+  const event = (method: string, extra: Record<string, unknown>): RemoteEvent => ({ id: 1, type: 'codex', at: '', payload: { method, params: { threadId: 'chat', turnId: 'turn', itemId: 'plan', ...extra } } })
+  let items = updateTranscript([], event('item/plan/delta', { delta: 'First ' }))
+  items = updateTranscript(items, event('item/plan/delta', { delta: 'step' }))
+  expect(items[0]).toMatchObject({ type: 'plan', text: 'First step', streaming: true })
+  items = updateTranscript(items, event('item/completed', { item: { id: 'plan', type: 'plan', text: 'First step.' } }))
+  expect(items[0]).toMatchObject({ type: 'plan', text: 'First step.', streaming: false })
+})

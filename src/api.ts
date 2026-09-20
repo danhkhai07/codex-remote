@@ -143,7 +143,7 @@ export const api = {
     body: JSON.stringify({ name }),
     signal: AbortSignal.timeout(15_000),
   }, csrf),
-  startTurn: (id: string, text: string, csrf: string, options: { model?: string; effort?: string; fullAccess?: boolean; attachmentIds?: string[]; skills?: SkillSelection[] } = {}) => request<TurnResponse>(`/api/threads/${encodeURIComponent(id)}/turns`, {
+  startTurn: (id: string, text: string, csrf: string, options: { collaborationMode?: 'default' | 'plan'; model?: string; effort?: string; fullAccess?: boolean; attachmentIds?: string[]; skills?: SkillSelection[] } = {}) => request<TurnResponse>(`/api/threads/${encodeURIComponent(id)}/turns`, {
     method: 'POST',
     body: JSON.stringify({ text, ...options }),
   }, csrf),

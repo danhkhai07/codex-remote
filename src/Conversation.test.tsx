@@ -51,3 +51,11 @@ it('renders every user input as literal text, including HTML, Markdown and white
     expect(html).not.toContain('<strong>bold</strong>')
   }
 })
+
+it('shows a native plan as readable Markdown without opening an activity disclosure', () => {
+  const html = renderToStaticMarkup(<Conversation thread={thread} items={[{ id: 'p', turnId: 't', type: 'plan', text: '# Proposed plan\n\n1. Build it\n2. Test it' }]}
+    activeTurnId={null} yoloMode={false} onSuggestion={() => {}} />)
+  expect(html).toContain('message-agent')
+  expect(html).toContain('<h1>Proposed plan</h1>')
+  expect(html).not.toContain('activity-card')
+})

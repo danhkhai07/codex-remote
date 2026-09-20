@@ -28,10 +28,10 @@ export function updateTranscript(items: TranscriptItem[], event: RemoteEvent): T
   let next: TranscriptItem
   if ((method === 'item/started' || method === 'item/completed') && supplied) {
     next = { ...previous, ...supplied, turnId, streaming: method !== 'item/completed' }
-  } else if (typeof params.delta === 'string' && (method === 'item/agentMessage/delta' || method === 'item/commandExecution/outputDelta')) {
-    const agent = method === 'item/agentMessage/delta'
+  } else if (typeof params.delta === 'string' && (method === 'item/agentMessage/delta' || method === 'item/plan/delta' || method === 'item/commandExecution/outputDelta')) {
+    const agent = method !== 'item/commandExecution/outputDelta'
     const field = agent ? 'text' : 'aggregatedOutput'
-    next = { ...previous, id, turnId, type: agent ? 'agentMessage' : 'commandExecution', streaming: true,
+    next = { ...previous, id, turnId, type: method === 'item/plan/delta' ? 'plan' : agent ? 'agentMessage' : 'commandExecution', streaming: true,
       [field]: String(previous?.[field] ?? '') + params.delta }
   } else return items
   return limitItems(index < 0 ? [...items, next] : items.map((item, cursor) => cursor === index ? next : item), MAX_CONVERSATION_BYTES).items

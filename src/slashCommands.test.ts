@@ -29,3 +29,10 @@ describe('slash commands', () => {
     expect(parseSlashCommand('/status')).toEqual({ name: 'status', argument: '' })
   })
 })
+
+it('enters native plan mode with optional multiline inline input, without intercepting paths', () => {
+  expect(parseSlashCommand('/plan')).toEqual({ name: 'plan', argument: '' })
+  expect(parseSlashCommand('/plan Design this\nInclude tests')).toEqual({ name: 'plan', argument: 'Design this\nInclude tests' })
+  expect(parseSlashCommand('/plan/files')).toBeNull()
+  expect(matchingSlashCommands('/pl').map(command => command.name)).toEqual(['plan'])
+})
