@@ -334,7 +334,8 @@ export class RemoteController {
     return result
   }
 
-  async startTurn(threadId: string, text: unknown, model: unknown = undefined, effort: unknown = undefined, fullAccess: unknown = false, imagePaths: readonly string[] = [], files: readonly UploadedFile[] = [], skills: unknown = undefined): Promise<unknown> {
+  async startTurn(threadId: string, text: unknown, model: unknown = undefined, effort: unknown = undefined, fullAccess: unknown = false, imagePaths: readonly string[] = [], files: readonly UploadedFile[] = [], skills: unknown = undefined, mode: unknown = undefined): Promise<unknown> {
+    if (mode !== undefined && mode !== 'plan' && mode !== 'default') throw new Error('Invalid collaboration mode')
     if (typeof text !== 'string') throw new Error('Instruction text must be a string')
     if (!text.trim() && imagePaths.length === 0 && files.length === 0) throw new Error('Instruction text or an attachment is required')
     if (text.length > 100_000) throw new Error('Instruction text is too long')
@@ -370,6 +371,18 @@ export class RemoteController {
       ? { thread: this.#loadedThreads.get(threadId) }
       : await this.resumeThread(threadId)
     const cwd = String(threadFromResult(resumed).cwd ?? '')
+    let collaborationMode
+    if (mode !== undefined) {
+      // Native collaboration modes install Codex's own planning/default instructions.
+      // Explicit default also clears a previous plan mode on a resumed thread.
+      if (this.#models.size === 0) await this.listModels()
+      const modeModel = overrides.model ?? asObject(resumed).model ?? threadFromResult(resumed).model
+        ?? [...this.#models.values()].find(value => value.isDefault)?.model
+      if (typeof modeModel !== 'string' || !modeModel) throw new Error('Choose a model before changing collaboration mode')
+      collaborationMode = { mode, settings: { model: modeModel,
+        reasoning_effort: overrides.effort ?? this.#models.get(modeModel)?.defaultReasoningEffort ?? null,
+        developer_instructions: null } }
+    }
     const input = [
       ...(text.trim() ? [{ type: 'text', text, text_elements: [] }] : []),
       ...imagePaths.map(path => ({ type: 'localImage', path })),
@@ -396,6 +409,7 @@ export class RemoteController {
         : { type: 'workspaceWrite', writableRoots: [...new Set([cwd, ...(this.contextVault?.writableRoots(threadId) ?? [])])], networkAccess: false },
       input,
       ...overrides,
+      ...(collaborationMode ? { collaborationMode } : {}),
     })
     const turn = asObject(asObject(result).turn)
     if (typeof turn.id === 'string') {

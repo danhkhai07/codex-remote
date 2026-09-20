@@ -358,3 +358,20 @@ it('preserves raw instruction text and passes generic uploads as file metadata, 
   expect(input.some(item => item.type === 'localImage')).toBe(false)
   await expect(controller.startTurn('thread-new', '', undefined, undefined, false, [], [file])).resolves.toBeDefined()
 })
+
+
+describe('native collaboration modes', () => {
+  it('sends native plan instructions and explicitly returns to default without changing input or permissions', async () => {
+    const app = new StubAppServer(), controller = new RemoteController(config, app)
+    await controller.createThread('0')
+    for (const mode of ['plan', 'default']) {
+      await controller.startTurn('thread-new', '  design this\ncarefully  ', 'model-fast', 'high', true, [], [], undefined, mode)
+      expect(app.calls.filter(call => call.method === 'turn/start').at(-1)?.params).toMatchObject({
+        input: [{ type: 'text', text: '  design this\ncarefully  ' }], approvalPolicy: 'never', sandboxPolicy: { type: 'dangerFullAccess' },
+        collaborationMode: { mode, settings: { model: 'model-fast', reasoning_effort: 'high', developer_instructions: null } },
+      })
+    }
+    await expect(controller.startTurn('thread-new', 'hello', undefined, undefined, false, [], [], undefined, 'invented')).rejects.toThrow('Invalid collaboration mode')
+    expect(app.calls.filter(call => call.method === 'turn/start')).toHaveLength(2)
+  })
+})

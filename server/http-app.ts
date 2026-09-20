@@ -565,8 +565,9 @@ export function createRemoteHttpServer(
       const turnThreadId = routeThread(url.pathname, '/turns')
       if (turnThreadId && method === 'POST') {
         const body = await readJson(req)
+        if (body.collaborationMode !== undefined && body.collaborationMode !== 'plan' && body.collaborationMode !== 'default') throw new HttpError(400, 'Invalid collaboration mode')
         if (!attachments && body.attachmentIds !== undefined) throw new HttpError(503, 'File attachments are unavailable')
-        const operation = (_paths: string[], files: UploadedFile[]) => controller.startTurn(turnThreadId, body.text ?? '', body.model, body.effort, body.fullAccess ?? false, files.filter(file => file.kind === 'image').map(file => file.path), files.filter(file => file.kind === 'file'), body.skills)
+        const operation = (_paths: string[], files: UploadedFile[]) => controller.startTurn(turnThreadId, body.text ?? '', body.model, body.effort, body.fullAccess ?? false, files.filter(file => file.kind === 'image').map(file => file.path), files.filter(file => file.kind === 'file'), body.skills, body.collaborationMode)
         json(res, 202, attachments
           ? await attachments.use(body.attachmentIds, session, operation)
           : await operation([], []))
