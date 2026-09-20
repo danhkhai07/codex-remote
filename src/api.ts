@@ -2,6 +2,7 @@ import type { SkillList, SkillSelection } from '../server/skills'
 import type { ServiceInput, ServicesSnapshot } from '../server/services'
 import type { ReplySnapshot } from '../server/read-state'
 import type { GroupSnapshot } from './conversationGroups'
+import type { TeamSnapshot } from './ConversationTeam'
 import type { DirectoryListing, ModelList, PendingRequest, RateLimitsResponse, ServerFileInfo, Session, ThreadList, ThreadResponse, TurnResponse } from './types'
 import { limitConversation } from '../server/conversation-size'
 import type { ContextTrace, KnowledgeSnapshot, NoteDocument, NoteVersion } from '../server/knowledge-types'
@@ -102,6 +103,13 @@ export const api = {
   logout: (csrf: string) => request<{ ok: boolean }>('/api/session/logout', { method: 'POST', body: '{}' }, csrf),
   threads: () => request<ThreadList>('/api/threads'),
   conversationGroups: () => request<GroupSnapshot>('/api/conversation-groups'),
+  setLeader: (id: string, threadId: string | null, csrf: string) => request<GroupSnapshot>(`/api/conversation-groups/${encodeURIComponent(id)}/leader`, {
+    method: 'PUT', body: JSON.stringify({ threadId }),
+  }, csrf),
+  team: (id: string, signal?: AbortSignal) => request<TeamSnapshot>(`/api/threads/${encodeURIComponent(id)}/orchestration`, { signal }),
+  teamAction: (id: string, body: { action: 'release' | 'cancel'; taskId?: string }, csrf: string) => request<TeamSnapshot>(`/api/threads/${encodeURIComponent(id)}/orchestration`, {
+    method: 'POST', body: JSON.stringify(body),
+  }, csrf),
   createConversationGroup: (name: string, csrf: string) => request<GroupSnapshot>('/api/conversation-groups', {
     method: 'POST', body: JSON.stringify({ name }),
   }, csrf),

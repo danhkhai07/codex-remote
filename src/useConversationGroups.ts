@@ -5,12 +5,16 @@ import type { GroupSnapshot } from './conversationGroups'
 export function useConversationGroups(enabled: boolean, csrf?: string) {
   const [snapshot, setSnapshot] = useState<GroupSnapshot | null>(null)
   const [error, setError] = useState('')
+  const [leaderSaving, setLeaderSaving] = useState(false)
+  const [leaderError, setLeaderError] = useState('')
+  const leaderLock = useRef(false)
   const access = useRef({ enabled, csrf })
   access.current = { enabled, csrf }
   const generation = useRef(0)
   const apply = useCallback((next: GroupSnapshot) => {
     setSnapshot(current => current && current.revision > next.revision ? current : next)
     setError('')
+    setLeaderError('')
   }, [])
   const refresh = useCallback(async () => {
     if (!access.current.enabled) return
@@ -42,7 +46,14 @@ export function useConversationGroups(enabled: boolean, csrf?: string) {
     setError('')
   }, [])
   return {
-    snapshot, error, refresh, clear,
+    snapshot, error, refresh, clear, leaderSaving, leaderError,
+    leader: async (groupId: string, threadId: string | null) => {
+      if (leaderLock.current) return
+      leaderLock.current = true; setLeaderSaving(true); setLeaderError('')
+      try { await mutate(token => api.setLeader(groupId, threadId, token)) }
+      catch (reason) { setLeaderError(reason instanceof Error ? reason.message : 'Could not change leader') }
+      finally { leaderLock.current = false; setLeaderSaving(false) }
+    },
     create: (name: string) => mutate(token => api.createConversationGroup(name, token)),
     rename: (id: string, name: string) => mutate(token => api.renameConversationGroup(id, name, token)),
     remove: (id: string) => mutate(token => api.deleteConversationGroup(id, token)),

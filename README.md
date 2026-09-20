@@ -41,6 +41,34 @@ files remain download-only. Markdown files open as rendered documents by default
 with a Preview/Raw toggle; line-target links open in Raw mode so the requested
 line remains highlighted.
 
+Conversation folders can each have one **leader**. Click ☆ next to a conversation's
+title, or choose **⭐ Đặt làm leader** in its menu. A filled star marks the leader.
+Choosing another conversation transfers the role without changing either history;
+moving or archiving the leader clears its role. Existing conversations work too.
+
+Ask the leader to create workers or assign bounded tasks. Workers are ordinary
+visible conversations in the same folder, with their own histories. The leader gets
+a private, expiring command capability for `scripts/conversations.mjs` each turn.
+Commands use a local Unix socket, with a private file mailbox under the conversation
+folder when the native sandbox blocks sockets. They do not require `.env`, a login
+cookie, network access, or a caller-supplied leader ID. The backend checks the current
+leader and folder on every operation and again before dispatch. Workers cannot
+delegate recursively. Capabilities are workflow controls on a shared trusted host,
+not isolation from another process with unrestricted access to the same OS account.
+
+Expand **Công việc** above the chat to inspect tasks, open workers, view results or
+stop work. Busy conversations queue delegated tasks. Direct chat with a worker
+takes priority and pauses further assignments until the user clicks **Cho leader
+giao việc trở lại**. If it is working, stop the current turn before sending a direct
+message. Stopping the leader also stops automatic wakeups until another user turn.
+Results go to the current leader when it is idle. Each direct leader instruction
+allows at most 20 tasks, 8 automatic result wakeups, 12 unfinished tasks, and 3
+concurrent delegated turns per folder. These budgets survive restart; ambiguous
+in-flight sends are flagged for review rather than automatically repeated. Task
+state lives in the vault's generated `.state/Orchestration.json`, separate from
+knowledge notes. Use stable `requestId` values when retrying commands. Code tasks
+must follow the existing rule of separate worktrees and hosted-service registration.
+
 The **Files** button opens a read-only browser at the selected conversation's working
 directory. Navigate folders, enter a workspace path, search filenames, show hidden
 files, or page through large directories. Selecting a file opens the same preview

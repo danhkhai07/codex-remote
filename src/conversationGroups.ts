@@ -1,12 +1,16 @@
 import type { Thread } from './types'
 
-export type ConversationGroup = { id: string; name: string; contextPath: string }
+export type ConversationGroup = { id: string; name: string; contextPath: string; leaderThreadId?: string; leaderEpoch?: number }
 export type GroupSnapshot = {
   revision: number
   vaultPath: string
   sharedContextPath: string
   groups: ConversationGroup[]
   assignments: Record<string, string>
+}
+
+export function conversationGroup(snapshot: GroupSnapshot | null, threadId?: string | null) {
+  return threadId ? snapshot?.groups.find(group => group.id === snapshot.assignments[threadId]) : undefined
 }
 
 /** Missing/deleted group references never hide a conversation. */

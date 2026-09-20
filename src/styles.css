@@ -502,6 +502,28 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
 .thread-row-entry .thread-row { min-width: 0; flex: 1; border: 0; padding-right: 6px; }
 .thread-row-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .thread-row-heading .thread-row-title { flex: 1; min-width: 0; }
+.leader-star, .leader-toggle.is-leader { color: #e7c44a; }
+.leader-toggle { flex: 0 0 36px; width: 36px; height: 36px; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 25px; cursor: pointer; }
+.leader-toggle:disabled { opacity: .45; cursor: default; }
+.conversation-team { margin: 12px 16px; border: 1px solid var(--line); border-radius: 12px; font-size: 13px; }
+.conversation-team > summary { cursor: pointer; padding: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.conversation-team > summary::before { content: '▸'; }
+.conversation-team[open] > summary::before { content: '▾'; }
+.conversation-team > summary > span:first-of-type { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.conversation-team-body { padding: 0 12px 12px; }
+.conversation-team-body > p { margin: 8px 0; }
+.team-tasks { list-style: none; padding: 0; margin: 12px 0 0; max-height: 45dvh; overflow: auto; overscroll-behavior: contain; }
+.team-tasks > li { border-top: 1px solid var(--line); padding: 12px 0; }
+.team-task-heading, .team-task-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.team-task-heading strong { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.team-task-status { color: var(--muted); }
+.team-task-status.is-running, .team-task-status.is-completed { color: var(--accent); }
+.team-task-status.is-failed { color: #f6a498; }
+.team-task-actions { margin-top: 8px; }
+.team-task-actions button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+.team-task-result { margin-top: 8px; }
+.team-task-result p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.message-orchestration .message-author { color: #e7c44a; }
 .thread-unread-badge {
   display: inline-flex;
   align-items: center;

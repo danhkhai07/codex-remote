@@ -10,6 +10,8 @@ import { useUnreadMessages } from './useUnreadMessages'
 import { RenameConversation } from './RenameConversation'
 import { ConversationActions } from './ConversationActions'
 import { ConversationFolders } from './ConversationFolders'
+import { ConversationTeam } from './ConversationTeam'
+import { conversationGroup } from './conversationGroups'
 import { useConversationGroups } from './useConversationGroups'
 import { ThreadHistoryCache } from './threadHistoryCache'
 import { clearScreenState, flushScreenState, readScreenState, writeScreenState, useScreenState } from './screenState'
@@ -268,7 +270,7 @@ function ThreadSidebar({
               onClick={() => onSelect(thread)}
             >
               <span className="thread-row-heading">
-                <span className="thread-row-title">{threadTitle(thread)}</span>
+                <span className="thread-row-title">{conversationGroup(groups.snapshot, thread.id)?.leaderThreadId === thread.id && <span className="leader-star" title="Leader" aria-label="Leader">★ </span>}{threadTitle(thread)}</span>
                 {(sending[thread.id] || activeTurns[thread.id] || object(thread.status).type === 'active') && <span className="spinner thread-working-spinner" role="img" aria-label={sending[thread.id] ? 'Đang gửi yêu cầu' : 'Codex đang làm'} title={sending[thread.id] ? 'Đang gửi yêu cầu' : 'Codex đang làm'} />}
                 {(unreadCounts[thread.id] ?? 0) > 0 && <span className="thread-unread-badge" aria-label="Unread completed answer" title="Có câu trả lời hoàn tất chưa đọc">!</span>}
               </span>
@@ -277,6 +279,12 @@ function ThreadSidebar({
               </span>
             </button>
             <ConversationActions title={threadTitle(thread)} archiveDisabled={!canArchive(thread)}
+              isLeader={conversationGroup(groups.snapshot, thread.id)?.leaderThreadId === thread.id}
+              leaderDisabled={groupsDisabled || groups.leaderSaving}
+              onLeader={conversationGroup(groups.snapshot, thread.id) ? () => {
+                const group = conversationGroup(groups.snapshot, thread.id)!
+                void groups.leader(group.id, group.leaderThreadId === thread.id ? null : thread.id)
+              } : undefined}
               onRename={() => onRename(thread)} onArchive={() => onArchive(thread)} onMove={onMove} />
             </div>
           )} />
@@ -314,9 +322,10 @@ const HistoryItem = memo(function HistoryItem({ item, onOpenFile, onOpenLink }: 
     : 0
 
   if (conversational) {
+    const orchestrationMessage = item.type === 'userMessage' && text.startsWith('[Codex Remote · ')
     return (
-      <article className={`message ${item.type === 'userMessage' ? 'message-user' : 'message-agent'}`}>
-        <span className="message-author">{itemLabel(item)}</span>
+      <article className={`message ${item.type === 'userMessage' ? 'message-user' : 'message-agent'}${orchestrationMessage ? ' message-orchestration' : ''}`}>
+        <span className="message-author">{orchestrationMessage ? 'Codex Remote · Điều phối' : itemLabel(item)}</span>
         {text && (item.type === 'userMessage' ? <div className="message-plain-text">{text}</div> : <MarkdownMessage streaming={item.streaming === true} onOpenFile={onOpenFile} onOpenLink={onOpenLink}>{text}</MarkdownMessage>)}
         {Array.isArray(item.attachmentFiles) && <div className="message-files">{item.attachmentFiles.map((file, index) => <span key={index}>▤ {String(object(file).name ?? 'File')}</span>)}</div>}
         {attachmentPreviews.length > 0 && <div className="message-images">
@@ -596,6 +605,7 @@ export function App() {
   const [pageVisible, setPageVisible] = useState(() => document.visibilityState !== 'hidden')
   const [online, setOnline] = useState(() => navigator.onLine)
   const groups = useConversationGroups(Boolean(session?.csrf && online && pageVisible), session?.csrf)
+  const [teamRevision, setTeamRevision] = useState(0)
   const { refresh: refreshGroups, clear: clearGroups } = groups
   const [installPrompt, setInstallPrompt] = useState<PwaInstallPrompt | null>(null)
   const [updateWorker, setUpdateWorker] = useState<ServiceWorker | null>(null)
@@ -1064,6 +1074,7 @@ export function App() {
 
       const method = eventMethod(event)
       if (method === 'conversation-groups/changed') void refreshGroups()
+      if (method === 'orchestration/changed') setTeamRevision(value => value + 1)
       const params = object(object(event.payload).params)
       const eventThread = eventThreadId(event)
       if (method === 'thread/name/updated' && eventThread && (typeof params.threadName === 'string' || params.threadName === null)) {
@@ -1654,6 +1665,7 @@ export function App() {
 
   if (authLoading) return <main className="loading-shell"><span className="spinner" /><p>{online ? 'Reconnecting to Codex Remote…' : 'Offline — waiting for connection…'}</p></main>
   if (!session) return <Login installPrompt={installPrompt} offline={!online} onInstall={() => void installApp()} onLogin={setSession} />
+  const selectedGroup = conversationGroup(groups.snapshot, thread?.id)
 
   return (
     <div className="app-shell">
@@ -1688,6 +1700,11 @@ export function App() {
           <div className="workspace-title">
             <div className="workspace-title-line">
               <h1>{draftOpen ? 'New conversation' : thread ? threadTitle(thread) : 'Codex Remote'}</h1>
+              {!draftOpen && thread && selectedGroup && <button type="button" className={`leader-toggle ${selectedGroup.leaderThreadId === thread.id ? 'is-leader' : ''}`}
+                disabled={!online || !session.csrf || groups.leaderSaving} aria-pressed={selectedGroup.leaderThreadId === thread.id}
+                aria-label={selectedGroup.leaderThreadId === thread.id ? 'Bỏ vai trò leader' : 'Đặt làm leader'}
+                title={selectedGroup.leaderThreadId === thread.id ? 'Leader của folder · bấm để bỏ vai trò' : 'Đặt convo này làm leader của folder'}
+                onClick={() => void groups.leader(selectedGroup.id, selectedGroup.leaderThreadId === thread.id ? null : thread.id)}>{selectedGroup.leaderThreadId === thread.id ? '★' : '☆'}</button>}
             </div>
             <p>
               {thread ? <>{shortWorkspace(thread.cwd)}{effectiveModel ? ` · ${effectiveModel}` : ''}{effectiveEffort ? ` · ${effectiveEffort}` : ''}</> : 'Private workspace agent'}
@@ -1717,6 +1734,12 @@ export function App() {
         </nav>
 
         <TranscriptViewport key={`${selectedId}-conversation`} viewKey={`${selectedId}-conversation`} ready={Boolean(thread) && historyReady} positions={readingPositions.current}>
+          {groups.leaderError && <p className="error-banner" role="alert">{groups.leaderError}</p>}
+          {!draftOpen && thread && selectedGroup?.leaderThreadId && <ConversationTeam key={`${thread.id}:${selectedGroup.id}`} threadId={thread.id} group={selectedGroup} threads={threads}
+            csrf={session.csrf} enabled={online && pageVisible} revision={teamRevision} onOpen={id => {
+              const target = threads.find(thread => thread.id === id)
+              void (target ? openThread(target) : api.thread(id).then(response => openThread(response.thread))).catch(error => setError(errorMessage(error)))
+            }} />}
           {updateWorker && (
             <div className="update-banner" role="status">
               <div><strong>Update ready</strong><span>A fresher Codex Remote is available.</span></div>
