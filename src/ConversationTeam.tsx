@@ -62,7 +62,7 @@ export function ConversationTeam({ threadId, group, threads, csrf, enabled, revi
           <div className="team-task-heading"><strong>{task.title}</strong><span className={`team-task-status is-${task.status}`}>{statuses[task.status]}</span></div>
           <div className="team-task-actions">
             {task.threadId && <button type="button" className="quiet-button" onClick={() => onOpen(task.threadId)}>{title(task.threadId)} ↗</button>}
-            {unfinished(task.status) && <button type="button" className="quiet-button" disabled={!enabled || saving} onClick={() => void action({ action: 'cancel', taskId: task.id })}>Dừng việc</button>}
+            {unfinished(task.status) && <button type="button" className="quiet-button team-task-stop" aria-label="Dừng việc" title="Dừng việc" disabled={!enabled || saving} onClick={() => void action({ action: 'cancel', taskId: task.id })}>[x]</button>}
           </div>
           {task.result && <details className="team-task-result"><summary>Kết quả</summary><p>{task.result}</p></details>}
         </li>)}</ul>

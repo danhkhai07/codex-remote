@@ -528,6 +528,7 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
 .team-task-status.is-failed { color: #f6a498; }
 .team-task-actions { margin-top: 8px; }
 .team-task-actions button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+.team-task-actions .team-task-stop { min-width: 44px; min-height: 44px; padding: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; text-align: center; }
 .team-task-result { margin-top: 8px; }
 .team-task-result p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .message-orchestration .message-author { color: #e7c44a; }

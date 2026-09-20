@@ -26,6 +26,9 @@ try {
     page.setDefaultTimeout(10000)
     const errors = []; page.on('pageerror', error => errors.push(error.message))
     let leaderId = 'plan-fixture', revision = 1, paused = [], actions = [], failLeader = false
+    let releaseCancel
+    const cancelGate = new Promise(resolve => { releaseCancel = resolve })
+    let failCancel = true
     const groups = () => ({ revision, groups: [{ id: 'group', name: 'Fixture folder', contextPath: 'unused', leaderThreadId: leaderId, leaderEpoch: revision }],
       assignments: { 'plan-fixture': 'group', worker: 'group' } })
     const tasks = Array.from({ length: 30 }, (_, i) => ({ id: `task-${i}`, threadId: 'worker', groupId: 'group', title: `Task ${i}: ${'Long title '.repeat(10)}`,
@@ -49,6 +52,11 @@ try {
     await page.route('**/api/threads/*/orchestration', async route => {
       if (route.request().method() === 'POST') {
         const action = route.request().postDataJSON(); actions.push(action)
+        if (action.action === 'cancel' && failCancel) {
+          await cancelGate
+          failCancel = false
+          return route.fulfill({ status: 503, json: { error: 'Fixture cancel failed' } })
+        }
         if (action.action === 'release') paused = []
         else tasks.find(task => task.id === action.taskId).status = 'cancelled'
       }
@@ -88,6 +96,7 @@ try {
     const top = await transcript.evaluate(el => el.scrollTop)
     await summary.click()
     await team.locator('.team-tasks > li').first().waitFor()
+    assert.equal(await team.getByText('Gửi mục tiêu', { exact: false }).count(), 0, 'Redundant leader hint is removed')
     await layout()
     assert.equal(await transcript.evaluate(el => el.scrollTop), top, 'Opening team preserves transcript position')
     await team.locator('.team-task-result > summary').first().click()
@@ -110,7 +119,26 @@ try {
     await transcript.press('End'); await layout()
     await summary.click()
     await body.evaluate(el => { el.scrollTop = 0 })
-    await team.getByRole('button', { name: 'Dừng việc', exact: true }).click()
+    const stopTask = team.getByRole('button', { name: 'Dừng việc', exact: true })
+    assert.equal(await stopTask.textContent(), '[x]')
+    assert.equal(await stopTask.getAttribute('title'), 'Dừng việc')
+    await team.locator('.team-task-actions').first().getByRole('button').first().focus()
+    await page.keyboard.press('Tab')
+    const stopStyle = await stopTask.evaluate(el => ({ font: getComputedStyle(el).fontFamily, focused: el.matches(':focus-visible'),
+      width: el.getBoundingClientRect().width, height: el.getBoundingClientRect().height }))
+    assert.ok(stopStyle.font.includes('monospace') && stopStyle.focused)
+    assert.ok(stopStyle.width >= 44 && stopStyle.height >= 44, 'Compact ASCII keeps a usable touch target')
+    if (shots) await page.screenshot({ path: resolve(shots, `ascii-stop-${viewport.width}x${viewport.height}.png`) })
+    await stopTask.press('Enter')
+    await page.waitForFunction(() => document.querySelector('.team-task-stop')?.disabled)
+    assert.equal(await stopTask.isDisabled(), true, 'Pending cancel cannot be submitted twice')
+    releaseCancel()
+    await team.getByRole('alert').filter({ hasText: 'Fixture cancel failed' }).waitFor()
+    assert.equal(await stopTask.isEnabled(), true, 'Failed cancel remains retryable')
+    await stopTask.click()
+    await stopTask.waitFor({ state: 'detached' })
+    assert.equal(await team.getByRole('alert').count(), 0, 'Successful retry clears error')
+    assert.equal(actions.filter(action => action.action === 'cancel').length, 2)
     assert.deepEqual(actions.at(-1), { action: 'cancel', taskId: 'task-29' })
     await app.request('fixture/question', { id: `team-question-${viewport.height}`, questions: [{ id: 'question', question: 'Choose a plan. '.repeat(40),
       options: [{ label: 'First', description: 'Many details. '.repeat(80) }, { label: 'Second', description: 'Alternative' }] }] })
