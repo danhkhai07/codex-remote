@@ -1800,8 +1800,8 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
 }
 
 .composer-controls .composer-model {
-  max-width: 240px;
-  flex: 1 1 150px;
+  max-width: 144px;
+  flex: 0 1 144px;
 }
 
 .composer-controls .composer-effort {
