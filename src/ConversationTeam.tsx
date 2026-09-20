@@ -50,7 +50,7 @@ export function ConversationTeam({ threadId, group, threads, csrf, enabled, revi
     <summary><span>{isLeader ? '★ Bạn đang ở convo leader' : group.leaderThreadId ? `Leader: ${title(group.leaderThreadId)}` : 'Điều phối đã tắt'}</span>
       <span className="muted">{paused ? 'Bạn đang điều khiển' : pending ? `${pending} việc đang xử lý` : 'Công việc'}</span></summary>
     <div className="conversation-team-body">
-      <p className="muted">{isLeader ? 'Gửi mục tiêu trong chat để leader tạo convo, giao việc và nhận kết quả. Mỗi folder có một leader.' : 'Bạn có thể chat trực tiếp ở đây. Khi bạn gửi tin nhắn, convo tạm dừng nhận việc từ leader.'}</p>
+      {!isLeader && <p className="muted">Bạn có thể chat trực tiếp ở đây. Khi bạn gửi tin nhắn, convo tạm dừng nhận việc từ leader.</p>}
       {!isLeader && group.leaderThreadId && <button type="button" className="quiet-button" onClick={() => onOpen(group.leaderThreadId!)}>Mở convo leader ↗</button>}
       {paused && <button type="button" className="quiet-button" disabled={!enabled || saving} onClick={() => void action({ action: 'release' })}>Cho leader giao việc trở lại</button>}
       {error && <p role="alert" className="error-banner">{error}</p>}
