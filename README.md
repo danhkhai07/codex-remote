@@ -61,7 +61,9 @@ stop work. Busy conversations queue delegated tasks. Direct chat with a worker
 takes priority and pauses further assignments until the user clicks **Cho leader
 giao việc trở lại**. If it is working, stop the current turn before sending a direct
 message. Stopping the leader also stops automatic wakeups until another user turn.
-Results go to the current leader when it is idle. Each direct leader instruction
+Results go to the current leader when it is idle. Workers and automatic result
+turns inherit the leader's Plan/Code mode; planning tasks remain in Plan mode.
+Each direct leader instruction
 allows at most 20 tasks, 8 automatic result wakeups, 12 unfinished tasks, and 3
 concurrent delegated turns per folder. These budgets survive restart; ambiguous
 in-flight sends are flagged for review rather than automatically repeated. Task
@@ -305,3 +307,23 @@ signals, not automatic semantic judgments or permission to replace decisions.
 
 See [knowledge evaluation](docs/knowledge-evaluation.md) for acceptance cases and how to
 separately assess retrieval and the model's use of the retrieved knowledge.
+
+### Plan mode
+
+Use `/plan` to enter Codex's native Plan mode for the current conversation, or
+`/plan <prompt>` to enter it and send a planning request (multiline text and
+attachments are supported). Plan mode asks Codex to investigate, clarify, and
+propose a plan before implementation. The Plan/Code control and Shift+Tab switch
+back to Code. Mode changes are disabled while a turn is running. The selection
+is saved per conversation on this device, including across reloads.
+
+A completed native plan offers **Implement plan**, which explicitly starts a Code
+turn. You can instead send more feedback while staying in Plan. Planning questions
+support suggested choices, a free-text answer, and Skip. The gateway uses
+`turn/start.collaborationMode` with the installed Codex's built-in instructions;
+it preserves the selected model, effort, and permissions. Plan mode is a native
+behavioral mode, not a separate filesystem sandbox.
+
+Protocol verified against Codex CLI 0.155.0 and the official
+[CLI commands](https://developers.openai.com/codex/cli/slash-commands/) and
+[App Server](https://developers.openai.com/codex/app-server/) documentation.

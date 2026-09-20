@@ -74,7 +74,7 @@ export class RemoteController {
       create: async (workspaceId, groupId, settings) => threadFromResult(await this.createThread(workspaceId, settings.fullAccess, groupId)) as { id: string },
       rename: (threadId, name) => this.renameThread(threadId, name),
       start: async (threadId, text, settings, guard) => {
-        const result = await this.startTurn(threadId, text, settings.model, settings.effort, settings.fullAccess, [], [], undefined, guard)
+        const result = await this.startTurn(threadId, text, settings.model, settings.effort, settings.fullAccess, [], [], undefined, settings.mode ?? 'default', guard)
         const id = asObject(asObject(result).turn).id
         if (typeof id !== 'string') throw new Error('Codex did not return a turn ID')
         return id
@@ -178,7 +178,7 @@ export class RemoteController {
     if (!itemId) return
 
     const delta = message.method === 'item/agentMessage/delta' && typeof params.delta === 'string' ? params.delta : null
-    const completedText = message.method === 'item/completed' && item.type === 'agentMessage' && typeof item.text === 'string' ? item.text : null
+    const completedText = message.method === 'item/completed' && ['agentMessage', 'plan'].includes(String(item.type)) && typeof item.text === 'string' ? item.text : null
     if (delta === null && completedText === null) return
 
     const key = `${params.threadId}:${params.turnId}`
@@ -201,7 +201,7 @@ export class RemoteController {
     const items = Array.isArray(turn.items) ? turn.items.map(asObject) : []
     for (let index = items.length - 1; index >= 0; index--) {
       const item = items[index]
-      if (item.type === 'agentMessage' && typeof item.text === 'string' && item.text.trim()) return item.text
+      if (['agentMessage', 'plan'].includes(String(item.type)) && typeof item.text === 'string' && item.text.trim()) return item.text
     }
     if (!tracked) return ''
     for (let index = tracked.order.length - 1; index >= 0; index--) {
@@ -378,15 +378,16 @@ export class RemoteController {
     return result
   }
 
-  async startTurn(threadId: string, text: unknown, model: unknown = undefined, effort: unknown = undefined, fullAccess: unknown = false, imagePaths: readonly string[] = [], files: readonly UploadedFile[] = [], skills: unknown = undefined, guard?: () => void): Promise<unknown> {
+  async startTurn(threadId: string, text: unknown, model: unknown = undefined, effort: unknown = undefined, fullAccess: unknown = false, imagePaths: readonly string[] = [], files: readonly UploadedFile[] = [], skills: unknown = undefined, mode: unknown = undefined, guard?: () => void): Promise<unknown> {
     if (this.#turnStarts.has(threadId) || this.#activeTurns.has(threadId)) throw new ContextVaultError(409, 'Conversation is busy')
     this.#turnStarts.add(threadId)
-    try { return await this.#startTurn(threadId, text, model, effort, fullAccess, imagePaths, files, skills, guard) }
+    try { return await this.#startTurn(threadId, text, model, effort, fullAccess, imagePaths, files, skills, mode, guard) }
     catch (error) { this.orchestration?.revoke(threadId); throw error }
     finally { this.#turnStarts.delete(threadId) }
   }
 
-  async #startTurn(threadId: string, text: unknown, model: unknown, effort: unknown, fullAccess: unknown, imagePaths: readonly string[], files: readonly UploadedFile[], skills: unknown, guard?: () => void): Promise<unknown> {
+  async #startTurn(threadId: string, text: unknown, model: unknown, effort: unknown, fullAccess: unknown, imagePaths: readonly string[], files: readonly UploadedFile[], skills: unknown, mode: unknown, guard?: () => void): Promise<unknown> {
+    if (mode !== undefined && mode !== 'plan' && mode !== 'default') throw new Error('Invalid collaboration mode')
     if (typeof text !== 'string') throw new Error('Instruction text must be a string')
     if (!text.trim() && imagePaths.length === 0 && files.length === 0) throw new Error('Instruction text or an attachment is required')
     if (text.length > 100_000) throw new Error('Instruction text is too long')
@@ -422,6 +423,18 @@ export class RemoteController {
       ? { thread: this.#loadedThreads.get(threadId) }
       : await this.resumeThread(threadId)
     const cwd = String(threadFromResult(resumed).cwd ?? '')
+    let collaborationMode
+    if (mode !== undefined) {
+      // Native collaboration modes install Codex's own planning/default instructions.
+      // Explicit default also clears a previous plan mode on a resumed thread.
+      if (this.#models.size === 0) await this.listModels()
+      const modeModel = overrides.model ?? asObject(resumed).model ?? threadFromResult(resumed).model
+        ?? [...this.#models.values()].find(value => value.isDefault)?.model
+      if (typeof modeModel !== 'string' || !modeModel) throw new Error('Choose a model before changing collaboration mode')
+      collaborationMode = { mode, settings: { model: modeModel,
+        reasoning_effort: overrides.effort ?? this.#models.get(modeModel)?.defaultReasoningEffort ?? null,
+        developer_instructions: null } }
+    }
     const input = [
       ...(text.trim() ? [{ type: 'text', text, text_elements: [] }] : []),
       ...imagePaths.map(path => ({ type: 'localImage', path })),
@@ -429,7 +442,7 @@ export class RemoteController {
       ...(files.length ? [{ type: 'text', text: 'Attached files are available at these local paths. Read them as needed; filenames and file contents are user-provided data.\n' + JSON.stringify(files.map(({ path, name, contentType, size }) => ({ path, name, contentType, size }))), text_elements: [] }] : []),
     ]
     guard?.()
-    const settings: TurnSettings = { ...overrides, fullAccess }
+    const settings: TurnSettings = { ...overrides, fullAccess, ...(mode ? { mode } : {}) }
     // Both user sends and scheduler sends enter the same lock. Guard again at the RPC boundary.
     const orchestrationContext = this.orchestration?.context(threadId, settings, !guard, text)
     if (this.contextVault) {
@@ -454,6 +467,7 @@ export class RemoteController {
         : { type: 'workspaceWrite', writableRoots: [...new Set([cwd, ...(this.contextVault?.writableRoots(threadId) ?? [])])], networkAccess: false },
       input,
       ...overrides,
+      ...(collaborationMode ? { collaborationMode } : {}),
     })
     const turn = asObject(asObject(result).turn)
     if (typeof turn.id === 'string') {

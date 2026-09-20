@@ -392,9 +392,9 @@ describe('Codex Remote HTTP boundary', () => {
     expect(htmlUpload.status).toBe(201)
     const fileId = JSON.parse(htmlUpload.body).id
     const startWithFile = vi.spyOn(controller, 'startTurn').mockResolvedValueOnce({ turn: { id: 'uploaded-file-turn' } })
-    const fileTurn = await fetchLocal(port, '/api/threads/upload-test/turns', { ...options, method: 'POST', body: { text: '  <b>literal</b>\n ', attachmentIds: [fileId] } })
+    const fileTurn = await fetchLocal(port, '/api/threads/upload-test/turns', { ...options, method: 'POST', body: { text: '  <b>literal</b>\n ', attachmentIds: [fileId], collaborationMode: 'plan' } })
     expect(fileTurn.status).toBe(202)
-    expect(startWithFile).toHaveBeenCalledWith('upload-test', '  <b>literal</b>\n ', undefined, undefined, false, [], [expect.objectContaining({ name: 'source.html', contentType: 'text/html', kind: 'file' })], undefined)
+    expect(startWithFile).toHaveBeenCalledWith('upload-test', '  <b>literal</b>\n ', undefined, undefined, false, [], [expect.objectContaining({ name: 'source.html', contentType: 'text/html', kind: 'file' })], undefined, 'plan')
     startWithFile.mockRestore()
 
     const subscription = {

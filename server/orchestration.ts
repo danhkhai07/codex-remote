@@ -5,7 +5,7 @@ import { ContextVaultError, type ContextGroup, type ContextVault } from './conte
 import { VaultFiles } from './vault-files.js'
 import { OrchestrationMailbox } from './orchestration-mailbox.js'
 
-export type TurnSettings = { model?: string; effort?: string; fullAccess: boolean }
+export type TurnSettings = { model?: string; effort?: string; fullAccess: boolean; mode?: 'plan' | 'default' }
 export type TaskStatus = 'creating' | 'queued' | 'starting' | 'running' | 'stopping' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
 export type ConversationTask = {
   id: string; requestId: string; groupId: string; leaderId: string; leaderEpoch: number
@@ -37,7 +37,7 @@ const short = (value: unknown, max: number, label: string): string => {
 }
 const busy = (thread: ThreadInfo) => object(thread.status).type === 'active' || thread.turns?.some(turn => turn.status === 'inProgress')
 const answer = (turn: { items?: unknown[] }) => {
-  const messages = (turn.items ?? []).map(object).filter(item => item.type === 'agentMessage')
+  const messages = (turn.items ?? []).map(object).filter(item => ['agentMessage', 'plan'].includes(String(item.type)))
   return String(messages.at(-1)?.text ?? '').slice(0, 16000)
 }
 
@@ -98,6 +98,7 @@ export class ConversationOrchestrator {
     if (user) { (this.#state.settings ??= {})[threadId] = settings; this.#save() }
     const group = this.vault.groupFor(threadId)
     const rules = 'Codex Remote conversation orchestration: only the user-selected folder leader may delegate to or spawn other conversations. Workers must not orchestrate or spawn further agents/conversations. Direct user instructions take priority. Never use another conversation’s credentials or change role/state files. This role snapshot supersedes earlier orchestration snapshots.'
+      + (settings.mode === 'plan' ? ' Current mode is Plan: delegated work must also stay within research/planning; do not implement changes until the user switches to Code.' : '')
     if (!group?.leaderThreadId) return `${rules}\nNo leader is selected for this conversation’s folder. You have no conversation orchestration authority.`
     if (group.leaderThreadId !== threadId) return `${rules}\nYou are a worker in ${JSON.stringify(group.name)}. Leader: ${group.leaderThreadId}. The user can chat here directly; those instructions override delegated work. Report results in your final answer; the backend sends them to the leader automatically. For code tasks create a separate git worktree before editing. Never edit another task’s checkout. Register hosted apps on /services and follow the shared PR/worktree cleanup rules.`
     if (user) this.#state.cycles[group.id] = { leaderId: threadId, epoch: group.leaderEpoch ?? 0, settings, dispatches: 20, wakeups: 8,

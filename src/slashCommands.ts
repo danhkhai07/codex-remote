@@ -6,6 +6,7 @@ export type SlashCommand = {
 }
 
 export const slashCommands: SlashCommand[] = [
+  { name: 'plan', usage: '/plan [prompt]', description: 'Enter Plan mode; optionally send a planning request' },
   { name: 'skills', usage: '/skills', description: 'List and select skills for your next message' },
   { name: 'status', usage: '/status', description: 'Show connection, model, turn, and queue status' },
   { name: 'model', usage: '/model <model>', description: 'Choose the model for future turns', takesArgument: true },
@@ -21,6 +22,8 @@ export const slashCommands: SlashCommand[] = [
 
 export function parseSlashCommand(value: string): { name: string; argument: string } | null {
   const input = value.trim()
+  const plan = input.match(/^\/plan(?:\s+([\s\S]*))?$/i)
+  if (plan) return { name: 'plan', argument: (plan[1] ?? '').trim() }
   if (!input.startsWith('/') || input.includes('\n')) return null
   const match = input.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/)
   if (!match) return null

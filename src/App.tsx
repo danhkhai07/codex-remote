@@ -1,3 +1,4 @@
+import { useCollaborationMode, type CollaborationMode } from './useCollaborationMode'
 import { LocalhostPreview } from './LocalhostPreview'
 import { EMPTY_NEW_CONVERSATION, NEW_CONVERSATION_KEY, prepareNewConversation, type NewConversation } from './newConversation'
 import { SkillsPicker } from './SkillsPicker'
@@ -311,7 +312,7 @@ const HistoryItem = memo(function HistoryItem({ item, onOpenFile, onOpenLink }: 
   const text = itemText(item)
   const command = commandText(item)
   const changes = Array.isArray(item.changes) ? item.changes : []
-  const conversational = item.type === 'userMessage' || item.type === 'agentMessage'
+  const conversational = item.type === 'userMessage' || item.type === 'agentMessage' || item.type === 'plan'
   const attachmentPreviews = Array.isArray(item.attachmentPreviews)
     ? item.attachmentPreviews.filter((entry): entry is { name: string; previewUrl: string } => Boolean(entry)
       && typeof (entry as { name?: unknown }).name === 'string'
@@ -421,7 +422,7 @@ export const Conversation = memo(function Conversation({ thread, activeTurnId, i
   )
 })
 
-function RequestCard({ request, csrf, onResolved }: {
+export function RequestCard({ request, csrf, onResolved }: {
   request: PendingRequest
   csrf: string
   onResolved: (key: string) => void
@@ -429,6 +430,7 @@ function RequestCard({ request, csrf, onResolved }: {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [answers, setAnswers] = useState<Record<string, string>>({})
+  const [customAnswers, setCustomAnswers] = useState<Record<string, string>>({})
 
   async function respond(body: Record<string, unknown>) {
     setBusy(true)
@@ -460,17 +462,25 @@ function RequestCard({ request, csrf, onResolved }: {
         const id = String(question.id)
         const options = Array.isArray(question.options) ? question.options.map(object) : []
         return (
-          <label className="question-field" key={id}>
-            <span>{String(question.question ?? question.header ?? 'Your answer')}</span>
-            {options.length > 0 ? (
-              <select value={answers[id] ?? ''} onChange={(event) => setAnswers((current) => ({ ...current, [id]: event.target.value }))}>
-                <option value="">Choose an answer</option>
-                {options.map((option) => <option key={String(option.label)} value={String(option.label)}>{String(option.label)}</option>)}
+          <div className="question-field" key={id}>
+            <label htmlFor={`question-${id}`}>{String(question.question ?? question.header ?? 'Your answer')}</label>
+            {options.length > 0 && <>
+              <select id={`question-${id}`} value={answers[id] ?? ''} onChange={(event) => {
+                setAnswers(current => ({ ...current, [id]: event.target.value }))
+                setCustomAnswers(current => ({ ...current, [id]: '' }))
+              }}>
+                <option value="">Choose an answer or write your own</option>
+                {options.map(option => <option key={String(option.label)} value={String(option.label)}>{String(option.label)}</option>)}
               </select>
-            ) : (
-              <input value={answers[id] ?? ''} onChange={(event) => setAnswers((current) => ({ ...current, [id]: event.target.value }))} />
-            )}
-          </label>
+              {options.map(option => typeof option.description === 'string' && <small key={String(option.label)}>{String(option.label)}: {String(option.description)}</small>)}
+            </>}
+            <input id={options.length ? `question-${id}-custom` : `question-${id}`} aria-label={options.length ? `Other answer: ${String(question.question)}` : undefined}
+              placeholder={options.length ? 'Or write your own answer…' : 'Your answer…'}
+              type={question.isSecret ? 'password' : 'text'} value={customAnswers[id] ?? ''} onChange={event => {
+                setCustomAnswers(current => ({ ...current, [id]: event.target.value }))
+                setAnswers(current => ({ ...current, [id]: '' }))
+              }} />
+          </div>
         )
       })}
 
@@ -490,13 +500,14 @@ function RequestCard({ request, csrf, onResolved }: {
             <button className="primary-button" disabled={busy} onClick={() => void respond({ decision: 'accept', scope: 'session' })}>Allow session</button>
           </>
         )}
-        {isUserInput && (
-          <button
-            className="primary-button"
-            disabled={busy || questions.some((question) => !answers[String(question.id)]?.trim())}
-            onClick={() => void respond({ answers: Object.fromEntries(Object.entries(answers).map(([key, value]) => [key, { answers: [value] }])) })}
-          >Send answer</button>
-        )}
+        {isUserInput && <>
+          <button className="quiet-button" disabled={busy} onClick={() => void respond({ answers: {} })}>Skip</button>
+          <button className="primary-button" disabled={busy || !questions.some(question => (customAnswers[String(question.id)] || answers[String(question.id)])?.trim())}
+            onClick={() => void respond({ answers: Object.fromEntries(questions.flatMap(question => {
+              const id = String(question.id), answer = (customAnswers[id] || answers[id])?.trim()
+              return answer ? [[id, { answers: [answer] }]] : []
+            })) })}>Send answer</button>
+        </>}
         {!isApproval && !isPermissions && !isUserInput && (
           <button className="danger-button" disabled={busy} onClick={() => void respond({ action: 'cancel' })}>Cancel request</button>
         )}
@@ -592,6 +603,7 @@ export function App() {
   const [pending, setPending] = useState<PendingRequest[]>([])
   const [models, setModels] = useState<ModelOption[]>([])
   const { settings, update: setConversationSettings, migrateLegacy, saveForThread: saveThreadSettings, saveError: settingsSaveError } = useConversationSettings(composerKey)
+  const { mode, setMode, saveForThread: saveThreadMode, saveError: modeSaveError } = useCollaborationMode(composerKey)
   const selectedModel = settings?.model ?? null
   const selectedEffort = settings?.effort ?? null
   const [yoloMode, setYoloMode, yoloSaveError] = useYoloPreference()
@@ -1151,6 +1163,12 @@ export function App() {
   const effectiveModelOption = models.find((model) => model.model === effectiveModel)
   const effortOptions = effectiveModelOption?.supportedReasoningEfforts ?? []
   const effectiveEffort = selectedEffort ?? effectiveModelOption?.defaultReasoningEffort ?? null
+  const latestAnswer = thread ? conversationItems(thread, transcripts[thread.id] ?? EMPTY_ITEMS)
+    .filter(item => ['userMessage', 'agentMessage', 'plan'].includes(String(item.type))).at(-1) : undefined
+  const planTurnStatus = thread?.turns?.find(turn => turn.id === latestAnswer?.turnId)?.status
+    ?? (thread?.latestTurn?.id === latestAnswer?.turnId ? thread?.latestTurn?.status : undefined)
+  const planReady = mode === 'plan' && planTurnStatus === 'completed' && !activeTurnId && !busy && latestAnswer && !latestAnswer.streaming &&
+    (latestAnswer.type === 'plan' || (latestAnswer.type === 'agentMessage' && itemText(latestAnswer).includes('<proposed_plan>')))
   const slashOptions = useMemo<SlashOption[]>(() => {
     const input = composer.trimStart()
     const modelMatch = input.match(/^\/model(?:\s+(.*))?$/i)
@@ -1242,6 +1260,13 @@ export function App() {
 
   async function executeSlashCommand(name: string, argument: string) {
     switch (name) {
+      case 'plan':
+        if (activeTurnId || busy) { setError('Wait for the current turn to finish before changing mode. Your draft is kept.'); return }
+        if (argument) { await sendInstruction(argument, 'plan'); return }
+        setMode('plan')
+        showCommandNotice('Plan mode', [{ label: 'Next message', value: 'Codex will investigate and propose a plan before implementation.' },
+          { label: 'Switch back', value: 'Use the Plan/Code button or Shift+Tab.' }])
+        return
       case 'status': {
         const runtimeStatus = object(thread?.status).type
         setBusy(true)
@@ -1264,6 +1289,7 @@ export function App() {
           { label: 'Workspace', value: thread ? shortWorkspace(thread.cwd) : 'None' },
           { label: 'Model', value: effectiveModel || 'Server default' },
           { label: 'Effort', value: effectiveEffort || 'Model default' },
+          { label: 'Mode', value: mode === 'plan' ? 'Plan' : 'Code' },
           { label: 'Thread', value: activeTurnId ? 'Working' : typeof runtimeStatus === 'string' ? runtimeStatus : 'Idle' },
           { label: 'Approvals', value: 'Disabled' },
           { label: 'Sandbox', value: yoloMode ? 'Host access (YOLO)' : 'Workspace only' },
@@ -1384,6 +1410,12 @@ export function App() {
       await executeSlashCommand(slashCommand.name, slashCommand.argument)
       return
     }
+    await sendInstruction(instruction)
+  }
+
+  async function sendInstruction(instruction: string, turnMode: CollaborationMode = mode) {
+    if (!session || (!thread && !draftOpen) || (!instruction.trim() && attachments.length === 0)) return
+    if ((!draftOpen && !historyReady) || !online || !session.csrf) { setSendError('Wait for the conversation to connect. Your draft is kept.'); return }
     if (!composerKey || busy || sendingLocks.current.has(composerKey)) return
     if (draftOpen && newConversation.thread && (activeTurns[newConversation.thread.id] || sendingLocks.current.has(newConversation.thread.id))) { setSendError('This conversation is already starting or working. Wait for it to finish before retrying.'); return }
     if (draftOpen && !newConversation.name.trim()) { setSendError('Give this conversation a name before sending.'); return }
@@ -1391,6 +1423,8 @@ export function App() {
       setError('Your draft is saved here. Send it when this turn finishes, or stop the turn first.')
       return
     }
+    setMode(turnMode)
+    setCommandNotice(null)
     if (effectiveModel) setConversationSettings({ model: effectiveModel, effort: effectiveEffort })
     const lockKey = composerKey
     sendingLocks.current.add(lockKey)
@@ -1432,6 +1466,7 @@ export function App() {
         })
         if (epoch !== sessionEpoch.current) return
         sendingThreadId = target.id
+        saveThreadMode(target.id, turnMode)
         if (effectiveModel) saveThreadSettings(target.id, { model: effectiveModel, effort: effectiveEffort })
         setSentMessages(current => ({ ...current, [target!.id]: sent }))
       }
@@ -1442,6 +1477,7 @@ export function App() {
         model: effectiveModel ?? undefined,
         effort: effectiveEffort ?? undefined,
         fullAccess: yoloMode,
+        collaborationMode: turnMode,
         attachmentIds: uploadedIds,
         skills: sendingSkills,
       })
@@ -1456,6 +1492,7 @@ export function App() {
         setAttachments([])
         draftRef.current = EMPTY_NEW_CONVERSATION
         setNewConversation(EMPTY_NEW_CONVERSATION)
+        saveThreadMode(NEW_CONVERSATION_KEY, 'default')
         writeScreenState('new-conversation', EMPTY_NEW_CONVERSATION)
         // Navigation during a send must not pull the user away from another conversation.
         if (draftOpenRef.current) {
@@ -1814,6 +1851,9 @@ export function App() {
               addImages(images)
             }}>
             <div className="composer-controls" aria-label="Turn settings">
+              <button type="button" className={`composer-mode ${mode === 'plan' ? 'is-plan' : ''}`}
+                aria-label="Plan mode" aria-pressed={mode === 'plan'} title="Switch Plan/Code · Shift+Tab" disabled={busy || Boolean(activeTurnId)}
+                onClick={() => { setMode(mode === 'plan' ? 'default' : 'plan'); setCommandNotice(null) }}>{mode === 'plan' ? 'Plan' : 'Code'}</button>
               <select
                 className="composer-model"
                 aria-label="Model for future turns"
@@ -1858,6 +1898,11 @@ export function App() {
             </div>
             {skillsOpen && <SkillsPicker key={composerKey} threadId={draftOpen ? undefined : thread?.id} workspaceId={session.workspaces[0]?.id} selected={selectedSkills} onChange={setSelectedSkills} onClose={closeSkills} triggerRef={composerRef} disabled={busy} />}
             {selectedSkills.length > 0 && <div className="selected-skills" aria-label="Selected skills">{selectedSkills.map(skill => <button type="button" key={skill.path} disabled={busy} aria-label={`Remove skill ${skill.name}`} onClick={() => setSelectedSkills(current => current.filter(item => item.path !== skill.path))}>{skill.name} ×</button>)}</div>}
+            {planReady && <div className="plan-implementation"><span>Kế hoạch đã sẵn sàng.</span><button type="button" className="primary-button"
+              disabled={!online || !historyReady || Boolean(composer.trim()) || attachments.length > 0}
+              onClick={() => void sendInstruction('Implement the plan.', 'default')}>Implement plan</button></div>}
+            {modeSaveError && <p role="status" className="attachment-hint">{modeSaveError}</p>}
+            {mode === 'plan' && <p className="plan-mode-hint">Plan mode · Tìm hiểu và lập kế hoạch trước khi sửa code.</p>}
             {settingsSaveError && <p role="status" className="attachment-hint">{settingsSaveError}</p>}
             {commandNotice && <LocalCommandResult notice={commandNotice} onClose={() => setCommandNotice(null)} />}
             <SlashMenu
@@ -1891,6 +1936,11 @@ export function App() {
                 aria-expanded={slashOptions.length > 0}
                 aria-controls={slashOptions.length > 0 ? 'slash-command-menu' : undefined}
                 onKeyDown={(event) => {
+                  if (event.key === 'Tab' && event.shiftKey) {
+                    event.preventDefault()
+                    if (!busy && !activeTurnId) { setMode(mode === 'plan' ? 'default' : 'plan'); setCommandNotice(null) }
+                    return
+                  }
                   if (slashOptions.length > 0 && event.key === 'ArrowDown') {
                     event.preventDefault()
                     setSlashIndex((current) => (current + 1) % slashOptions.length)
@@ -1917,7 +1967,7 @@ export function App() {
                     event.currentTarget.form?.requestSubmit()
                   }
                 }}
-                placeholder={activeTurnId ? 'Draft your next message…' : 'Message Codex…'}
+                placeholder={activeTurnId ? 'Draft your next message…' : mode === 'plan' ? 'What should Codex plan?' : 'Message Codex…'}
                 rows={1}
                 maxLength={100_000}
               />
