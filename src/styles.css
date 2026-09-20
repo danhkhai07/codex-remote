@@ -504,14 +504,20 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
 .leader-star, .leader-toggle.is-leader { color: #e7c44a; }
 .leader-toggle { flex: 0 0 36px; width: 36px; height: 36px; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 25px; cursor: pointer; }
 .leader-toggle:disabled { opacity: .45; cursor: default; }
-.conversation-team { margin: 12px 16px; border: 1px solid var(--line); border-radius: 12px; font-size: 13px; }
-.conversation-team > summary { cursor: pointer; padding: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.conversation-team-region { min-width: 0; padding: 6px max(12px, calc((100% - 860px) / 2)); border-bottom: 1px solid var(--line); background: var(--panel); }
+.conversation-team-region > .error-banner { margin: 0 0 6px; max-height: 64px; overflow: auto; }
+.conversation-team { margin: 0; border: 1px solid var(--line); border-radius: 12px; font-size: 13px; }
+.conversation-team > summary { cursor: pointer; padding: 10px 12px; display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 42px; }
+.conversation-team > summary::-webkit-details-marker { display: none; }
 .conversation-team > summary::before { content: '▸'; }
 .conversation-team[open] > summary::before { content: '▾'; }
-.conversation-team > summary > span:first-of-type { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.conversation-team-body { padding: 0 12px 12px; }
+.conversation-team > summary > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-team > summary > span:first-of-type { flex: 1; min-width: 0; }
+.conversation-team > summary > .muted { flex: 0 1 auto; max-width: 45%; }
+.conversation-team-body { padding: 0 12px 12px; max-height: min(28dvh, 280px); overflow-y: auto; overscroll-behavior: contain; }
+.workspace-shell:has(> .pending-requests) .conversation-team-body { max-height: min(18dvh, 160px); }
 .conversation-team-body > p { margin: 8px 0; }
-.team-tasks { list-style: none; padding: 0; margin: 12px 0 0; max-height: 45dvh; overflow: auto; overscroll-behavior: contain; }
+.team-tasks { list-style: none; padding: 0; margin: 12px 0 0; }
 .team-tasks > li { border-top: 1px solid var(--line); padding: 12px 0; }
 .team-task-heading, .team-task-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .team-task-heading strong { flex: 1; min-width: 0; overflow-wrap: anywhere; }
@@ -667,12 +673,17 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
   display: grid;
   min-width: 0;
   min-height: 0;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  /* Fixed slots collapse to zero when absent. Only history consumes remaining space;
+     the pending row can shrink on short screens with an expanded team. */
+  grid-template-rows: auto auto auto minmax(0, 1fr) minmax(0, auto) auto;
 }
 
-.workspace-shell:has(> .pending-requests) {
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
-}
+.workspace-shell > .workspace-header { grid-row: 1; }
+.workspace-shell > .view-tabs { grid-row: 2; }
+.workspace-shell > .conversation-team-region { grid-row: 3; }
+.workspace-shell > .transcript-region { grid-row: 4; }
+.workspace-shell > .pending-requests { grid-row: 5; }
+.workspace-shell > .composer { grid-row: 6; }
 
 .pending-requests {
   min-height: 0;
@@ -683,6 +694,12 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
   border-top: 1px solid var(--line);
   background: var(--panel);
 }
+
+/* Let the question body shrink with its grid row when the team is also open.
+   Approval cards retain their size and remain reachable in the outer scroller. */
+.workspace-shell:has(> .conversation-team-region) > .pending-requests { display: flex; flex-direction: column; }
+.pending-requests > .request-card { flex-shrink: 0; }
+.pending-requests > .plan-question { flex-shrink: 1; }
 
 .pending-requests .request-card { margin-bottom: 0; }
 .pending-requests .request-card + .request-card { margin-top: 12px; }
