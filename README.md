@@ -82,8 +82,14 @@ command capability:
 Rename accepts the same trimmed, single-line 1–200-character names as the UI and
 may rename the leader itself. Archive hides an unnecessary worker using native
 `thread/archive`; it does not permanently delete history, vault notes or completed
-task reports. **Prefer retaining conversations/context and renaming for clarity;
-do not automatically bulk-archive.** Neither command overrides a worker under
+task reports. **Archive conversations whose work is finished after saving useful
+results and knowledge in self-contained Vault notes and confirming reports were
+received.** Keeping the full transcript is not required; its retention is current
+native Archive behavior, not an obligation to keep every conversation. Cancelled
+work need not be recorded as completed. Saving useful knowledge is the leader's
+workflow responsibility: the backend does not verify that a note was written.
+Rename for clarity; do not perform unrelated bulk cleanup or purge history.
+Neither command overrides a worker under
 manual user control. Archive cannot target the current leader, a busy/starting
 conversation, unfinished work, or undelivered/unconfirmed results. It never
 interrupts work to make it archivable. Plan mode rejects both mutations.
