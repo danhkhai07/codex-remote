@@ -12,3 +12,9 @@
 # Hosted services
 
 - Whenever hosting a localhost app or adding a user-facing route on Codex Remote, register/update it on `/services` before handing over its URL. Include the service name, port or path, work summary, and the verified PR number/link (or explicitly no/unknown PR), plus branch/worktree when applicable. Use `npm run services -- register ...` as documented in README.md. Update the registry if a port changes ownership or a service is retired; do not silently leave stale metadata.
+
+# Knowledge updates
+
+- Use `npm run knowledge -- read --path ...`, then `write --path ... --file ... --revision ... --actor <conversation-id>` for maintained vault notes. Preserve the read revision; HTTP 409 means read the latest content and merge before writing again. Use an empty revision only when creating a new note.
+- Keep conversation handoffs short and current-first: active objective, current status, decisions, next steps and sources. Preserve completed delivery history in an archived reference with a link.
+- `/knowledge` shows note sources, versions/diffs, recent injected context and retrieval previews. Previewing context does not send a user turn or count as used context. Scope and confirmed/proposed/superseded status must remain explicit.

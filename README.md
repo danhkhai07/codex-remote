@@ -224,3 +224,56 @@ reopening. Website framing policies and HTTPS mixed-content restrictions still
 apply; **Mở tab ngoài** opens sites that do not permit embedding. Internal pages
 permit only same-origin framing. URLs are cached, not external page content or
 cross-origin browser navigation history.
+
+## Knowledge vault
+
+`/knowledge` is the authenticated second-brain workspace. It provides searchable notes,
+status/scope/source links, editing, revision history with a changed-range diff, restore,
+recent context traces and a retrieval preview for an existing conversation. It is also
+listed in `/services`; no extra conversation-toolbar button is added.
+
+Each turn selects up to 24,000 UTF-8 bytes of note excerpts. Shared rules and confirmed
+global preferences come first, followed by the current handoff/group and relevant topics.
+Selection uses the task text, conversation title, repository/worktree, scope, aliases and
+direct links. Unused allocations expand clipped notes. Paragraphs/headings are kept intact
+where possible; an oversized paragraph is explicitly marked when clipped. `superseded`
+and `archived` notes are omitted unless the task asks for history. This is deterministic
+text/link retrieval, not semantic search, and a selected proposal remains a proposal.
+The latest 100 successfully injected context snapshots retain exact excerpts, revisions,
+selection reasons and budget information. Preview requests are not recorded as used context.
+
+Use the checked write path for agent-maintained notes (run in the Codex Remote repository):
+
+```sh
+npm run knowledge -- read --path Projects/Example.md
+npm run knowledge -- write --path Projects/Example.md --file /tmp/knowledge-draft.md --revision READ_REVISION --actor CONVERSATION_ID
+npm run knowledge -- versions --path Projects/Example.md
+npm run knowledge -- version --path Projects/Example.md --id VERSION_ID
+npm run knowledge -- restore --path Projects/Example.md --id VERSION_ID --revision CURRENT_REVISION
+npm run knowledge -- preview --thread CONVERSATION_ID --text 'Sau khi PR merge cần dọn gì?'
+```
+
+New notes use `--revision ''`. On HTTP 409, keep the draft, read the new note and merge;
+never retry by simply substituting the newer revision without reviewing its contents.
+The page preserves the draft and shows the conflicting content for this purpose.
+Generated indexes/transcripts, `.state`, paths outside the vault and symlink paths are not
+editable through this API. Notes are limited to 256 KB; larger files are reported for splitting.
+
+Versions live locally under `.state/Knowledge/Notes`, with content hashes and source labels.
+All API/CLI writes run synchronously through the gateway and compare the supplied revision.
+A filesystem observation runs at startup and every 30 seconds, as well as during reads,
+to record edits/deletions made by Obsidian or direct file tools. It cannot capture every
+intermediate direct write or prevent an external process from writing during a save.
+This local history is not an off-machine backup. An initial baseline starts when a note
+is first observed; earlier versions cannot be reconstructed automatically.
+
+Supported retrieval properties are simple YAML scalars and inline/block lists: `type`,
+`status`, `scope`, `updated`, `sources`, `related`, `aliases`, `repositories`, `decision-key`,
+and `supersedes`. Other frontmatter is preserved; advanced YAML constructs are not interpreted.
+Repositories may list canonical checkout paths; sibling `-worktrees/<task>` paths map back
+to that checkout. The review list flags missing provenance/scope, stale dates, broken wiki
+links, exact duplicate bodies and overlapping confirmed decision keys. These are review
+signals, not automatic semantic judgments or permission to replace decisions.
+
+See [knowledge evaluation](docs/knowledge-evaluation.md) for acceptance cases and how to
+separately assess retrieval and the model's use of the retrieved knowledge.
