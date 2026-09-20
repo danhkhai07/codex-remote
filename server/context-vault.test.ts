@@ -121,7 +121,7 @@ it('provides actual bounded notes with correct shared/group/own paths and scoped
   const instructions = vault.contextFor('chat')
   expect(instructions).toContain(join(root, 'README.md'))
   expect(instructions).toContain(join(root, 'Index.md'))
-  expect(instructions).toContain(a.contextPath)
+  expect(instructions).toContain(`Groups/${a.id}/Context.md`)
   expect(instructions).toContain('Global policy.')
   expect(instructions).toContain('Alpha decisions.')
   expect(instructions).toContain('Own handoff.')
