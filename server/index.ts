@@ -29,6 +29,13 @@ const contextVault = new ContextVault(config.contextVaultPath ?? resolve(homedir
   controller.events.publish('codex', { method: 'conversation-groups/changed', params: {} })
 })
 const controller = new RemoteController(config, undefined, contextVault)
+const observeKnowledge = () => {
+  try { contextVault.knowledge.captureExternal() }
+  catch (error) { console.error('Knowledge observation failed:', error instanceof Error ? error.message : String(error)) }
+}
+observeKnowledge()
+const knowledgeObserver = setInterval(observeKnowledge, 30_000)
+knowledgeObserver.unref()
 const readState = new ReadStateStore(process.env.CODEX_REMOTE_READ_STATE_FILE?.trim() ||
   resolve(homedir(), '.local/state/codex-remote/read-state.json'), () => {
     controller.events.publish('codex', { method: 'read-state/changed', params: {} })
@@ -70,6 +77,7 @@ let shuttingDown = false
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return
   shuttingDown = true
+  clearInterval(knowledgeObserver)
   console.log(`Received ${signal}; stopping Codex Remote`)
   controller.stop()
   push.stop()

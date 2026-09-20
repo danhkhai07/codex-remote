@@ -1,6 +1,8 @@
 import { LocalhostPreview, LocalhostPreviewError } from './localhost-preview.js'
 import { ServiceError, type ServicesStore } from './services.js'
 import { ContextVaultError } from './context-vault.js'
+import { KnowledgeError } from './vault-files.js'
+import { MAX_NOTE_BYTES, noteDiff } from './knowledge-store.js'
 import { ReadStateStore } from './read-state.js'
 import { HoursError, type WorkHoursStore } from './work-hours.js'
 import type { WorkPresence } from './work-presence.js'
@@ -57,7 +59,7 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(encoded)
 }
 
-async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJson(req: IncomingMessage, limit = MAX_BODY_BYTES): Promise<Record<string, unknown>> {
   if (!(req.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
     throw new HttpError(415, 'Content-Type must be application/json')
   }
@@ -66,7 +68,7 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
   for await (const chunk of req) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
     size += buffer.length
-    if (size > MAX_BODY_BYTES) throw new HttpError(413, 'Request body is too large')
+    if (size > limit) throw new HttpError(413, 'Request body is too large')
     chunks.push(buffer)
   }
   try {
@@ -270,6 +272,48 @@ export function createRemoteHttpServer(
       if (method !== 'GET' && method !== 'HEAD') {
         if (!isAllowedOrigin(req, config)) throw new HttpError(403, 'Origin is not allowed')
         if (req.headers['x-csrf-token'] !== session.csrf) throw new HttpError(403, 'Invalid CSRF token')
+      }
+
+      if (url.pathname.startsWith('/api/knowledge')) {
+        const vault = controller.contextVault
+        if (!vault) throw new HttpError(503, 'Knowledge vault is unavailable')
+        const store = vault.knowledge, path = url.searchParams.get('path') ?? ''
+        if (url.pathname === '/api/knowledge' && method === 'GET') { json(res, 200, store.snapshot()); return }
+        if (url.pathname === '/api/knowledge/note' && method === 'GET') { json(res, 200, store.read(path)); return }
+        if (url.pathname === '/api/knowledge/source' && method === 'GET') { json(res, 200, store.source(path)); return }
+        if (url.pathname === '/api/knowledge/note' && method === 'PUT') {
+          const body = await readJson(req, MAX_NOTE_BYTES * 6 + 2048)
+          if (typeof body.path !== 'string') throw new HttpError(400, 'Provide a note path')
+          json(res, 200, store.save(body.path, body.content, body.revision, typeof body.actor === 'string' ? body.actor : 'user')); return
+        }
+        if (url.pathname === '/api/knowledge/versions' && method === 'GET') { json(res, 200, { versions: store.versions(path) }); return }
+        if (url.pathname === '/api/knowledge/version' && method === 'GET') {
+          const saved = store.version(path, url.searchParams.get('id') ?? '')
+          const current = store.files.read(store.notePath(path)) ?? ''
+          json(res, 200, { ...saved, diff: noteDiff(saved.content, current) }); return
+        }
+        if (url.pathname === '/api/knowledge/restore' && method === 'POST') {
+          const body = await readJson(req)
+          if (typeof body.path !== 'string' || typeof body.versionId !== 'string') throw new HttpError(400, 'Provide path and versionId')
+          json(res, 200, store.restore(body.path, body.versionId, body.revision, typeof body.actor === 'string' ? body.actor : 'user')); return
+        }
+        if (url.pathname === '/api/knowledge/traces' && method === 'GET') {
+          const traces = store.traces(url.searchParams.get('threadId') ?? undefined)
+          const id = url.searchParams.get('id')
+          if (id) {
+            const trace = traces.find(trace => trace.id === id)
+            if (!trace) throw new HttpError(404, 'Context trace not found')
+            json(res, 200, trace)
+          } else json(res, 200, { traces: traces.map(({ snippets, omitted, ...trace }) => ({ ...trace, noteCount: snippets.length, omittedCount: omitted.length })) })
+          return
+        }
+        if (url.pathname === '/api/knowledge/preview' && method === 'POST') {
+          const body = await readJson(req)
+          if (typeof body.threadId !== 'string' || typeof body.text !== 'string' || body.text.length > 8000) throw new HttpError(400, 'Provide a conversation ID and a query up to 8000 characters')
+          await controller.assertThreadAccess(body.threadId)
+          json(res, 200, vault.previewContext(body.threadId, { text: body.text })); return
+        }
+        throw new HttpError(404, 'Knowledge operation not found')
       }
 
       if (url.pathname === '/api/services' && ['GET', 'PUT', 'DELETE'].includes(method)) {
@@ -549,7 +593,7 @@ export function createRemoteHttpServer(
         res.destroy(error instanceof Error ? error : undefined)
         return
       }
-      const status = error instanceof HttpError || error instanceof AttachmentError || error instanceof ServerFileError || error instanceof ThreadNameError || error instanceof ContextVaultError || error instanceof LocalhostPreviewError ? error.status : 500
+      const status = error instanceof HttpError || error instanceof AttachmentError || error instanceof ServerFileError || error instanceof ThreadNameError || error instanceof ContextVaultError || error instanceof KnowledgeError || error instanceof LocalhostPreviewError ? error.status : 500
       const message = error instanceof Error ? error.message : 'Unexpected server error'
       json(res, status, { error: status === 500 ? 'Unexpected server error' : message })
       if (status === 500) {
