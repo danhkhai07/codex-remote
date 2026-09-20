@@ -671,6 +671,23 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
   grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 
+.workspace-shell:has(> .pending-requests) {
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+}
+
+.pending-requests {
+  min-height: 0;
+  max-height: min(50dvh, 480px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 8px max(12px, calc((100% - 860px) / 2));
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.pending-requests .request-card { margin-bottom: 0; }
+.pending-requests .request-card + .request-card { margin-top: 12px; }
+
 .workspace-header {
   display: flex;
   min-width: 0;

@@ -1,3 +1,4 @@
+import { PendingRequests } from './pendingRequests'
 import { useCollaborationMode, type CollaborationMode } from './useCollaborationMode'
 import { LocalhostPreview } from './LocalhostPreview'
 import { EMPTY_NEW_CONVERSATION, NEW_CONVERSATION_KEY, prepareNewConversation, type NewConversation } from './newConversation'
@@ -601,6 +602,7 @@ export function App() {
   const [uploadStatus, setUploadStatus, , clearUploadStatus] = useThreadState(composerKey, '')
   const [sendError, setSendError, , clearSendErrors] = useThreadState(composerKey, '')
   const [pending, setPending] = useState<PendingRequest[]>([])
+  const pendingRequests = useRef(new PendingRequests())
   const [models, setModels] = useState<ModelOption[]>([])
   const { settings, update: setConversationSettings, migrateLegacy, saveForThread: saveThreadSettings, saveError: settingsSaveError } = useConversationSettings(composerKey)
   const { mode, setMode, saveForThread: saveThreadMode, saveError: modeSaveError } = useCollaborationMode(composerKey)
@@ -937,7 +939,7 @@ export function App() {
       try {
         const [items, pendingResponse, modelResponse] = await Promise.all([refreshThreads(), api.pending(), api.models()])
         if (cancelled) return
-        setPending(pendingResponse.data)
+        setPending(pendingRequests.current.snapshot(pendingResponse))
         setModels(modelResponse.data)
         const preferred = items.find((item) => item.id === cached?.selectedId) ?? items[0]
         if (!draftOpenRef.current && preferred && (!selectedRef.current || selectedRef.current === cached?.selectedId)) await openThread(preferred, session.csrf, preferred.id === cached?.selectedId)
@@ -988,7 +990,7 @@ export function App() {
       void refreshThreads().catch(() => undefined)
       if (!optionsLoaded) void Promise.all([api.pending(), api.models()]).then(([requests, modelList]) => {
         if (cancelled) return
-        setPending(requests.data)
+        setPending(pendingRequests.current.snapshot(requests))
         setModels(modelList.data)
         optionsLoaded = true
       }).catch(() => undefined)
@@ -1058,9 +1060,16 @@ export function App() {
         if (typeof state.epoch !== 'string') return
         if (state.reset || (eventEpoch.current && eventEpoch.current !== state.epoch)) eventCursor.current = 0
         eventEpoch.current = state.epoch
+        pendingRequests.current.beginEpoch(state.epoch)
+        setPending(pendingRequests.current.values())
+        // Replay is bounded; a pending question can be older than the retained events.
+        void api.pending().then(snapshot => {
+          if (epoch === sessionEpoch.current) setPending(pendingRequests.current.snapshot(snapshot))
+        }).catch(() => {})
       } catch { /* Old gateways need not send this handshake. */ }
     })
     const receive = (data: string) => {
+      if (epoch !== sessionEpoch.current) return
       let event: RemoteEvent
       try {
         event = JSON.parse(data) as RemoteEvent
@@ -1071,19 +1080,13 @@ export function App() {
       if (event.replayed && event.id < eventCursor.current && !eventEpoch.current) eventCursor.current = 0
       if (event.id <= eventCursor.current) return
       eventCursor.current = event.id
+      if (event.type === 'request' || event.type === 'request-resolved') {
+        setPending(pendingRequests.current.event(event))
+      }
       queued.push(event)
       if (flushTimer === undefined) flushTimer = setTimeout(flush, 50)
     }
     const handleEvent = (event: RemoteEvent) => {
-      if (event.type === 'request') {
-        const incoming = event.payload as unknown as PendingRequest
-        setPending((current) => current.some((item) => item.key === incoming.key) ? current : [...current, incoming])
-      }
-      if (event.type === 'request-resolved') {
-        const key = String(object(event.payload).key ?? '')
-        setPending((current) => current.filter((item) => item.key !== key))
-      }
-
       const method = eventMethod(event)
       if (method === 'conversation-groups/changed') void refreshGroups()
       if (method === 'orchestration/changed') setTeamRevision(value => value + 1)
@@ -1661,6 +1664,7 @@ export function App() {
     for (const url of previewUrls.current) URL.revokeObjectURL(url)
     previewUrls.current.clear()
     setAttachments([])
+    pendingRequests.current = new PendingRequests()
     setPending([])
     setModels([])
     setCommandNotice(null)
@@ -1786,14 +1790,6 @@ export function App() {
           {error && <div className="error-banner global-error" role="alert"><span>{error}</span><button onClick={() => setError('')}>×</button></div>}
           {sendError && <div className="error-banner global-error" role="alert"><span>{sendError}</span><button onClick={() => setSendError('')}>×</button></div>}
           {yoloSaveError && <p className="error-banner" role="alert">{yoloSaveError}</p>}
-          {selectedPending.map((request) => (
-            <RequestCard
-              key={request.key}
-              request={request}
-              csrf={session.csrf}
-              onResolved={(key) => setPending((current) => current.filter((item) => item.key !== key))}
-            />
-          ))}
 
           {draftOpen && <section className="new-conversation-setup" aria-label="New conversation setup">
             <div className="new-conversation-heading"><h2>A fresh conversation</h2>
@@ -1834,6 +1830,17 @@ export function App() {
           {thread?.historyCacheTruncated && <p className="history-note">{thread.historyTruncation === 'head' ? 'Hội thoại vượt giới hạn 5 MB: phần cũ nhất đã được rút gọn trong bản xem/cache. Lịch sử gốc vẫn giữ nguyên.' : thread.historyTruncation === 'tail' ? 'Hội thoại vượt giới hạn 5 MB: phần cuối đã được rút gọn trong bản xem/cache. Lịch sử gốc vẫn giữ nguyên.' : 'Showing recent cached messages. Full history refreshes when connected.'}</p>}
           {thread && historyReady && <Conversation thread={thread} activeTurnId={activeTurnId} items={transcripts[thread.id] ?? EMPTY_ITEMS} pendingMessage={sentMessages[thread.id]} yoloMode={yoloMode} onOpenFile={openFile} onOpenLink={openLink} onSuggestion={suggestPrompt} />}
         </TranscriptViewport>
+
+        {selectedPending.length > 0 && <section className="pending-requests" aria-label="Questions and approvals">
+          {selectedPending.map((request) => (
+            <RequestCard
+              key={request.key}
+              request={request}
+              csrf={session.csrf}
+              onResolved={(key) => setPending(pendingRequests.current.dismiss(key))}
+            />
+          ))}
+        </section>}
 
         {(thread || draftOpen) && (
           <form id="message-composer" className="composer" onSubmit={submitInstruction}

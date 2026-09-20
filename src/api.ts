@@ -3,7 +3,8 @@ import type { ServiceInput, ServicesSnapshot } from '../server/services'
 import type { ReplySnapshot } from '../server/read-state'
 import type { GroupSnapshot } from './conversationGroups'
 import type { TeamSnapshot } from './ConversationTeam'
-import type { DirectoryListing, ModelList, PendingRequest, RateLimitsResponse, ServerFileInfo, Session, ThreadList, ThreadResponse, TurnResponse } from './types'
+import type { DirectoryListing, ModelList, RateLimitsResponse, ServerFileInfo, Session, ThreadList, ThreadResponse, TurnResponse } from './types'
+import type { PendingSnapshot } from './pendingRequests'
 import { limitConversation } from '../server/conversation-size'
 import type { ContextTrace, KnowledgeSnapshot, NoteDocument, NoteVersion } from '../server/knowledge-types'
 
@@ -160,7 +161,7 @@ export const api = {
     signal,
     body: JSON.stringify({ turnId }),
   }, csrf),
-  pending: () => request<{ data: PendingRequest[] }>('/api/pending'),
+  pending: () => request<PendingSnapshot>('/api/pending'),
   models: () => request<ModelList>('/api/models'),
   rateLimits: () => request<RateLimitsResponse>('/api/account/rate-limits'),
   respond: (key: string, body: Record<string, unknown>, csrf: string) => request<{ ok: boolean }>(`/api/requests/${encodeURIComponent(key)}/respond`, {

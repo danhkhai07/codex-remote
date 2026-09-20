@@ -324,6 +324,18 @@ support suggested choices, a free-text answer, and Skip. The gateway uses
 it preserves the selected model, effort, and permissions. Plan mode is a native
 behavioral mode, not a separate filesystem sandbox.
 
+Pending questions appear above the composer, independently of transcript scroll.
+Reload/reconnect restores unanswered questions; answering, Skip, Stop, turn
+completion, or app-server shutdown removes the relevant pending requests.
+
+To check the native question flow without starting any model turns, run
+`npm run build` then `node scripts/plan-questions-browser.mjs` with Playwright and
+Chromium installed. For an external Playwright installation, set
+`PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs`. This isolated smoke test
+uses a fake stdio app-server and an ephemeral HTTP listener; it verifies long-history
+visibility, choice/custom answers, Skip, mobile reload, reconnect beyond SSE replay,
+and Stop cleanup. It does not use production conversations or credentials.
+
 Protocol verified against Codex CLI 0.155.0 and the official
 [CLI commands](https://developers.openai.com/codex/cli/slash-commands/) and
 [App Server](https://developers.openai.com/codex/app-server/) documentation.

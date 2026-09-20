@@ -466,7 +466,7 @@ export function createRemoteHttpServer(
         return
       }
       if (url.pathname === '/api/pending' && method === 'GET') {
-        json(res, 200, { data: controller.listPending() })
+        json(res, 200, { data: controller.listPending(), cursor: controller.events.cursor, epoch: controller.events.epoch })
         return
       }
       if (url.pathname === '/api/models' && method === 'GET') {

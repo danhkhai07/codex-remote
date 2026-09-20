@@ -56,6 +56,8 @@ export class EventHub {
 
   constructor(readonly maxReplayBytes = 16 * 1024 * 1024) {}
 
+  get cursor(): number { return this.#nextId - 1 }
+
   get stats(): { retainedEvents: number; retainedBytes: number; subscribers: number } {
     return { retainedEvents: this.#events.length, retainedBytes: this.#retainedBytes, subscribers: this.#subscribers.size }
   }

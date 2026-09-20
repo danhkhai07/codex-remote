@@ -97,6 +97,7 @@ export class RemoteController {
         const params = asObject(message.params)
         const turn = asObject(params.turn)
         if (typeof params.threadId === 'string' && typeof turn.id === 'string') {
+          this.#clearPending(request => request.params.threadId === params.threadId && request.params.turnId === turn.id)
           this.#completedTurns.add(turn.id)
           while (this.#completedTurns.size > 256) this.#completedTurns.delete(this.#completedTurns.keys().next().value!)
           if (this.#activeTurns.get(params.threadId) === turn.id) this.#activeTurns.delete(params.threadId)
@@ -120,7 +121,10 @@ export class RemoteController {
     appServer.on('serverRequest', (message: AppServerMessage) => this.#registerRequest(message))
     appServer.on('log', (line: string) => this.events.publish('server-log', { line }))
     appServer.on('state', (state: string) => {
-      if (state === 'failed' || state === 'stopped') { this.#activeTurns.clear(); this.#resumedThreads.clear() }
+      if (state === 'failed' || state === 'stopped') {
+        this.#activeTurns.clear(); this.#resumedThreads.clear()
+        this.#clearPending(() => true)
+      }
       this.events.publish('state', { state })
     })
   }
@@ -498,10 +502,12 @@ export class RemoteController {
         this.appServer.on('notification', completed)
       })
       try {
-        return await Promise.race([
+        const result = await Promise.race([
           this.appServer.request('turn/interrupt', { threadId, turnId }, 10_000),
           completion,
         ])
+        this.#clearPending(request => request.params.threadId === threadId && request.params.turnId === turnId)
+        return result
       } finally { this.appServer.off('notification', completed) }
     })()
     this.#interrupts.set(key, operation)
@@ -640,8 +646,12 @@ export class RemoteController {
 
   #resolvePendingFromNotification(params: unknown): void {
     const requestId = asObject(params).requestId
+    this.#clearPending(request => String(request.rpcId) === String(requestId))
+  }
+
+  #clearPending(matches: (request: PendingRequest) => boolean): void {
     for (const [key, request] of this.#pending) {
-      if (String(request.rpcId) === String(requestId)) {
+      if (matches(request)) {
         this.#pending.delete(key)
         this.events.publish('request-resolved', { key, method: request.method })
       }

@@ -76,6 +76,56 @@ class StubAppServer extends CodexAppServer {
 }
 
 describe('RemoteController', () => {
+  const ask = (app: StubAppServer, rpcId: string, threadId = 'thread-stored', turnId = 'plan-turn') => app.emit('serverRequest', {
+    id: rpcId, method: 'item/tool/requestUserInput', params: { threadId, turnId, itemId: 'question-item',
+      questions: [{ id: 'approach', question: 'Which approach?', options: [{ label: 'Small', description: 'Incremental' }] }] },
+  })
+
+  it.each([{ approach: { answers: ['Small'] } }, { approach: { answers: ['My own approach'] } }, {}])(
+    'publishes a native Plan question and sends answers/Skip to its original RPC ID: %j', answers => {
+      const app = new StubAppServer(), controller = new RemoteController(config, app)
+      const publish = vi.spyOn(controller.events, 'publish')
+      ask(app, 'native-question')
+      const [pending] = controller.listPending()
+      expect(publish).toHaveBeenCalledWith('request', pending)
+      expect(pending).not.toHaveProperty('rpcId')
+      controller.respondToRequest(pending.key, { answers })
+      expect(app.responses).toEqual([{ id: 'native-question', result: { answers } }])
+      expect(controller.listPending()).toEqual([])
+      expect(() => controller.respondToRequest(pending.key, { answers })).toThrow('no longer pending')
+    })
+
+  it('cleans only the finished turn when native completion omits serverRequest/resolved', () => {
+    const app = new StubAppServer(), controller = new RemoteController(config, app)
+    ask(app, 'finished'); ask(app, 'other-turn', 'thread-stored', 'other-turn'); ask(app, 'other-thread', 'elsewhere')
+    const publish = vi.spyOn(controller.events, 'publish')
+    const [finished] = controller.listPending()
+    app.emit('notification', { method: 'turn/completed', params: { threadId: 'thread-stored', turn: { id: 'plan-turn', status: 'interrupted' } } })
+    expect(controller.listPending().map(request => request.key)).not.toContain(finished.key)
+    expect(controller.listPending()).toHaveLength(2)
+    expect(publish).toHaveBeenCalledWith('request-resolved', { key: finished.key, method: finished.method })
+  })
+
+  it('cleans questions on acknowledged Stop even if completion is lost, but preserves them on failed Stop', async () => {
+    const app = new StubAppServer(), controller = new RemoteController(config, app)
+    await controller.listThreads()
+    await controller.resumeThread('thread-stored')
+    ask(app, 'question')
+    const rpc = vi.spyOn(app, 'request').mockRejectedValueOnce(new Error('Stop failed'))
+    await expect(controller.interruptTurn('thread-stored', 'plan-turn')).rejects.toThrow('Stop failed')
+    expect(controller.listPending()).toHaveLength(1)
+    rpc.mockResolvedValue({})
+    await controller.interruptTurn('thread-stored', 'plan-turn')
+    expect(controller.listPending()).toEqual([])
+  })
+
+  it.each(['failed', 'stopped'])('clears requests whose owning app-server is %s', state => {
+    const app = new StubAppServer(), controller = new RemoteController(config, app)
+    ask(app, 'question')
+    app.emit('state', state)
+    expect(controller.listPending()).toEqual([])
+  })
+
   it('lists workspace skills without creating a conversation and rejects unknown workspaces', async () => {
     const app = new StubAppServer()
     const controller = new RemoteController(config, app)
