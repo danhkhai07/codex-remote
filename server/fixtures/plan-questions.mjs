@@ -33,7 +33,7 @@ createInterface({ input: process.stdin }).on('line', line => {
       send({ method: 'turn/started', params: { threadId: 'plan-fixture', turn: { id: 'plan-turn', status: 'inProgress' } } })
       send({ id: message.params.id, method: 'item/tool/requestUserInput', params: {
         threadId: 'plan-fixture', turnId: 'plan-turn', itemId: 'question-item',
-        questions: [{ id: 'question_display_test', header: 'Hỏi thử', question: 'Bạn thích câu hỏi lựa chọn hiển thị theo kiểu nào?',
+        questions: message.params.questions ?? [{ id: 'question_display_test', header: 'Hỏi thử', question: 'Bạn thích câu hỏi lựa chọn hiển thị theo kiểu nào?',
           options: [{ label: 'Các nút chọn (Recommended)', description: 'Hiện sẵn từng phương án để bấm trực tiếp.' },
             { label: 'Dropdown', description: 'Mở danh sách thả xuống rồi chọn một phương án.' },
             { label: 'Danh sách giống CLI', description: 'Hiện các phương án đánh số theo từng dòng.' }] }],

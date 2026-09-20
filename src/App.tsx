@@ -1,3 +1,4 @@
+import { QuestionRequest } from './QuestionRequest'
 import { PendingRequests } from './pendingRequests'
 import { useCollaborationMode, type CollaborationMode } from './useCollaborationMode'
 import { LocalhostPreview } from './LocalhostPreview'
@@ -428,10 +429,18 @@ export function RequestCard({ request, csrf, onResolved }: {
   csrf: string
   onResolved: (key: string) => void
 }) {
+  return request.method === 'item/tool/requestUserInput'
+    ? <QuestionRequest request={request} csrf={csrf} onResolved={onResolved} />
+    : <ApprovalRequestCard request={request} csrf={csrf} onResolved={onResolved} />
+}
+
+function ApprovalRequestCard({ request, csrf, onResolved }: {
+  request: PendingRequest
+  csrf: string
+  onResolved: (key: string) => void
+}) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [answers, setAnswers] = useState<Record<string, string>>({})
-  const [customAnswers, setCustomAnswers] = useState<Record<string, string>>({})
 
   async function respond(body: Record<string, unknown>) {
     setBusy(true)
@@ -448,42 +457,14 @@ export function RequestCard({ request, csrf, onResolved }: {
 
   const isApproval = request.method === 'item/commandExecution/requestApproval' || request.method === 'item/fileChange/requestApproval'
   const isPermissions = request.method === 'item/permissions/requestApproval'
-  const isUserInput = request.method === 'item/tool/requestUserInput'
-  const questions = Array.isArray(request.params.questions) ? request.params.questions.map(object) : []
 
   return (
     <article className="request-card">
       <div className="request-kicker">Action needed</div>
-      <h3>{request.method === 'item/commandExecution/requestApproval' ? 'Approve command?' : request.method === 'item/fileChange/requestApproval' ? 'Approve file changes?' : request.method === 'item/tool/requestUserInput' ? 'Codex has a question' : request.method === 'item/permissions/requestApproval' ? 'Grant additional permissions?' : 'Codex needs input'}</h3>
+      <h3>{request.method === 'item/commandExecution/requestApproval' ? 'Approve command?' : request.method === 'item/fileChange/requestApproval' ? 'Approve file changes?' : request.method === 'item/permissions/requestApproval' ? 'Grant additional permissions?' : 'Codex needs input'}</h3>
       {typeof request.params.reason === 'string' && <p>{request.params.reason}</p>}
       {typeof request.params.command === 'string' && <pre className="command-block"><code>$ {request.params.command}</code></pre>}
       {typeof request.params.cwd === 'string' && <p className="request-path">in {request.params.cwd}</p>}
-
-      {isUserInput && questions.map((question) => {
-        const id = String(question.id)
-        const options = Array.isArray(question.options) ? question.options.map(object) : []
-        return (
-          <div className="question-field" key={id}>
-            <label htmlFor={`question-${id}`}>{String(question.question ?? question.header ?? 'Your answer')}</label>
-            {options.length > 0 && <>
-              <select id={`question-${id}`} value={answers[id] ?? ''} onChange={(event) => {
-                setAnswers(current => ({ ...current, [id]: event.target.value }))
-                setCustomAnswers(current => ({ ...current, [id]: '' }))
-              }}>
-                <option value="">Choose an answer or write your own</option>
-                {options.map(option => <option key={String(option.label)} value={String(option.label)}>{String(option.label)}</option>)}
-              </select>
-              {options.map(option => typeof option.description === 'string' && <small key={String(option.label)}>{String(option.label)}: {String(option.description)}</small>)}
-            </>}
-            <input id={options.length ? `question-${id}-custom` : `question-${id}`} aria-label={options.length ? `Other answer: ${String(question.question)}` : undefined}
-              placeholder={options.length ? 'Or write your own answer…' : 'Your answer…'}
-              type={question.isSecret ? 'password' : 'text'} value={customAnswers[id] ?? ''} onChange={event => {
-                setCustomAnswers(current => ({ ...current, [id]: event.target.value }))
-                setAnswers(current => ({ ...current, [id]: '' }))
-              }} />
-          </div>
-        )
-      })}
 
       {error && <p className="error-banner" role="alert">{error}</p>}
       <div className="request-actions">
@@ -501,15 +482,7 @@ export function RequestCard({ request, csrf, onResolved }: {
             <button className="primary-button" disabled={busy} onClick={() => void respond({ decision: 'accept', scope: 'session' })}>Allow session</button>
           </>
         )}
-        {isUserInput && <>
-          <button className="quiet-button" disabled={busy} onClick={() => void respond({ answers: {} })}>Skip</button>
-          <button className="primary-button" disabled={busy || !questions.some(question => (customAnswers[String(question.id)] || answers[String(question.id)])?.trim())}
-            onClick={() => void respond({ answers: Object.fromEntries(questions.flatMap(question => {
-              const id = String(question.id), answer = (customAnswers[id] || answers[id])?.trim()
-              return answer ? [[id, { answers: [answer] }]] : []
-            })) })}>Send answer</button>
-        </>}
-        {!isApproval && !isPermissions && !isUserInput && (
+        {!isApproval && !isPermissions && (
           <button className="danger-button" disabled={busy} onClick={() => void respond({ action: 'cancel' })}>Cancel request</button>
         )}
       </div>
@@ -1909,7 +1882,6 @@ export function App() {
               disabled={!online || !historyReady || Boolean(composer.trim()) || attachments.length > 0}
               onClick={() => void sendInstruction('Implement the plan.', 'default')}>Implement plan</button></div>}
             {modeSaveError && <p role="status" className="attachment-hint">{modeSaveError}</p>}
-            {mode === 'plan' && <p className="plan-mode-hint">Plan mode · Tìm hiểu và lập kế hoạch trước khi sửa code.</p>}
             {settingsSaveError && <p role="status" className="attachment-hint">{settingsSaveError}</p>}
             {commandNotice && <LocalCommandResult notice={commandNotice} onClose={() => setCommandNotice(null)} />}
             <SlashMenu

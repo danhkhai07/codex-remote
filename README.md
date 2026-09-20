@@ -325,8 +325,13 @@ it preserves the selected model, effort, and permissions. Plan mode is a native
 behavioral mode, not a separate filesystem sandbox.
 
 Pending questions appear above the composer, independently of transcript scroll.
-Reload/reconnect restores unanswered questions; answering, Skip, Stop, turn
-completion, or app-server shutdown removes the relevant pending requests.
+They show one question at a time with numbered choices and a description for the
+selected choice. Other answer opens a custom input. Back preserves answers; Skip
+omits only the current question. Next advances without sending; Send (or Skip on
+the last question) submits the combined answers. Arrow keys select choices and
+Enter selects/advances within question controls, without affecting the chat draft.
+Reload/reconnect restores unanswered questions. Submitting the final response,
+Stop, turn completion, or app-server shutdown removes the relevant pending requests.
 
 To check the native question flow without starting any model turns, run
 `npm run build` then `node scripts/plan-questions-browser.mjs` with Playwright and
