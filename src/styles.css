@@ -2901,9 +2901,11 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
 
 /* Keep Browser over the entire app. A keyboard/zoom visualViewport snapshot can
    be shorter than the layout viewport, exposing the conversation underneath. */
-.localhost-preview-backdrop { inset: 0; height: 100dvh; padding: 0; background: #0b100d; }
+html.browser-scroll-locked, html.browser-scroll-locked body { overflow: hidden; overscroll-behavior: none; }
+.localhost-preview-backdrop { inset: 0; height: 100dvh; padding: 0; overflow: hidden; overscroll-behavior: none; background: #0b100d; }
 .localhost-preview { width: 100%; height: 100%; grid-template-rows: auto auto minmax(0, 1fr); border: 0; border-radius: 0; padding-bottom: env(safe-area-inset-bottom); }
 .localhost-preview .file-viewer-header { align-items: center; gap: 8px; padding: max(6px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) 6px max(8px, env(safe-area-inset-left)); }
+.localhost-preview .file-viewer-header { touch-action: none; }
 .localhost-preview .link-viewer-identity { flex: 1; }
 .localhost-preview .file-viewer-title { max-width: none; font-size: .85rem; }
 .localhost-preview .file-viewer-header > .icon-button { flex-shrink: 0; width: 40px; height: 40px; min-height: 40px; }
@@ -2924,9 +2926,9 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
 .localhost-preview-status { margin: 10px 0 4px; color: var(--muted); font-size: .8rem; }
 .localhost-preview-error { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 0 4px; color: #ffaaa2; font-size: .8rem; overflow-wrap: anywhere; }
 .localhost-preview-error button { flex-shrink: 0; }
-.localhost-preview-content { position: relative; min-height: 0; overflow: hidden; }
+.localhost-preview-content { position: relative; min-height: 0; overflow: hidden; overscroll-behavior: none; }
 .localhost-preview-content iframe { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
-.localhost-preview-content .file-viewer-empty { height: 100%; max-width: none; align-content: center; overflow: auto; padding: 20px; }
+.localhost-preview-content .file-viewer-empty { height: 100%; max-width: none; align-content: center; overflow: auto; overscroll-behavior: contain; padding: 20px; }
 .localhost-preview-content .file-viewer-empty p { max-width: 480px; }
 .localhost-preview .localhost-preview-address-toggle { max-width: min(36vw, 320px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browser-frame-help { position: absolute; bottom: 10px; right: 10px; z-index: 2; max-width: calc(100% - 20px); margin: 0; padding: 8px 12px; border-radius: 8px; color: var(--muted); background: var(--panel); font-size: .75rem; }

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { api } from './api'
 import { parseBrowserAddress } from './browserAddress'
 import { useScreenState } from './screenState'
@@ -38,8 +39,37 @@ export function LocalhostPreview({ csrf, onClose, initialUrl, scope = 'services'
 
   useEffect(() => { setSavedAddress(address) }, [address, setSavedAddress])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const root = document.documentElement
+    const body = document.body
+    const background = document.getElementById('root')
     const previousFocus = document.activeElement
+    const wasInert = background?.inert ?? false
+    const wasLocked = root.classList.contains('browser-scroll-locked')
+    const { scrollX, scrollY } = window
+    const properties = ['position', 'top', 'left', 'width'] as const
+    const previous = properties.map(name => [name, body.style.getPropertyValue(name), body.style.getPropertyPriority(name)])
+    // iOS can pan the outer document even with overflow:hidden. Freeze that
+    // document, while the portalled iframe keeps its native touch scrolling.
+    root.classList.add('browser-scroll-locked')
+    body.style.position = 'fixed'
+    body.style.top = `${-scrollY}px`
+    body.style.left = `${-scrollX}px`
+    body.style.width = '100%'
+    if (background) background.inert = true
+    return () => {
+      for (const [name, value, priority] of previous) {
+        if (value) body.style.setProperty(name, value, priority)
+        else body.style.removeProperty(name)
+      }
+      if (!wasLocked) root.classList.remove('browser-scroll-locked')
+      if (background) background.inert = wasInert
+      window.scrollTo({ left: scrollX, top: scrollY, behavior: 'instant' })
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus({ preventScroll: true })
+    }
+  }, [])
+
+  useEffect(() => {
     closeButton.current?.focus()
     const keyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -63,7 +93,6 @@ export function LocalhostPreview({ csrf, onClose, initialUrl, scope = 'services'
       document.removeEventListener('keydown', keyDown)
       request.current?.abort()
       popup.current?.close()
-      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus()
     }
   }, [])
 
@@ -150,7 +179,7 @@ export function LocalhostPreview({ csrf, onClose, initialUrl, scope = 'services'
     if (!busy) void launch(address)
   }
 
-  return <div className="file-viewer-backdrop localhost-preview-backdrop" onMouseDown={event => {
+  return createPortal(<div className="file-viewer-backdrop localhost-preview-backdrop" onMouseDown={event => {
     if (event.currentTarget === event.target) onClose()
   }}>
     <section ref={dialog} className="file-viewer localhost-preview" role="dialog" aria-modal="true" aria-labelledby="localhost-preview-title">
@@ -193,5 +222,5 @@ export function LocalhostPreview({ csrf, onClose, initialUrl, scope = 'services'
         </>}
       </div>
     </section>
-  </div>
+  </div>, document.body)
 }
