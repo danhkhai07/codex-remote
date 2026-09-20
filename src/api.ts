@@ -20,7 +20,11 @@ async function request<T>(path: string, init: RequestInit = {}, csrf?: string): 
   if (csrf && !['GET', 'HEAD'].includes(init.method ?? 'GET')) headers.set('X-CSRF-Token', csrf)
   const signal = init.signal ?? (['GET', 'HEAD'].includes(init.method ?? 'GET') ? AbortSignal.timeout(10_000) : undefined)
   const response = await fetch(path, { ...init, signal, headers, credentials: 'same-origin' })
-  const body = await response.json().catch(() => ({})) as { error?: string }
+  const body = await response.json().catch((error: unknown) => {
+    if (!response.ok) return {}
+    if (error instanceof SyntaxError) throw new ApiError(502, 'Server returned incomplete or invalid data. Please retry.')
+    throw error
+  }) as { error?: string }
   if (!response.ok) throw new ApiError(response.status, body.error ?? `Request failed (${response.status})`)
   return body as T
 }
@@ -104,7 +108,10 @@ export const api = {
   workspaceSkills: (workspaceId: string, refresh = false, signal?: AbortSignal) => request<SkillList>(`/api/workspace-skills?workspaceId=${encodeURIComponent(workspaceId)}${refresh ? '&refresh=1' : ''}`, { signal }),
   skills: (id: string, refresh = false, signal?: AbortSignal) => request<SkillList>(`/api/threads/${encodeURIComponent(id)}/skills${refresh ? '?refresh=1' : ''}`, { signal }),
   messageIds: (id: string, signal?: AbortSignal) => request<{ ids: string[] }>(`/api/threads/${encodeURIComponent(id)}/message-ids`, { signal }),
-  thread: (id: string, signal?: AbortSignal) => request<ThreadResponse>(`/api/threads/${encodeURIComponent(id)}`, { signal }).then(response => ({ ...response, thread: limitConversation(response.thread) })),
+  thread: (id: string, signal?: AbortSignal) => request<ThreadResponse>(`/api/threads/${encodeURIComponent(id)}`, { signal }).then(response => {
+    if (response?.thread?.id !== id) throw new ApiError(502, 'Conversation response was incomplete or mismatched. Please retry.')
+    return { ...response, thread: limitConversation(response.thread) }
+  }),
   createThread: (workspaceId: string, csrf: string, fullAccess = false, groupId?: string) => request<ThreadResponse>('/api/threads', {
     method: 'POST',
     body: JSON.stringify({ workspaceId, fullAccess, ...(groupId ? { groupId } : {}) }),
