@@ -377,6 +377,8 @@ textarea:focus {
 }
 
 .mini-brand {
+  border: 0;
+  padding: 0;
   display: grid;
   width: 38px;
   height: 38px;

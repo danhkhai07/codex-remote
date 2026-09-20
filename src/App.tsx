@@ -146,6 +146,7 @@ function ThreadSidebar({
   onClose,
   onCreate,
   onLock,
+  onReload,
   notificationsEnabled,
   notificationBusy,
   onToggleNotifications,
@@ -169,6 +170,7 @@ function ThreadSidebar({
   onClose: () => void
   onCreate: (groupId?: string) => void
   onLock: () => void
+  onReload: () => void
   notificationsEnabled: boolean
   notificationBusy: boolean
   onToggleNotifications: () => void
@@ -184,6 +186,9 @@ function ThreadSidebar({
 }) {
   const [query, setQuery] = useState('')
   const actionsRef = useRef<HTMLDetailsElement>(null)
+  const logoRef = useRef<HTMLButtonElement>(null)
+  const actionsTrigger = useRef<HTMLElement | null>(null)
+  const [actionsOpen, setActionsOpen] = useState(false)
   const visibleThreads = useMemo(() => filterThreads(threads, query), [threads, query])
 
   useEffect(() => {
@@ -192,14 +197,14 @@ function ThreadSidebar({
 
   useEffect(() => {
     const dismissOutside = (event: PointerEvent) => {
-      if (event.target instanceof Node && !actionsRef.current?.contains(event.target)) {
+      if (event.target instanceof Node && !actionsRef.current?.contains(event.target) && !logoRef.current?.contains(event.target)) {
         actionsRef.current?.removeAttribute('open')
       }
     }
     const dismissEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || !actionsRef.current?.open) return
       actionsRef.current.removeAttribute('open')
-      actionsRef.current.querySelector('summary')?.focus()
+      actionsTrigger.current?.focus()
       event.preventDefault()
     }
     document.addEventListener('pointerdown', dismissOutside)
@@ -216,20 +221,31 @@ function ThreadSidebar({
       <aside className={`thread-sidebar ${open ? 'is-open' : ''}`}>
         <div className="sidebar-heading">
           <div className="sidebar-brand">
-            <span className="mini-brand" aria-hidden="true">&gt;_</span>
+            <button type="button" className="mini-brand" ref={logoRef} aria-label="App menu" title="App menu"
+              aria-expanded={actionsOpen} aria-controls="sidebar-actions-menu" onClick={() => {
+                const actions = actionsRef.current
+                if (!actions) return
+                actionsTrigger.current = logoRef.current
+                actions.open = !actions.open
+                if (actions.open) actions.querySelector('button')?.focus()
+              }}>&gt;_</button>
             <div>
               <p className="eyebrow">Codex Remote</p>
               <h2>{workspaceLabel}</h2>
             </div>
           </div>
-          <details className="sidebar-actions" ref={actionsRef}>
-            <summary className="icon-button" aria-label="Settings" title="Settings">
+          <details className="sidebar-actions" ref={actionsRef} onToggle={event => setActionsOpen(event.currentTarget.open)}>
+            <summary className="icon-button" aria-label="Settings" title="Settings" onClick={event => { actionsTrigger.current = event.currentTarget }}>
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="m9 3-.5 2.4-2 .9-2.1-.7-2 3.4 1.6 1.7v2.6L2.4 15l2 3.4 2.1-.7 2 .9L9 21h4l.5-2.4 2-.9 2.1.7 2-3.4-1.6-1.7v-2.6L19.6 9l-2-3.4-2.1.7-2-.9L13 3Z" transform="translate(1 0)" />
                 <circle cx="12" cy="12" r="3" />
               </svg>
             </summary>
-            <div className="sidebar-actions-popover">
+            <div className="sidebar-actions-popover" id="sidebar-actions-menu" role="group" aria-label="App actions">
+              <button className="quiet-button" type="button" onClick={() => {
+                actionsRef.current?.removeAttribute('open')
+                onReload()
+              }}>Reload app</button>
               <button
                 className={`quiet-button notification-button ${notificationsEnabled ? 'is-enabled' : ''}`}
                 type="button"
@@ -1650,6 +1666,12 @@ export function App() {
     if (choice.outcome === 'accepted') setInstallPrompt(null)
   }
 
+  function reloadApp() {
+    flushScreenState()
+    if (updateWorker) updateWorker.postMessage({ type: 'SKIP_WAITING' })
+    else window.location.reload()
+  }
+
   async function toggleNotifications() {
     if (!session || notificationOperation.current) return
     notificationOperation.current = true
@@ -1694,6 +1716,7 @@ export function App() {
         onClose={() => setDrawerOpen(false)}
         onCreate={groupId => void createThread(groupId)}
         onLock={() => void logout()}
+        onReload={reloadApp}
         notificationsEnabled={notificationsEnabled}
         notificationBusy={notificationBusy}
         onToggleNotifications={() => void toggleNotifications()}
@@ -1757,7 +1780,7 @@ export function App() {
           {updateWorker && (
             <div className="update-banner" role="status">
               <div><strong>Update ready</strong><span>A fresher Codex Remote is available.</span></div>
-              <button className="primary-button" onClick={() => { flushScreenState(); updateWorker.postMessage({ type: 'SKIP_WAITING' }) }}>Reload</button>
+              <button className="primary-button" onClick={reloadApp}>Reload</button>
             </div>
           )}
           {error && <div className="error-banner global-error" role="alert"><span>{error}</span><button onClick={() => setError('')}>×</button></div>}
