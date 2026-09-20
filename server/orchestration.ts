@@ -76,7 +76,7 @@ export class ConversationOrchestrator {
   #group(id: string) { return this.vault.snapshot().groups.find(group => group.id === id) }
   #cycle(group: ContextGroup) {
     const cycle = this.#state.cycles[group.id]
-    return cycle?.leaderId === group.leaderThreadId && cycle.epoch === (group.leaderEpoch ?? 0) ? cycle : undefined
+    return cycle && cycle.leaderId === group.leaderThreadId && cycle.epoch === (group.leaderEpoch ?? 0) ? cycle : undefined
   }
   snapshot(threadId: string) {
     const group = this.vault.groupFor(threadId)

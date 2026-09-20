@@ -49,6 +49,9 @@ it('keeps leader changes and team controls behind session, CSRF and group checks
     }); req.on('error', reject); req.end(body === undefined ? undefined : JSON.stringify(body))
   })
   const path = `/api/conversation-groups/${f.group.id}/leader`
+  const withoutLeader = { status: 200, data: { leaderId: null, members: ['leader', 'worker', 'second'],
+    tasks: [], limits: { concurrent: 3, dispatchesLeft: 0, wakeupsLeft: 0 } } }
+  expect(await call('/api/threads/worker/orchestration')).toMatchObject(withoutLeader)
   expect((await call(path, { threadId: 'leader' }, false)).status).toBe(401)
   expect((await call(path, { threadId: 'leader' }, true, 'wrong')).status).toBe(403)
   expect((await call(path, { threadId: 'outsider' })).status).toBe(400)
@@ -59,6 +62,7 @@ it('keeps leader changes and team controls behind session, CSRF and group checks
   expect((await call(path, { threadId: 'second' })).status).toBe(200)
   expect(f.vault.snapshot().groups[0].leaderThreadId).toBe('second')
   expect((await call(path, { threadId: null })).status).toBe(200)
+  expect(await call('/api/threads/worker/orchestration')).toMatchObject(withoutLeader)
 })
 
 it('injects private leader commands on existing threads, enforces worker roles and serializes actual turn starts', async () => {
