@@ -1,6 +1,6 @@
 import { WorkingHoursPage, isWorkingHoursPath } from './WorkingHoursPage'
 import { ServicesPage, isServicesPath } from './ServicesPage'
-import { StrictMode } from 'react'
+import { lazy, StrictMode, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
 import { AppRecovery } from './AppRecovery'
@@ -8,12 +8,15 @@ import { flushScreenState } from './screenState'
 import { installPwaZoomLock } from './pwaZoom'
 import './styles.css'
 
+const KnowledgePage = lazy(() => import('./KnowledgePage').then(module => ({ default: module.KnowledgePage })))
+const isKnowledgePath = (path: string) => path === '/knowledge' || path === '/knowledge/'
+
 const removeZoomLock = installPwaZoomLock()
 if (import.meta.hot) import.meta.hot.dispose(removeZoomLock)
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <AppRecovery>{isServicesPath(window.location.pathname) ? <ServicesPage /> : isWorkingHoursPath(window.location.pathname) ? <WorkingHoursPage /> : <App />}</AppRecovery>
+    <AppRecovery>{isKnowledgePath(window.location.pathname) ? <Suspense fallback={<main className="login-shell"><p role="status">Đang mở Knowledge…</p></main>}><KnowledgePage /></Suspense> : isServicesPath(window.location.pathname) ? <ServicesPage /> : isWorkingHoursPath(window.location.pathname) ? <WorkingHoursPage /> : <App />}</AppRecovery>
   </StrictMode>,
 )
 

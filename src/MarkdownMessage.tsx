@@ -71,7 +71,7 @@ export function MarkdownMessage({ children, streaming = false, onOpenFile, onOpe
         skipHtml
         components={{
           a: ({ children: linkChildren, href, title }) => {
-            const internalPage = Boolean(href && /^\/(?:services|working-hours|workboard|preview)(?:[/?#]|$)/.test(href))
+            const internalPage = Boolean(href && /^\/(?:knowledge|services|working-hours|workboard|preview)(?:[/?#]|$)/.test(href))
             const external = href?.startsWith('http://') || href?.startsWith('https://')
             const localFile = internalPage ? null : parseLocalFileReference(href)
             const label = typeof linkChildren === 'string' ? linkChildren : undefined

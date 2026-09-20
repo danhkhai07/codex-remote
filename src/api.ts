@@ -4,6 +4,9 @@ import type { ReplySnapshot } from '../server/read-state'
 import type { GroupSnapshot } from './conversationGroups'
 import type { DirectoryListing, ModelList, PendingRequest, RateLimitsResponse, ServerFileInfo, Session, ThreadList, ThreadResponse, TurnResponse } from './types'
 import { limitConversation } from '../server/conversation-size'
+import type { ContextTrace, KnowledgeSnapshot, NoteDocument, NoteVersion } from '../server/knowledge-types'
+
+export type ContextTraceSummary = Omit<ContextTrace, 'snippets' | 'omitted'> & { noteCount: number; omittedCount: number }
 
 export class ApiError extends Error {
   readonly status: number
@@ -54,6 +57,16 @@ async function requestBlob(path: string, signal?: AbortSignal): Promise<Blob> {
 }
 
 export const api = {
+  knowledge: () => request<KnowledgeSnapshot>('/api/knowledge'),
+  knowledgeNote: (path: string, signal?: AbortSignal) => request<NoteDocument>(`/api/knowledge/note?${new URLSearchParams({ path })}`, { signal }),
+  knowledgeSource: (path: string) => request<{ path: string; content: string }>(`/api/knowledge/source?${new URLSearchParams({ path })}`),
+  saveKnowledge: (path: string, content: string, revision: string, csrf: string) => request<NoteDocument>('/api/knowledge/note', { method: 'PUT', body: JSON.stringify({ path, content, revision, actor: 'knowledge-page' }) }, csrf),
+  knowledgeVersions: (path: string) => request<{ versions: NoteVersion[] }>(`/api/knowledge/versions?${new URLSearchParams({ path })}`),
+  knowledgeVersion: (path: string, id: string) => request<{ version: NoteVersion; content: string; diff: { changed: boolean; startLine: number; before: string; after: string } }>(`/api/knowledge/version?${new URLSearchParams({ path, id })}`),
+  restoreKnowledge: (path: string, versionId: string, revision: string, csrf: string) => request<NoteDocument>('/api/knowledge/restore', { method: 'POST', body: JSON.stringify({ path, versionId, revision, actor: 'knowledge-page' }) }, csrf),
+  knowledgeTraces: (threadId = '') => request<{ traces: ContextTraceSummary[] }>(`/api/knowledge/traces?${new URLSearchParams(threadId ? { threadId } : {})}`),
+  knowledgeTrace: (id: string) => request<ContextTrace>(`/api/knowledge/traces?${new URLSearchParams({ id })}`),
+  previewKnowledge: (threadId: string, text: string, csrf: string) => request<ContextTrace>('/api/knowledge/preview', { method: 'POST', body: JSON.stringify({ threadId, text }) }, csrf),
   services: () => request<ServicesSnapshot>('/api/services'),
   saveService: (service: ServiceInput, csrf: string) => request('/api/services', { method: 'PUT', body: JSON.stringify(service) }, csrf),
   removeService: (key: string, csrf: string) => request(`/api/services?${new URLSearchParams({ key })}`, { method: 'DELETE' }, csrf),
