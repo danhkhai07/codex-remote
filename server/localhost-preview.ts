@@ -1,3 +1,4 @@
+import { MAX_CACHE_BODY_BYTES, noPreviewCache, previewCacheable, previewRequestHeaders, validatePreviewBody } from './preview-cache.js'
 import { SessionRegistry, type SessionIdentity } from './session-registry.js'
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { request, type ClientRequest, type IncomingMessage, type ServerResponse } from 'node:http'
@@ -185,6 +186,7 @@ export class LocalhostPreview {
 
   #requestHeaders(req: IncomingMessage, port: number, origin: string): Headers {
     const headers = cleanHeaders(req.headers)
+    if (req.method === 'GET' || req.method === 'HEAD') previewRequestHeaders(headers)
     for (const name of Object.keys(headers)) {
       if (name === 'forwarded' || name.startsWith('x-forwarded-')) delete headers[name]
     }
@@ -258,16 +260,58 @@ export class LocalhostPreview {
       if (url.pathname.startsWith('/__codex_preview__/')) throw new LocalhostPreviewError(404, 'Unknown preview endpoint')
       const unwatch = this.#sessions.watch(session, () => res.destroy())
       res.once('close', unwatch)
-      const upstream = request({ hostname: '127.0.0.1', port, path: `${url.pathname}${url.search}`, method: req.method, headers: this.#requestHeaders(req, port, origin), agent: false })
+      const upstream = request({ hostname: '127.0.0.1', port, path: `${url.pathname}${url.search}`, method: req.method === 'HEAD' ? 'GET' : req.method, headers: this.#requestHeaders(req, port, origin), agent: false })
       this.#track(upstream)
       const timeout = setTimeout(() => upstream.destroy(new LocalhostPreviewError(504, 'The localhost app took too long to respond.')), 30_000)
       timeout.unref()
       upstream.once('response', response => {
         clearTimeout(timeout)
         const headers = this.#responseHeaders(response, port, origin)
+        const status = response.statusCode ?? 502
+        const cacheable = previewCacheable(req, url.pathname, status, response.headers)
+        const authorized = () => {
+          if (res.destroyed || res.writableEnded || !this.#sessions.valid(session)) { res.destroy(); return false }
+          return true
+        }
+        noPreviewCache(headers)
         response.on('error', () => res.destroy())
-        res.writeHead(response.statusCode ?? 502, headers)
-        response.pipe(res)
+        if (!authorized()) { response.destroy(); return }
+        if (!cacheable) {
+          res.writeHead(status, headers)
+          if (req.method === 'HEAD') { response.resume(); res.end() }
+          else response.pipe(res)
+          return
+        }
+        const chunks: Buffer[] = []
+        let size = 0, streaming = false
+        const buffer = (chunk: Buffer) => {
+          size += chunk.length
+          if (size > MAX_CACHE_BODY_BYTES) {
+            streaming = true
+            response.removeListener('data', buffer)
+            if (!authorized()) { response.destroy(); return }
+            res.writeHead(status, headers)
+            if (req.method !== 'HEAD') {
+              for (const part of chunks) res.write(part)
+              res.write(chunk)
+              response.pipe(res)
+            } else { response.resume(); res.end() }
+            chunks.length = 0
+            return
+          }
+          chunks.push(Buffer.from(chunk))
+        }
+        response.on('data', buffer)
+        response.on('end', () => {
+          if (streaming || !authorized()) return
+          const body = Buffer.concat(chunks)
+          const unchanged = validatePreviewBody(req, headers, body)
+          // Hashing is synchronous: expiry can pass before its timer is serviced.
+          if (!authorized()) return
+          if (unchanged) delete headers['content-length']
+          res.writeHead(unchanged ? 304 : status, headers)
+          res.end(unchanged || req.method === 'HEAD' ? undefined : body)
+        })
       })
       upstream.once('error', error => { clearTimeout(timeout); httpError(res, error) })
       upstream.once('close', () => clearTimeout(timeout))
