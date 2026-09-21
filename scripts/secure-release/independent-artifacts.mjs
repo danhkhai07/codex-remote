@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { resolve, dirname, join, relative } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { APP, HOURS, fileHash, tree } from './common.mjs'
+import { APP, SOURCE, HOURS, fileHash, tree } from './common.mjs'
 import { verifyClient } from './build.mjs'
 
 const release = resolve(process.argv[2])
@@ -12,7 +12,8 @@ const json = p => JSON.parse(readFileSync(p, 'utf8'))
 const inventory = json(join(release, 'inventory.json')), seal = json(join(release, 'seal.json'))
 const actual = tree(release); delete actual['seal.json']
 assert.deepEqual(actual, seal.files)
-assert.equal(fileHash(join(release, 'seal.json')), '056e3973514e26126c2801db84c5a3d5a21cd3dfa48a92634f9242549e181b69')
+assert.match(process.argv[4] ?? '', /^[a-f0-9]{64}$/)
+assert.equal(fileHash(join(release, 'seal.json')), process.argv[4])
 assert.equal(inventory.commit, APP)
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8', maxBuffer: 24 * 1024 * 1024 })
 for (const list of ['backend', 'client', 'operator', 'dependencies', 'adminProxy']) {
@@ -21,7 +22,9 @@ for (const list of ['backend', 'client', 'operator', 'dependencies', 'adminProxy
 // Compare with CR2's prior fresh 80843c0 build, not CR3's original worktree outputs.
 for (const item of inventory.groups.backend) assert.equal(fileHash(join(release, 'payload', item.path)), fileHash(join(independentBuild, item.path)), item.path)
 const meta = json(join(release, 'metadata.json'))
-for (const name of ['common.mjs', 'production.mjs', 'runner.mjs', 'verify.mjs']) assert.equal(readFileSync(join(release, 'runner', name), 'utf8'), git('show', meta.runnerSource + ':scripts/secure-release/' + name))
+assert.equal(meta.sourceTarget, SOURCE)
+assert.equal(git('diff', '--name-only', APP, SOURCE).trim(), 'docs/security/encrypted-api-rereview-80843c0.md\nserver/secure-independent-review.test.ts')
+for (const name of ['common.mjs', 'production.mjs', 'runner.mjs', 'verify.mjs', 'destinations.mjs', 'publication.mjs', 'lock.mjs']) assert.equal(readFileSync(join(release, 'runner', name), 'utf8'), git('show', meta.runnerSource + ':scripts/secure-release/' + name))
 for (const name of ['package.json', 'package-lock.json']) assert.equal(readFileSync(join(release, 'dependencies', name), 'utf8'), git('show', APP + ':' + name))
 let checkedSources = 0
 for (const item of inventory.groups.client.filter(item => item.path.endsWith('.map'))) {
