@@ -2,8 +2,10 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 export const SESSION_COOKIE = 'codex_remote_session'
+export const sessionCookieName = (secure: boolean) => secure ? '__Host-codex_remote_session' : SESSION_COOKIE
 
-type SessionPayload = {
+export type SessionPayload = {
+  credentialVersion: string
   csrf: string
   expiresAt: number
   issuedAt: number
@@ -28,9 +30,12 @@ export function passwordMatches(provided: unknown, expected: string): boolean {
   return typeof provided === 'string' && sameBytes(provided, expected)
 }
 
-export function createSession(secret: string, ttlSeconds: number): { token: string; payload: SessionPayload } {
+export const credentialVersion = (secret: string, password = '') => createHmac('sha256', secret).update(`codex-credentials-v1:${password}`).digest('hex')
+
+export function createSession(secret: string, ttlSeconds: number, password = ''): { token: string; payload: SessionPayload } {
   const now = Math.floor(Date.now() / 1000)
   const payload: SessionPayload = {
+    credentialVersion: credentialVersion(secret, password),
     csrf: randomBytes(24).toString('base64url'),
     expiresAt: now + ttlSeconds,
     issuedAt: now,
@@ -40,7 +45,7 @@ export function createSession(secret: string, ttlSeconds: number): { token: stri
   return { token: `${encoded}.${sign(encoded, secret)}`, payload }
 }
 
-export function verifySession(token: string | undefined, secret: string): SessionPayload | null {
+export function verifySession(token: string | undefined, secret: string, password?: string): SessionPayload | null {
   if (!token) return null
   const separator = token.lastIndexOf('.')
   if (separator < 1) return null
@@ -52,12 +57,14 @@ export function verifySession(token: string | undefined, secret: string): Sessio
     const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as Partial<SessionPayload>
     const now = Math.floor(Date.now() / 1000)
     if (
+      typeof payload.credentialVersion !== 'string' ||
+      (password !== undefined && payload.credentialVersion !== credentialVersion(secret, password)) ||
       typeof payload.csrf !== 'string' ||
-      typeof payload.expiresAt !== 'number' ||
-      typeof payload.issuedAt !== 'number' ||
+      !Number.isSafeInteger(payload.expiresAt) ||
+      !Number.isSafeInteger(payload.issuedAt) ||
       typeof payload.nonce !== 'string' ||
-      payload.expiresAt <= now ||
-      payload.issuedAt > now + 30
+      (payload.expiresAt ?? 0) <= now ||
+      (payload.issuedAt ?? Infinity) > now + 30
     ) return null
     return payload as SessionPayload
   } catch {
@@ -88,7 +95,7 @@ export function setSessionCookie(
   secure: boolean,
 ): void {
   const parts = [
-    `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
+    `${sessionCookieName(secure)}=${encodeURIComponent(token)}`,
     'Path=/',
     'HttpOnly',
     'SameSite=Strict',
@@ -100,7 +107,7 @@ export function setSessionCookie(
 
 export function clearSessionCookie(res: ServerResponse, secure: boolean): void {
   const parts = [
-    `${SESSION_COOKIE}=`,
+    `${sessionCookieName(secure)}=`,
     'Path=/',
     'HttpOnly',
     'SameSite=Strict',
@@ -110,6 +117,9 @@ export function clearSessionCookie(res: ServerResponse, secure: boolean): void {
   res.setHeader('Set-Cookie', parts.join('; '))
 }
 
-export function getSession(req: IncomingMessage, secret: string): SessionPayload | null {
-  return verifySession(parseCookies(req)[SESSION_COOKIE], secret)
+export function getSession(req: IncomingMessage, secret: string, secure = false, password = ''): SessionPayload | null {
+  const name = sessionCookieName(secure)
+  // Duplicate cookie names are ambiguous (including cookie tossing from siblings).
+  if ((req.headers.cookie ?? '').split(';').filter(part => part.trim().startsWith(`${name}=`)).length !== 1) return null
+  return verifySession(parseCookies(req)[name], secret, password)
 }

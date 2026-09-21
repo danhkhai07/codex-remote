@@ -8,7 +8,7 @@ import { CodexAppServer } from './codex-app-server.js'
 import { ContextVault } from './context-vault.js'
 import { RemoteController } from './controller.js'
 import { createRemoteHttpServer } from './http-app.js'
-import { createSession } from './auth.js'
+import { createSession, sessionCookieName } from './auth.js'
 import type { RemoteConfig } from './config.js'
 
 const cleanups: Array<() => void | Promise<void>> = []
@@ -38,12 +38,12 @@ it('keeps leader changes and team controls behind session, CSRF and group checks
   const f = setup(), server = createRemoteHttpServer(f.config, f.controller, f.root, null)
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   cleanups.push(() => new Promise<void>(resolve => server.close(() => resolve())))
-  const session = createSession(f.config.sessionSecret, 600)
+  const session = createSession(f.config.sessionSecret, 600, f.config.password)
   const call = (path: string, body?: unknown, auth = true, csrf = session.payload.csrf) => new Promise<{ status: number; data: Record<string, unknown> }>((resolve, reject) => {
     const req = request({ hostname: '127.0.0.1', port: (server.address() as AddressInfo).port, path,
       method: body === undefined ? 'GET' : path.endsWith('/leader') ? 'PUT' : 'POST', headers: {
         Host: 'remote.example.test', Origin: f.config.publicOrigin.origin, 'Content-Type': 'application/json',
-        ...(auth ? { Cookie: `codex_remote_session=${session.token}`, 'X-CSRF-Token': csrf } : {}),
+        ...(auth ? { Cookie: `${sessionCookieName(f.config.publicOrigin.protocol === 'https:')}=${session.token}`, 'X-CSRF-Token': csrf } : {}),
       } }, res => {
       let data = ''; res.on('data', chunk => { data += chunk }); res.on('end', () => resolve({ status: res.statusCode!, data: JSON.parse(data) }))
     }); req.on('error', reject); req.end(body === undefined ? undefined : JSON.stringify(body))

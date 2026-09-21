@@ -7,7 +7,7 @@ import { ContextVault } from './context-vault.js'
 import { RemoteController } from './controller.js'
 import { CodexAppServer } from './codex-app-server.js'
 import { createRemoteHttpServer } from './http-app.js'
-import { createSession, SESSION_COOKIE } from './auth.js'
+import { createSession, sessionCookieName } from './auth.js'
 import type { RemoteConfig } from './config.js'
 
 const cleanup: Array<() => void | Promise<void>> = []
@@ -96,9 +96,9 @@ it('shares folder state between authenticated sessions, protects mutations, and 
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
   config.publicOrigin = new URL(origin)
   cleanup.push(() => new Promise<void>(resolve => server.close(() => resolve())))
-  const one = createSession(config.sessionSecret, 600), two = createSession(config.sessionSecret, 600)
+  const one = createSession(config.sessionSecret, 600, config.password), two = createSession(config.sessionSecret, 600, config.password)
   const send = (path: string, method = 'GET', body?: unknown, session = one, csrf = true) => fetch(origin + path, {
-    method, headers: { Origin: origin, Cookie: `${SESSION_COOKIE}=${session.token}`, 'Content-Type': 'application/json', ...(csrf ? { 'X-CSRF-Token': session.payload.csrf } : {}) },
+    method, headers: { Origin: origin, Cookie: `${sessionCookieName(config.publicOrigin.protocol === 'https:')}=${session.token}`, 'Content-Type': 'application/json', ...(csrf ? { 'X-CSRF-Token': session.payload.csrf } : {}) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   })
   expect((await fetch(origin + '/api/conversation-groups')).status).toBe(401)

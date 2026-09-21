@@ -1,3 +1,4 @@
+import { unregisterLegacyPreviewWorkers } from './legacyPreviewWorkers'
 import { WorkingHoursPage, isWorkingHoursPath } from './WorkingHoursPage'
 import { ServicesPage, isServicesPath } from './ServicesPage'
 import { lazy, StrictMode, Suspense } from 'react'
@@ -21,6 +22,7 @@ createRoot(document.getElementById('root')!).render(
 )
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
+  void unregisterLegacyPreviewWorkers(navigator.serviceWorker, location.origin).catch(() => undefined)
   window.addEventListener('load', () => {
     navigator.serviceWorker.register(`/sw.js?v=${encodeURIComponent(__CODEX_REMOTE_BUILD_ID__)}`, { updateViaCache: 'none' }).then((registration) => {
       const announceUpdate = (worker: ServiceWorker | null) => {

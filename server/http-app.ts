@@ -1,3 +1,5 @@
+import { requestIp } from './request-ip.js'
+import { SessionRegistry } from './session-registry.js'
 import { LocalhostPreview, LocalhostPreviewError } from './localhost-preview.js'
 import { ServiceError, type ServicesStore } from './services.js'
 import { ContextVaultError } from './context-vault.js'
@@ -104,15 +106,14 @@ function routeThread(pathname: string, suffix: string): string | null {
   }
 }
 
-function requestIp(req: IncomingMessage): string {
-  return req.socket.remoteAddress ?? 'unknown'
-}
 
 function securityHeaders(config: RemoteConfig): Record<string, string> {
   const script = config.production ? "script-src 'self'" : "script-src 'self' 'unsafe-eval'"
   return {
     'Content-Security-Policy': `default-src 'self'; ${script}; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' ws: wss:; frame-src 'self' https: http:; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'self'`,
     'Cross-Origin-Opener-Policy': 'same-origin',
+    'Origin-Agent-Cluster': '?1',
+    'Cross-Origin-Resource-Policy': 'same-origin',
     'Referrer-Policy': 'no-referrer',
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'SAMEORIGIN',
@@ -196,12 +197,14 @@ export function createRemoteHttpServer(
   const pptxPreviews = new PptxPreviewCache()
   const loginRateLimiter = new LoginRateLimiter()
   const headers = securityHeaders(config)
+  const sessions = new SessionRegistry(config.sessionSecret, config.sessionStateFile, config.password)
   const secureCookie = config.publicOrigin.protocol === 'https:'
 
   const preview = new LocalhostPreview({
     publicOrigin: config.publicOrigin.origin,
     originTemplate: config.previewOriginTemplate,
     sessionSecret: config.sessionSecret,
+    sessions,
     blockedPorts: [config.port, Number(config.publicOrigin.port || (secureCookie ? 443 : 80))],
   })
   if (preview?.matchesHost(config.publicOrigin.host)) throw new Error('Preview apps must use a separate origin from Codex Remote')
@@ -216,10 +219,14 @@ export function createRemoteHttpServer(
     try {
       if (!isAllowedHost(req, config)) throw new HttpError(400, 'Unrecognized host')
       const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
-      if (preview.matchesPath(req.url)) {
-        for (const name of Object.keys(headers)) res.removeHeader(name)
-        preview.handle(req, res)
-        return
+      if (url.pathname.startsWith('/preview/')) {
+        const match = url.pathname.match(/^\/preview\/([1-9][0-9]{3,4})(\/.*)?$/)
+        if (!match) throw new HttpError(400, 'Invalid preview path')
+        if (req.method !== 'GET' && req.method !== 'HEAD') throw new HttpError(405, 'Open previews with GET')
+        const session = getSession(req, config.sessionSecret, secureCookie, config.password)
+        if (!session || !sessions.valid(session)) throw new HttpError(401, 'Authentication required')
+        const launch = preview.createLaunch(Number(match[1]), (match[2] || '/') + url.search, session)
+        res.writeHead(303, { Location: launch.url, 'Cache-Control': 'no-store' }); res.end(); return
       }
       const method = req.method ?? 'GET'
 
@@ -233,7 +240,7 @@ export function createRemoteHttpServer(
 
       if (url.pathname === '/api/session/login' && method === 'POST') {
         if (!isAllowedOrigin(req, config)) throw new HttpError(403, 'Origin is not allowed')
-        const ip = requestIp(req)
+        const ip = requestIp(req, config.trustedProxies)
         if (loginRateLimiter.isBlocked(ip)) {
           throw new HttpError(429, 'Too many login attempts. Try again later.')
         }
@@ -243,7 +250,7 @@ export function createRemoteHttpServer(
           throw new HttpError(401, 'Incorrect password')
         }
         loginRateLimiter.clear(ip)
-        const session = createSession(config.sessionSecret, config.sessionTtlSeconds)
+        const session = createSession(config.sessionSecret, config.sessionTtlSeconds, config.password)
         setSessionCookie(res, session.token, config.sessionTtlSeconds, secureCookie)
         json(res, 200, {
           csrf: session.payload.csrf,
@@ -266,8 +273,8 @@ export function createRemoteHttpServer(
         throw new HttpError(404, 'Not found')
       }
 
-      const session = getSession(req, config.sessionSecret)
-      if (!session) throw new HttpError(401, 'Authentication required')
+      const session = getSession(req, config.sessionSecret, secureCookie, config.password)
+      if (!session || !sessions.valid(session)) throw new HttpError(401, 'Authentication required')
 
       if (method !== 'GET' && method !== 'HEAD') {
         if (!isAllowedOrigin(req, config)) throw new HttpError(403, 'Origin is not allowed')
@@ -325,13 +332,13 @@ export function createRemoteHttpServer(
         return
       }
       if (url.pathname === '/api/localhost-preview' && method === 'GET') {
-        json(res, 200, { enabled: Boolean(preview) })
+        json(res, 200, { enabled: preview.enabled })
         return
       }
       if (url.pathname === '/api/localhost-preview' && method === 'POST') {
         if (!preview) throw new HttpError(503, 'Preview chưa được cấu hình domain trên server.')
         const body = await readJson(req)
-        json(res, 201, preview.createLaunch(body.port, body.path ?? '/', session.expiresAt))
+        json(res, 201, preview.createLaunch(body.port, body.path ?? '/', session))
         return
       }
 
@@ -361,6 +368,7 @@ export function createRemoteHttpServer(
         return
       }
       if (url.pathname === '/api/session/logout' && method === 'POST') {
+        sessions.revoke(session)
         push?.unsubscribe(session)
         attachments?.clear(session)
         clearSessionCookie(res, secureCookie)
@@ -463,7 +471,8 @@ export function createRemoteHttpServer(
       if (url.pathname === '/api/events' && method === 'GET') {
         const lastId = Number(req.headers['last-event-id'] ?? url.searchParams.get('after') ?? 0)
         const unsubscribe = controller.events.subscribe(res, Number.isFinite(lastId) ? lastId : 0, url.searchParams.get('epoch') ?? undefined)
-        res.on('close', unsubscribe)
+        const unwatch = sessions.watch(session, () => { unsubscribe(); res.end() })
+        res.once('close', unwatch)
         return
       }
       if (url.pathname === '/api/pending' && method === 'GET') {
@@ -639,7 +648,7 @@ export function createRemoteHttpServer(
   })
   if (preview) {
     server.on('upgrade', (req, socket, head) => {
-      if (preview.matchesHost(req.headers.host) || (isAllowedHost(req, config) && preview.matchesPath(req.url))) preview.handleUpgrade(req, socket, head)
+      if (preview.matchesHost(req.headers.host)) preview.handleUpgrade(req, socket, head)
       else socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
     })
     server.on('close', () => preview.close())

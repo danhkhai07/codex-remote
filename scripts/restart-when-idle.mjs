@@ -2,12 +2,18 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { createSession } from '../dist-server/auth.js'
+import { resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { maintenanceCookie } from './session-cookie.mjs'
 import { loadConfig } from '../dist-server/config.js'
 import { restartReadiness } from './restart-readiness.mjs'
 
 // One restart per invocation. Run in a separate systemd unit so gateway shutdown
 // does not terminate the watcher before it verifies the new process.
+// A sealed deployment can pin its auth module across a rollback. No token is
+// passed on the command line; all bearer material stays inside this process.
+const authModule = process.env.CODEX_REMOTE_DEPLOY_AUTH_MODULE
+const { createSession } = await import(authModule ? pathToFileURL(resolve(authModule)).href : '../dist-server/auth.js')
 const config = loadConfig()
 const base = `http://${config.host}:${config.port}`
 const stateDirectory = join(homedir(), '.local/state/codex-remote')
@@ -16,10 +22,10 @@ const state = (status, details = {}) => writeFileSync(join(stateDirectory, 'rest
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
 
 async function readiness() {
-  const session = createSession(config.sessionSecret, 300)
+  const session = createSession(config.sessionSecret, 300, config.password)
   return restartReadiness(async path => {
     const response = await fetch(`${base}${path}`, {
-      headers: { Cookie: `codex_remote_session=${session.token}` },
+      headers: { Cookie: maintenanceCookie(session.token, config.publicOrigin.protocol === 'https:') },
       signal: AbortSignal.timeout(10_000),
     })
     if (!response.ok) throw Error(`Idle status returned HTTP ${response.status}`)

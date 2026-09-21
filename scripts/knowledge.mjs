@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { parseArgs } from 'node:util'
 import { createSession } from '../dist-server/auth.js'
+import { maintenanceCookie } from './session-cookie.mjs'
 import { loadConfig } from '../dist-server/config.js'
 
 const { values, positionals } = parseArgs({ allowPositionals: true, options: Object.fromEntries(
@@ -26,9 +27,9 @@ if (command === 'preview') {
   if (!values.thread || values.text === undefined) throw Error('preview requires --thread and --text')
   method = 'POST'; body = { threadId: values.thread, text: values.text }
 }
-const config = loadConfig(), session = createSession(config.sessionSecret, 300)
+const config = loadConfig(), session = createSession(config.sessionSecret, 300, config.password)
 const response = await fetch(`http://${config.host}:${config.port}/api/knowledge${routes[command]}?${query}`, {
-  method, headers: { Cookie: `codex_remote_session=${session.token}`, Origin: config.publicOrigin.origin, 'X-CSRF-Token': session.payload.csrf, 'Content-Type': 'application/json' },
+  method, headers: { Cookie: maintenanceCookie(session.token, config.publicOrigin.protocol === 'https:'), Origin: config.publicOrigin.origin, 'X-CSRF-Token': session.payload.csrf, 'Content-Type': 'application/json' },
   ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(15_000),
 })
 const result = await response.json()

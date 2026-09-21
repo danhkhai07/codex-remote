@@ -1,5 +1,6 @@
 import { parseArgs } from 'node:util'
 import { createSession } from '../dist-server/auth.js'
+import { maintenanceCookie } from './session-cookie.mjs'
 import { loadConfig } from '../dist-server/config.js'
 
 const { values, positionals } = parseArgs({ allowPositionals: true, options: Object.fromEntries(
@@ -8,8 +9,8 @@ const { values, positionals } = parseArgs({ allowPositionals: true, options: Obj
 const command = positionals[0] ?? 'list'
 if (!['list', 'register', 'remove'].includes(command)) throw Error('Use list, register or remove')
 const config = loadConfig()
-const session = createSession(config.sessionSecret, 300)
-const headers = { Cookie: `codex_remote_session=${session.token}`, Origin: config.publicOrigin.origin, 'X-CSRF-Token': session.payload.csrf, 'Content-Type': 'application/json' }
+const session = createSession(config.sessionSecret, 300, config.password)
+const headers = { Cookie: maintenanceCookie(session.token, config.publicOrigin.protocol === 'https:'), Origin: config.publicOrigin.origin, 'X-CSRF-Token': session.payload.csrf, 'Content-Type': 'application/json' }
 let method = 'GET', path = '/api/services', body
 if (command === 'register') {
   method = 'PUT'

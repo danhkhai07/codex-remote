@@ -6,7 +6,7 @@ import { ContextVault } from './context-vault.js'
 import { CodexAppServer } from './codex-app-server.js'
 import { RemoteController } from './controller.js'
 import { createRemoteHttpServer } from './http-app.js'
-import { createSession } from './auth.js'
+import { createSession, sessionCookieName } from './auth.js'
 import type { RemoteConfig } from './config.js'
 
 const cleanup: Array<() => void | Promise<void>> = []
@@ -23,8 +23,8 @@ async function setup() {
   cleanup.push(() => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()) }))
   const address = server.address() as { port: number }, base = `http://127.0.0.1:${address.port}`
   config.publicOrigin = new URL(base)
-  const session = createSession(config.sessionSecret, 600)
-  const send = (path: string, method = 'GET', body?: object, headers = {}) => fetch(base + path, { method, headers: { Host: config.publicOrigin.host, Cookie: `codex_remote_session=${session.token}`, Origin: config.publicOrigin.origin, 'X-CSRF-Token': session.payload.csrf, 'Content-Type': 'application/json', ...headers }, ...(body ? { body: JSON.stringify(body) } : {}) })
+  const session = createSession(config.sessionSecret, 600, config.password)
+  const send = (path: string, method = 'GET', body?: object, headers = {}) => fetch(base + path, { method, headers: { Host: config.publicOrigin.host, Cookie: `${sessionCookieName(config.publicOrigin.protocol === 'https:')}=${session.token}`, Origin: config.publicOrigin.origin, 'X-CSRF-Token': session.payload.csrf, 'Content-Type': 'application/json', ...headers }, ...(body ? { body: JSON.stringify(body) } : {}) })
   return { send, vault, controller, base }
 }
 

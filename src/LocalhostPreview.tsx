@@ -125,8 +125,7 @@ export function LocalhostPreview({ csrf, onClose, initialUrl, scope = 'services'
       const url = new URL(result.url)
       const viewUrl = new URL(result.viewUrl)
       const allowedProtocol = url.protocol === 'https:' || (window.location.protocol === 'http:' && url.protocol === 'http:')
-      const localPath = url.origin === window.location.origin && url.pathname.startsWith(`/preview/${parsed.kind === 'localhost' ? parsed.local.port : ''}/`)
-      if (parsed.kind === 'localhost' && (!allowedProtocol || (!localPath && url.origin === window.location.origin) || viewUrl.origin !== url.origin)) {
+      if (parsed.kind === 'localhost' && (!allowedProtocol || url.origin === window.location.origin || viewUrl.origin !== url.origin)) {
         throw new Error('Địa chỉ preview không hợp lệ.')
       }
       if (opened) {

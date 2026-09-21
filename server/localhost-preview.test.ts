@@ -1,4 +1,3 @@
-import { createSession } from './auth.js'
 import { createServer, request, type IncomingMessage, type ServerResponse, type Server } from 'node:http'
 import { connect, type AddressInfo, type Socket } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -228,37 +227,12 @@ describe('localhost previews', () => {
 })
 
 
-it('serves authenticated path previews with rewritten assets, scoped cookies and relative redirects', async () => {
-  const seen: Array<{path?: string; cookie?: string}> = []
-  const upstream = createServer((req, res) => {
-    seen.push({ path: req.url, cookie: req.headers.cookie })
-    if (req.url === '/redirect') { res.writeHead(302, {location: '/login'}); res.end(); return }
-    if (req.url === '/module.js') { res.setHeader('Content-Type', 'application/javascript'); res.end('import value from "/dependency.js";'); return }
-    res.setHeader('Content-Type', 'text/html')
-    res.setHeader('Set-Cookie', ['app=yes; Path=/; Domain=example.test', 'codex_remote_session=bad; Path=/'])
-    res.end('<html><head><script type="module" src="/module.js"></script><link href="/style.css" rel="stylesheet"></head><body>App</body></html>')
-  })
-  const appPort = await listen(upstream)
+it('fails closed without isolated preview configuration', async () => {
   const proxy = new LocalhostPreview({ publicOrigin: 'https://remote.example.test', sessionSecret: 'test-secret', blockedPorts: [5173] })
-  const gateway = createServer((req,res) => proxy.handle(req,res))
-  const gatewayPort = await listen(gateway)
+  const gateway = createServer((req, res) => proxy.handle(req, res))
+  const port = await listen(gateway)
   cleanup.push(async () => proxy.close())
-  const get = (path: string, cookie?: string) => fetchLocal(gatewayPort, 'remote.example.test', path, {headers: cookie ? {cookie} : {}})
-  const cookie = 'codex_remote_session=' + createSession('test-secret', 600).token
-  const prefix = `/preview/${appPort}`
-  const launch = proxy.createLaunch(appPort, '/nested?q=1', Math.floor(Date.now()/1000)+600)
-  expect(launch.url).toBe(`https://remote.example.test${prefix}/nested?q=1`)
-  expect((await get(prefix + '/')).status).toBe(401)
-  expect((await get(prefix, cookie)).headers.location).toBe(prefix + '/')
-  const html = await get(prefix + '/nested?q=1', cookie)
-  expect(html.body.toString()).toContain(`src="${prefix}/module.js"`)
-  expect(html.body.toString()).toContain('window.fetch =')
-  expect(html.headers['set-cookie']).toEqual([`app=yes; Path=${prefix}/`])
-  expect(html.headers['cache-control']).toBe('no-store')
-  expect(html.headers['service-worker-allowed']).toBe(prefix + '/')
-  expect((await get(prefix + '/module.js', cookie)).body.toString()).toContain(`from "${prefix}/dependency.js"`)
-  expect((await get(prefix + '/redirect', cookie)).headers.location).toBe(`https://remote.example.test${prefix}/login`)
-  expect(seen[0]).toEqual({ path: '/nested?q=1', cookie: undefined })
-  expect((await get('/preview/5173/', cookie)).status).toBe(400)
-  expect((await get('/preview/no-port/', cookie)).status).toBe(400)
+  expect(proxy.enabled).toBe(false)
+  expect(() => proxy.createLaunch(3000, '/', Date.now() / 1000 + 60)).toThrow(/separate preview origin/)
+  expect((await fetchLocal(port, 'remote.example.test', '/preview/3000/', { headers: { cookie: 'codex_remote_session=fake' } })).status).toBe(400)
 })

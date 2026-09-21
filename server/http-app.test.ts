@@ -215,7 +215,7 @@ describe('Codex Remote HTTP boundary', () => {
     const cookie = login.headers['set-cookie']?.[0].split(';', 1)[0]
     expect(cookie).toBeTruthy()
     expect((await fetchLocal(port, '/api/session', { cookie })).status).toBe(200)
-    expect(JSON.parse((await fetchLocal(port, '/api/localhost-preview', { cookie })).body)).toEqual({ enabled: true })
+    expect(JSON.parse((await fetchLocal(port, '/api/localhost-preview', { cookie })).body)).toEqual({ enabled: false })
     const csrf = JSON.parse(login.body).csrf as string
     const options = { cookie, csrf, origin: config.publicOrigin.origin }
     expect((await fetchLocal(port, '/api/working-hours')).status).toBe(401)
@@ -414,7 +414,7 @@ describe('Codex Remote HTTP boundary', () => {
     expect(await status()).toBe(false)
     await fetchLocal(port, '/api/push/subscription', { ...options, method: 'POST', body: subscription })
     expect((await fetchLocal(port, '/api/session/logout', { ...options, method: 'POST', body: {} })).status).toBe(200)
-    expect(await status()).toBe(false)
+    expect((await fetchLocal(port, '/api/session', { cookie })).status).toBe(401)
 
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const failedLogin = await fetchLocal(port, '/api/session/login', {

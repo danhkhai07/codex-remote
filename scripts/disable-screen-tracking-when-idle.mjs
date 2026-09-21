@@ -1,4 +1,5 @@
 import { createSession } from '../dist-server/auth.js'
+import { maintenanceCookie } from './session-cookie.mjs'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 const statusPath='/root/.local/share/flint-screen-tracking/deployment.json'
@@ -6,7 +7,7 @@ mkdirSync('/root/.local/share/flint-screen-tracking',{recursive:true})
 const state=(status,extra={})=>writeFileSync(statusPath,JSON.stringify({status,at:new Date().toISOString(),...extra},null,2)+'\n')
 const host=process.env.CODEX_REMOTE_HOST||'127.0.0.1',port=process.env.CODEX_REMOTE_PORT||'5173',base=`http://${host}:${port}`
 const sleep=ms=>new Promise(r=>setTimeout(r,ms))
-function auth(){const s=createSession(process.env.CODEX_REMOTE_SESSION_SECRET,300);return {Cookie:`codex_remote_session=${s.token}`,'X-CSRF-Token':s.payload.csrf,Origin:process.env.CODEX_REMOTE_PUBLIC_ORIGIN,'Content-Type':'application/json'}}
+function auth(){const s=createSession(process.env.CODEX_REMOTE_SESSION_SECRET,300,process.env.CODEX_REMOTE_PASSWORD);return {Cookie:maintenanceCookie(s.token, process.env.CODEX_REMOTE_PUBLIC_ORIGIN?.startsWith('https:') === true),'X-CSRF-Token':s.payload.csrf,Origin:process.env.CODEX_REMOTE_PUBLIC_ORIGIN,'Content-Type':'application/json'}}
 async function idle(){const r=await fetch(base+'/api/threads',{headers:auth(),signal:AbortSignal.timeout(10000)});if(!r.ok)return false;const body=await r.json();return Array.isArray(body.data)&&body.data.every(t=>['idle','notLoaded','systemError'].includes(t.status?.type))}
 state('waiting-for-idle')
 try {
