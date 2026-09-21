@@ -1,5 +1,7 @@
 # Independent review: security + browser cache candidate
 
+Follow-up on base 9151e67: [migration/readiness and bounded login admission](migration-limiter-rollout.md). The original findings below are retained as baseline evidence. Known cleanup ordering and memory admission are now implemented; arbitrary same-origin persistence still requires the explicit clean-profile/operator migration gate.
+
 Reviewed fixed base `2fd0cff7bec12ea0de1320fdd082675aeff6c240` in a new worktree,
 branch `integration/security-preview-cache`. Cache ported from `93c197c`/`cce4c71`;
 no edit to the security worker checkout, main or release state. This supersedes
