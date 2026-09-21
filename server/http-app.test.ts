@@ -247,14 +247,14 @@ describe('Codex Remote HTTP boundary', () => {
     expect((await fetchLocal(port, '/api/threads/chat/skills')).status).toBe(401)
     expect(skills).not.toHaveBeenCalled()
     expect((await fetchLocal(port, '/api/threads/chat/skills?refresh=1', { cookie })).status).toBe(200)
-    expect(skills).toHaveBeenCalledWith('chat', true)
+    expect(skills).toHaveBeenCalledWith('chat', true, expect.any(Function))
     const messageIds = vi.spyOn(controller, 'readMessageIds').mockResolvedValue({ ids: ['turn:reply'] })
     expect((await fetchLocal(port, '/api/threads/chat/message-ids')).status).toBe(401)
     expect(messageIds).not.toHaveBeenCalled()
     const messageSummary = await fetchLocal(port, '/api/threads/chat/message-ids', { cookie })
     expect(messageSummary.status).toBe(200)
     expect(JSON.parse(messageSummary.body)).toEqual({ ids: ['turn:reply'] })
-    expect(messageIds).toHaveBeenCalledWith('chat')
+    expect(messageIds).toHaveBeenCalledWith('chat', expect.any(Function))
     expect((await fetchLocal(port, '/api/read-state')).status).toBe(401)
     const loginB = await fetchLocal(port, '/api/session/login', { method: 'POST', origin: config.publicOrigin.origin, body: { password: config.password } })
     const cookieB = loginB.headers['set-cookie']?.[0].split(';', 1)[0]
@@ -274,7 +274,7 @@ describe('Codex Remote HTTP boundary', () => {
     expect(marked.status).toBe(200)
     expect(JSON.parse(marked.body).unread.chat).toEqual(['reply:newer'])
     expect(JSON.parse((await fetchLocal(port, '/api/read-state', { cookie: cookieB })).body).unread.chat).toEqual(['reply:newer'])
-    expect(access).toHaveBeenCalledWith('chat')
+    expect(access).toHaveBeenCalledWith('chat', expect.any(Function))
     access.mockRejectedValueOnce(new Error('Outside workspace roots'))
     expect((await fetchLocal(port, readPath, { ...options, method: 'POST', body: { ids: ['reply:newer'] } })).status).not.toBe(200)
 
@@ -287,7 +287,7 @@ describe('Codex Remote HTTP boundary', () => {
     const renamed = await fetchLocal(port, renamePath, { ...options, method: 'POST', body: { name: '  Hội thoại mới  ' } })
     expect(renamed.status).toBe(200)
     expect(JSON.parse(renamed.body)).toEqual({ name: 'Hội thoại mới' })
-    expect(rename).toHaveBeenLastCalledWith('rename-target', '  Hội thoại mới  ')
+    expect(rename).toHaveBeenLastCalledWith('rename-target', '  Hội thoại mới  ', undefined, expect.any(Function))
     const listing = await fetchLocal(port, `/api/files/list?path=${encodeURIComponent(workspaceRoot)}`, { cookie })
     expect(listing.status).toBe(200)
     expect(JSON.parse(listing.body).entries).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'notes.md', kind: 'file' })], undefined))
@@ -402,7 +402,7 @@ describe('Codex Remote HTTP boundary', () => {
     const startWithFile = vi.spyOn(controller, 'startTurn').mockResolvedValueOnce({ turn: { id: 'uploaded-file-turn' } })
     const fileTurn = await fetchLocal(port, '/api/threads/upload-test/turns', { ...options, method: 'POST', body: { text: '  <b>literal</b>\n ', attachmentIds: [fileId], collaborationMode: 'plan' } })
     expect(fileTurn.status).toBe(202)
-    expect(startWithFile).toHaveBeenCalledWith('upload-test', '  <b>literal</b>\n ', undefined, undefined, false, [], [expect.objectContaining({ name: 'source.html', contentType: 'text/html', kind: 'file' })], undefined, 'plan')
+    expect(startWithFile).toHaveBeenCalledWith('upload-test', '  <b>literal</b>\n ', undefined, undefined, false, [], [expect.objectContaining({ name: 'source.html', contentType: 'text/html', kind: 'file' })], undefined, 'plan', undefined, expect.any(Function))
     startWithFile.mockRestore()
 
     const subscription = {

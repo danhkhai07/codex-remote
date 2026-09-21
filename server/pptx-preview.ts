@@ -10,19 +10,25 @@ const MAX_PDF_BYTES = 32 * 1024 * 1024
 
 // A separate, unprivileged systemd unit cannot access the workspace or network.
 // Its cgroup owns all converter children and enforces the memory/time limits.
-export async function convertPptx(file: ServerFileInfo): Promise<Buffer> {
+export async function convertPptx(file: ServerFileInfo, live?: () => void): Promise<Buffer> {
+  live?.()
   const directory = await mkdtemp(join(tmpdir(), 'codex-pptx-'))
   try {
+    live?.()
     const source = await openInspectedFile(file)
     try {
       const metadata = await source.stat()
       if (!metadata.isFile() || metadata.size > MAX_PPTX_PREVIEW_BYTES) throw new ServerFileError(413, 'PPTX quá lớn để xem trước (tối đa 20 MB).')
       if (metadata.size !== file.size || metadata.mtime.toISOString() !== file.modifiedAt) throw new ServerFileError(409, 'Tệp vừa thay đổi. Hãy mở lại bản xem trước.')
-      await writeFile(join(directory, 'slides.pptx'), await source.readFile(), { mode: 0o644 })
+      const bytes = await source.readFile(); live?.()
+      await writeFile(join(directory, 'slides.pptx'), bytes, { mode: 0o644 })
     } finally { await source.close() }
+    live?.()
     await chown(join(directory, 'slides.pptx'), 65534, 65534)
+    live?.()
     await chown(directory, 65534, 65534)
     try {
+      live?.()
       await exec('/usr/bin/systemd-run', [
         '--quiet', '--wait', '--collect', '--pipe',
         '-p', 'User=nobody', '-p', 'Group=nogroup',
@@ -57,7 +63,7 @@ export class PptxPreviewCache {
   private pending: { key: string; promise: Promise<Buffer> } | null = null
   constructor(private convert = convertPptx) {}
 
-  async get(file: ServerFileInfo): Promise<Buffer> {
+  async get(file: ServerFileInfo, live?: () => void): Promise<Buffer> {
     if (file.kind !== 'pptx') throw new ServerFileError(415, 'Chỉ hỗ trợ xem trước PPTX.')
     if (!file.previewable || file.size > MAX_PPTX_PREVIEW_BYTES) throw new ServerFileError(413, 'PPTX quá lớn để xem trước (tối đa 20 MB).')
     const key = JSON.stringify([file.path, file.size, file.modifiedAt])
@@ -71,7 +77,8 @@ export class PptxPreviewCache {
       if (this.pending.key === key) return this.pending.promise
       throw new ServerFileError(429, 'Đang tạo bản xem trước khác. Vui lòng thử lại sau ít giây.')
     }
-    const promise = this.convert(file).then(pdf => {
+    live?.()
+    const promise = this.convert(file, live).then(pdf => {
       if (pdf.length > MAX_PDF_BYTES) throw new ServerFileError(413, 'Bản xem trước quá lớn.')
       this.cache.set(key, pdf)
       while (this.cache.size > 3 || [...this.cache.values()].reduce((sum, item) => sum + item.length, 0) > MAX_PDF_BYTES) {

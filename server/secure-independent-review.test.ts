@@ -13,6 +13,7 @@ import { SecureTransport } from './secure-client'
 import { SessionRegistry } from './session-registry'
 import { createSession } from './auth'
 import { randomId } from './secure-wire'
+import { ContextVault } from './context-vault'
 import { createRemoteHttpServer } from './http-app'
 import { RemoteController } from './controller'
 import { CodexAppServer } from './codex-app-server'
@@ -28,7 +29,8 @@ async function fixture(realRouter = false) {
  const config:RemoteConfig={host:'127.0.0.1',port:0,publicOrigin:new URL('http://localhost'),password:'FAKE review password',sessionSecret:'FAKE independent session '.repeat(3),sessionTtlSeconds:600,codexBin:'UNUSED',production:true,workspaceRoots:[files],fileRoots:[files],secureApiRequired:true,secureKeyFile:keyFile,sessionStateFile:join(root,'sessions.json')}
  const issued=createSession(config.sessionSecret,600,config.password),registry=new SessionRegistry(config.sessionSecret,config.sessionStateFile,config.password)
  const secure=new SecureApi(config,registry,[files]);cleanups.push(()=>secure.close())
- const controller=new RemoteController(config,new CodexAppServer('UNUSED'))
+ const appServer=new CodexAppServer('UNUSED'),vault=realRouter?new ContextVault(join(root,'vault')):undefined
+ const controller=new RemoteController(config,appServer,vault)
  let effects=0
  const server:Server=realRouter?createRemoteHttpServer(config,controller,files,null):createServer((req,res)=>{void secure.handle(req,res,async (inside,result)=>{if(inside.method==='POST')effects++;result.setHeader('Content-Type','application/json');result.end(JSON.stringify({canary:'REVIEW ONLY',effects}))})})
  await new Promise<void>(ok=>server.listen(0,'127.0.0.1',ok));config.port=(server.address() as AddressInfo).port;config.publicOrigin=new URL('http://127.0.0.1:'+config.port)
@@ -36,7 +38,7 @@ async function fixture(realRouter = false) {
  const headers={Origin:config.publicOrigin.origin,Cookie:'codex_remote_session='+issued.token},nativeFetch=globalThis.fetch
  const fetcher:typeof fetch=(path,init)=>nativeFetch(new URL(String(path),config.publicOrigin),{...init,headers:{...headers,...Object.fromEntries(new Headers(init?.headers).entries())}})
  const client=new SecureTransport(fetcher);cleanups.push(()=>client.lock())
- return {config,material,issued,registry,secure,controller,client,fetcher,effects:()=>effects,keyFile}
+ return {config,material,issued,registry,secure,controller,appServer,vault,client,fetcher,effects:()=>effects,keyFile}
 }
 async function browserModule(f:Awaited<ReturnType<typeof fixture>>) {
  vi.stubGlobal('fetch',f.fetcher);vi.stubGlobal('BroadcastChannel',undefined);vi.resetModules()
@@ -68,10 +70,10 @@ it('R2 reproduces pre-lock pending mutation dispatched through a newly unlocked 
  gate.resolve();expect(await (await pending).json()).toMatchObject({effects:1}) // BUG: stale operation is not cancelled.
  expect(f.effects()).toBe(1)
 })
-it.each(['logout','expiry','rotation'] as const)('R3 reproduces native side effect after %s invalidates a request stalled in access check',async(reason)=>{
- const f=await fixture(true),gate=deferred(),entered=deferred(),effect=deferred();await f.client.unlock(f.material.key)
- vi.spyOn(f.controller,'assertThreadAccess').mockImplementation(async()=>{entered.resolve();await gate.promise})
- const interrupt=vi.spyOn(f.controller,'interruptTurn').mockImplementation(async()=>{effect.resolve();return {}})
+it.each(['logout','expiry','rotation'] as const)('R3 prevents native side effect after %s invalidates a request stalled in access check',async(reason)=>{
+ const f=await fixture(true),gate=deferred(),entered=deferred(),accessDone=deferred();await f.client.unlock(f.material.key)
+ vi.spyOn(f.controller,'assertThreadAccess').mockImplementation(async()=>{entered.resolve();await gate.promise;accessDone.resolve()})
+ const interrupt=vi.spyOn(f.controller,'interruptTurn').mockImplementation(async()=>({}))
  const pending=f.client.request('/api/threads/FAKE-THREAD/interrupt',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':f.issued.payload.csrf},body:JSON.stringify({turnId:'FAKE-TURN'})}).catch(()=>null)
  await Promise.race([entered.promise,pending.then(async result=>{throw Error('Request did not reach access check: '+(result?await result.response.text():'rejected'))})])
  if(reason==='logout') {
@@ -83,8 +85,8 @@ it.each(['logout','expiry','rotation'] as const)('R3 reproduces native side effe
  }
  await expect(f.client.request('/api/session')).rejects.toMatchObject({status:reason==='rotation'?412:401})
  await pending // Revocation already closed the stalled request before effect begins.
- expect(interrupt).not.toHaveBeenCalled();gate.resolve();await effect.promise
- expect(interrupt).toHaveBeenCalledTimes(1) // BUG: effect occurs only AFTER revocation, no real RPC.
+ expect(interrupt).not.toHaveBeenCalled();gate.resolve();await accessDone.promise;await new Promise(resolve=>setImmediate(resolve))
+ expect(interrupt).not.toHaveBeenCalled()
 })
 it('R4 confines all Nginx paths and both starts to non-root filesystem restrictions',async()=>{
  const source=await readFile(new URL('../scripts/nginx-fixture.mjs',import.meta.url),'utf8')
@@ -93,4 +95,50 @@ it('R4 confines all Nginx paths and both starts to non-root filesystem restricti
  const fixture=await readFile(new URL('../scripts/secure-proxy-fixture.mjs',import.meta.url),'utf8')
  expect(fixture).toContain('await hostNginxIdentity(), hostBefore')
  expect(fixture).not.toContain('spawn(binary')
+})
+
+it.each(['rename', 'archive', 'resume', 'interrupt', 'turn', 'skills'] as const)('R3 controller %s never dispatches a new native effect after an awaited precondition', async action => {
+ const f=await fixture(true),gate=deferred(),entered=deferred();await f.client.unlock(f.material.key)
+ const calls:string[]=[]
+ vi.spyOn(f.appServer,'request').mockImplementation(async(method)=>{
+  calls.push(method)
+  if(method==='thread/read'){entered.resolve();await gate.promise;return {thread:{id:'worker',cwd:f.config.workspaceRoots[0],turns:[],status:{type:'idle'}}}}
+  return {turn:{id:'FAKE-TURN'}}
+ })
+ const route=action==='rename'?'/name':action==='turn'?'/turns':action==='skills'?'/skills':('/'+action)
+ const method=action==='skills'?'GET':'POST'
+ const pending=f.client.request('/api/threads/worker'+route,{method,headers:{'content-type':'application/json','x-csrf-token':f.issued.payload.csrf},...(method==='GET'?{}:{body:JSON.stringify({name:'valid name',text:'FAKE ONLY',turnId:'FAKE-TURN'})})}).catch(()=>null)
+ await Promise.race([entered.promise,pending.then(async value=>{throw Error('Did not reach metadata: '+(value?await value.response.text():'closed'))})])
+ const logout=await f.client.request('/api/session/logout',{method:'POST',headers:{'x-csrf-token':f.issued.payload.csrf}});await logout.response.arrayBuffer()
+ gate.resolve();await pending;await new Promise(resolve=>setImmediate(resolve))
+ expect(calls).toEqual(['thread/read'])
+})
+it('R3 normal live control still dispatches one native interrupt and preserves its result', async()=>{
+ const f=await fixture(true);await f.client.unlock(f.material.key)
+ const calls:string[]=[]
+ vi.spyOn(f.appServer,'request').mockImplementation(async method=>{calls.push(method);return method==='turn/interrupt'?{accepted:true}:{thread:{id:'worker',cwd:f.config.workspaceRoots[0],turns:[],status:{type:'idle'}}}})
+ const result=await f.client.request('/api/threads/worker/interrupt',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':f.issued.payload.csrf},body:JSON.stringify({turnId:'FAKE-TURN'})})
+ expect(await result.response.json()).toEqual({accepted:true})
+ expect(calls).toEqual(['thread/read','thread/resume','turn/interrupt'])
+})
+it('R3 checks lifetime after context injection before turn/start without undoing accepted injection', async()=>{
+ const f=await fixture(true),gate=deferred(),entered=deferred();await f.client.unlock(f.material.key)
+ const calls:string[]=[]
+ vi.spyOn(f.appServer,'request').mockImplementation(async method=>{calls.push(method);if(method==='thread/inject_items'){entered.resolve();await gate.promise;return {}}return {thread:{id:'worker',cwd:f.config.workspaceRoots[0],turns:[],status:{type:'idle'}}}})
+ const pending=f.client.request('/api/threads/worker/turns',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':f.issued.payload.csrf},body:JSON.stringify({text:'FAKE ONLY'})}).catch(()=>null)
+ await Promise.race([entered.promise,pending.then(async value=>{throw Error('Did not reach injection: '+(value?await value.response.text():'closed'))})])
+ const logout=await f.client.request('/api/session/logout',{method:'POST',headers:{'x-csrf-token':f.issued.payload.csrf}});await logout.response.arrayBuffer()
+ gate.resolve();await pending;await new Promise(resolve=>setImmediate(resolve))
+ expect(calls).toEqual(['thread/read','thread/resume','thread/inject_items'])
+})
+
+it('R3 observes rotation at the native boundary without another request or periodic sweep', async()=>{
+ const f=await fixture(true),gate=deferred(),entered=deferred();await f.client.unlock(f.material.key)
+ const calls:string[]=[]
+ vi.spyOn(f.appServer,'request').mockImplementation(async method=>{calls.push(method);entered.resolve();await gate.promise;return {thread:{id:'worker',cwd:f.config.workspaceRoots[0],status:{type:'idle'},turns:[]}}})
+ const pending=f.client.request('/api/threads/worker/name',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':f.issued.payload.csrf},body:JSON.stringify({name:'NO LATE RENAME'})}).catch(()=>null)
+ await entered.promise
+ await writeFile(f.keyFile,JSON.stringify({...f.material,generation:randomId(),key:randomId(32)}))
+ gate.resolve();await pending;await new Promise(resolve=>setImmediate(resolve))
+ expect(calls).toEqual(['thread/read'])
 })

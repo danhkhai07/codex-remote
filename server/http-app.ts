@@ -1,3 +1,4 @@
+import { assertRequestLive, bindRequestLifetime, requestLifetime } from './request-lifetime.js'
 import { SECURE_VIEWER_CSP, SECURE_VIEWER_HTML } from './secure-viewer.js'
 import { SecureApi } from './secure-api.js'
 import { requestIp } from './request-ip.js'
@@ -75,6 +76,7 @@ async function readJson(req: IncomingMessage, limit = MAX_BODY_BYTES): Promise<R
     if (size > limit) throw new HttpError(413, 'Request body is too large')
     chunks.push(buffer)
   }
+  assertRequestLive(req)
   try {
     const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'))
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('object required')
@@ -95,6 +97,7 @@ async function readBytes(req: IncomingMessage, limit: number): Promise<Buffer> {
     if (size > limit) throw new HttpError(413, 'File exceeds the 25 MB limit')
     chunks.push(buffer)
   }
+  assertRequestLive(req)
   return Buffer.concat(chunks)
 }
 
@@ -282,6 +285,13 @@ export function createRemoteHttpServer(
       const session = getSession(req, config.sessionSecret, secureCookie, config.password)
       if (!session || !sessions.valid(session)) throw new HttpError(401, 'Authentication required')
 
+      const transportLive = requestLifetime(req)
+      const live = () => {
+        transportLive?.()
+        if (res.destroyed || !sessions.valid(session)) throw new HttpError(401, 'Request authorization expired')
+      }
+      bindRequestLifetime(req, live); live()
+
       if (method !== 'GET' && method !== 'HEAD') {
         if (!isAllowedOrigin(req, config)) throw new HttpError(403, 'Origin is not allowed')
         if (req.headers['x-csrf-token'] !== session.csrf) throw new HttpError(403, 'Invalid CSRF token')
@@ -295,9 +305,9 @@ export function createRemoteHttpServer(
         if (url.pathname === '/api/knowledge/note' && method === 'GET') { json(res, 200, store.read(path)); return }
         if (url.pathname === '/api/knowledge/source' && method === 'GET') { json(res, 200, store.source(path)); return }
         if (url.pathname === '/api/knowledge/note' && method === 'PUT') {
-          const body = await readJson(req, MAX_NOTE_BYTES * 6 + 2048)
+          const body = await readJson(req, MAX_NOTE_BYTES * 6 + 2048); live()
           if (typeof body.path !== 'string') throw new HttpError(400, 'Provide a note path')
-          json(res, 200, store.save(body.path, body.content, body.revision, typeof body.actor === 'string' ? body.actor : 'user')); return
+          live(); json(res, 200, store.save(body.path, body.content, body.revision, typeof body.actor === 'string' ? body.actor : 'user')); return
         }
         if (url.pathname === '/api/knowledge/versions' && method === 'GET') { json(res, 200, { versions: store.versions(path) }); return }
         if (url.pathname === '/api/knowledge/version' && method === 'GET') {
@@ -306,9 +316,9 @@ export function createRemoteHttpServer(
           json(res, 200, { ...saved, diff: noteDiff(saved.content, current) }); return
         }
         if (url.pathname === '/api/knowledge/restore' && method === 'POST') {
-          const body = await readJson(req)
+          const body = await readJson(req); live()
           if (typeof body.path !== 'string' || typeof body.versionId !== 'string') throw new HttpError(400, 'Provide path and versionId')
-          json(res, 200, store.restore(body.path, body.versionId, body.revision, typeof body.actor === 'string' ? body.actor : 'user')); return
+          live(); json(res, 200, store.restore(body.path, body.versionId, body.revision, typeof body.actor === 'string' ? body.actor : 'user')); return
         }
         if (url.pathname === '/api/knowledge/traces' && method === 'GET') {
           const traces = store.traces(url.searchParams.get('threadId') ?? undefined)
@@ -321,9 +331,9 @@ export function createRemoteHttpServer(
           return
         }
         if (url.pathname === '/api/knowledge/preview' && method === 'POST') {
-          const body = await readJson(req)
+          const body = await readJson(req); live()
           if (typeof body.threadId !== 'string' || typeof body.text !== 'string' || body.text.length > 8000) throw new HttpError(400, 'Provide a conversation ID and a query up to 8000 characters')
-          await controller.assertThreadAccess(body.threadId)
+          await controller.assertThreadAccess(body.threadId, live); live()
           json(res, 200, vault.previewContext(body.threadId, { text: body.text })); return
         }
         throw new HttpError(404, 'Knowledge operation not found')
@@ -333,7 +343,8 @@ export function createRemoteHttpServer(
         if (!services) throw new HttpError(503, 'Danh sách dịch vụ đang chờ cập nhật máy chủ. Hãy thử lại sau.')
         try {
           if (method === 'DELETE') { services.remove(url.searchParams.get('key') ?? ''); json(res, 200, { ok: true }); return }
-          json(res, 200, method === 'GET' ? await services.snapshot() : { service: services.upsert(await readJson(req)) })
+          if (method === 'GET') json(res, 200, await services.snapshot())
+          else { const body = await readJson(req); live(); json(res, 200, { service: services.upsert(body) }) }
         } catch (error) { if (error instanceof ServiceError) throw new HttpError(error.status, error.message); throw error }
         return
       }
@@ -343,20 +354,23 @@ export function createRemoteHttpServer(
       }
       if (url.pathname === '/api/localhost-preview' && method === 'POST') {
         if (!preview) throw new HttpError(503, 'Preview chưa được cấu hình domain trên server.')
-        const body = await readJson(req)
+        const body = await readJson(req); live()
         json(res, 201, preview.createLaunch(body.port, body.path ?? '/', session))
         return
       }
 
       if (url.pathname === '/api/working-hours' && ['GET', 'POST'].includes(method)) {
         if (!workHours) throw new HttpError(503, 'Shared working hours are not configured')
-        try { json(res, 200, method === 'GET' ? workHours.read() : workHours.change(await readJson(req))) }
+        try {
+          if (method === 'GET') json(res, 200, workHours.read())
+          else { const body = await readJson(req); live(); json(res, 200, workHours.change(body)) }
+        }
         catch (error) { if (error instanceof HoursError) throw new HttpError(error.status, error.message); throw error }
         return
       }
       if (url.pathname === '/api/work-presence' && method === 'POST') {
         if (!workPresence) throw new HttpError(503, 'Screen tracking is not configured')
-        const body = await readJson(req)
+        const body = await readJson(req); live()
         try { workPresence.report(session.nonce, body) }
         catch (error) {
           if (error instanceof Error && error.message === 'Invalid screen presence') throw new HttpError(400, error.message)
@@ -374,7 +388,7 @@ export function createRemoteHttpServer(
         return
       }
       if (url.pathname === '/api/session/logout' && method === 'POST') {
-        sessions.revoke(session)
+        live(); sessions.revoke(session)
         push?.unsubscribe(session)
         attachments?.clear(session)
         clearSessionCookie(res, secureCookie)
@@ -399,10 +413,10 @@ export function createRemoteHttpServer(
         return
       }
       if (url.pathname === '/api/files/html-preview' && method === 'GET') {
-        const file = await inspectServerFile(url.searchParams.get('path'), fileRoots)
+        const file = await inspectServerFile(url.searchParams.get('path'), fileRoots); live()
         if (file.kind !== 'text' || !['.html', '.htm'].includes(file.extension)) throw new HttpError(415, 'Use an HTML file for this preview')
         if (!file.previewable) throw new HttpError(413, `HTML preview is limited to ${MAX_TEXT_PREVIEW_BYTES / 1024 / 1024} MB; download the file instead`)
-        const html = await readInspectedFile(file)
+        const html = await readInspectedFile(file); live()
         res.setHeader('Content-Type', 'text/html; charset=utf-8')
         res.setHeader('Cache-Control', 'private, no-store')
         // Keep scripts interactive without granting the document access to the app origin.
@@ -413,8 +427,8 @@ export function createRemoteHttpServer(
         return
       }
       if (url.pathname === '/api/files/pptx-preview' && method === 'GET') {
-        const file = await inspectServerFile(url.searchParams.get('path'), fileRoots)
-        const pdf = await pptxPreviews.get(file)
+        const file = await inspectServerFile(url.searchParams.get('path'), fileRoots); live()
+        const pdf = await pptxPreviews.get(file, live)
         res.setHeader('Content-Type', 'application/pdf')
         res.setHeader('Cache-Control', 'private, no-store')
         res.setHeader('Content-Length', pdf.length)
@@ -423,20 +437,21 @@ export function createRemoteHttpServer(
         return
       }
       if (url.pathname === '/api/files/content' && (method === 'GET' || method === 'HEAD')) {
-        const file = await inspectServerFile(url.searchParams.get('path'), fileRoots)
+        const file = await inspectServerFile(url.searchParams.get('path'), fileRoots); live()
         await serveServerFile(req, res, file, url.searchParams.get('download') === '1')
         return
       }
       if (url.pathname === '/api/attachments' && method === 'POST') {
         if (!attachments) throw new HttpError(503, 'File attachments are unavailable')
         const contentType = (req.headers['content-type'] ?? '').toLowerCase().split(';', 1)[0].trim()
-        json(res, 201, attachments.add(await readBytes(req, MAX_ATTACHMENT_BYTES), contentType, session, url.searchParams.get('name') ?? 'attachment'))
+        const bytes = await readBytes(req, MAX_ATTACHMENT_BYTES); live()
+        json(res, 201, attachments.add(bytes, contentType, session, url.searchParams.get('name') ?? 'attachment'))
         return
       }
       const attachmentMatch = url.pathname.match(/^\/api\/attachments\/([^/]+)$/)
       if (attachmentMatch && method === 'DELETE') {
         if (!attachments) throw new HttpError(503, 'File attachments are unavailable')
-        attachments.remove(decodeURIComponent(attachmentMatch[1]), session)
+        live(); attachments.remove(decodeURIComponent(attachmentMatch[1]), session)
         json(res, 200, { ok: true })
         return
       }
@@ -447,12 +462,12 @@ export function createRemoteHttpServer(
           return
         }
         if (url.pathname === '/api/push/status' && method === 'POST') {
-          const body = await readJson(req)
+          const body = await readJson(req); live()
           json(res, 200, { enabled: push.enabled(body.endpoint, session) })
           return
         }
         if (url.pathname === '/api/push/visibility' && method === 'POST') {
-          const body = await readJson(req)
+          const body = await readJson(req); live()
           let ok
           try { ok = push.visibility(body.endpoint, body.visible, session) }
           catch { throw new HttpError(400, 'Invalid push visibility') }
@@ -460,16 +475,16 @@ export function createRemoteHttpServer(
           return
         }
         if (url.pathname === '/api/push/subscription' && method === 'POST') {
-          const body = await readJson(req)
+          const body = await readJson(req); live()
           let subscription
           try { subscription = validateSubscription(body) }
           catch { throw new HttpError(400, 'Invalid or unsupported push subscription') }
-          push.subscribe(subscription, session)
+          live(); push.subscribe(subscription, session)
           json(res, 201, { ok: true })
           return
         }
         if (url.pathname === '/api/push/subscription' && method === 'DELETE') {
-          push.unsubscribe(session)
+          live(); push.unsubscribe(session)
           json(res, 200, { ok: true })
           return
         }
@@ -495,34 +510,34 @@ export function createRemoteHttpServer(
       }
       if (url.pathname === '/api/conversation-groups' && ['GET', 'POST'].includes(method)) {
         if (!controller.contextVault) throw new HttpError(503, 'Context vault is unavailable')
-        json(res, method === 'POST' ? 201 : 200, method === 'GET'
-          ? controller.contextVault.snapshot() : controller.contextVault.createGroup((await readJson(req)).name))
+        if (method === 'GET') json(res, 200, controller.contextVault.snapshot())
+        else { const body = await readJson(req); live(); json(res, 201, controller.contextVault.createGroup(body.name)) }
         return
       }
       const leaderMatch = url.pathname.match(/^\/api\/conversation-groups\/([^/]+)\/leader$/)
       if (leaderMatch && method === 'PUT') {
         if (!controller.contextVault) throw new HttpError(503, 'Context vault is unavailable')
-        const body = await readJson(req)
+        const body = await readJson(req); live()
         if (body.threadId !== null) {
           if (typeof body.threadId !== 'string') throw new HttpError(400, 'Provide a conversation ID or null')
-          await controller.assertThreadAccess(body.threadId)
+          await controller.assertThreadAccess(body.threadId, live); live()
         }
-        json(res, 200, controller.contextVault.setLeader(decodeURIComponent(leaderMatch[1]), body.threadId))
+        live(); json(res, 200, controller.contextVault.setLeader(decodeURIComponent(leaderMatch[1]), body.threadId))
         controller.orchestration?.changed()
         return
       }
       const teamThreadId = routeThread(url.pathname, '/orchestration')
       if (teamThreadId && ['GET', 'POST'].includes(method)) {
         if (!controller.orchestration) throw new HttpError(503, 'Conversation orchestration is unavailable')
-        await controller.assertThreadAccess(teamThreadId)
+        await controller.assertThreadAccess(teamThreadId, live); live()
         if (method === 'POST') {
-          const body = await readJson(req)
+          const body = await readJson(req); live()
           if (body.action === 'release') controller.orchestration.release(teamThreadId)
           else if (body.action === 'cancel' && typeof body.taskId === 'string') {
             const task = controller.orchestration.snapshot(teamThreadId).tasks.find(task => task.id === body.taskId)
             if (!task) throw new HttpError(404, 'Task not found in this folder')
             controller.orchestration.userStop(task.threadId)
-            await controller.orchestration.cancel(task.id)
+            await controller.orchestration.cancel(task.id, 'Stopped by the user', live)
           } else throw new HttpError(400, 'Unknown team action')
         }
         json(res, 200, controller.orchestration.snapshot(teamThreadId))
@@ -533,27 +548,27 @@ export function createRemoteHttpServer(
         if (!controller.contextVault) throw new HttpError(503, 'Context vault is unavailable')
         let id: string
         try { id = decodeURIComponent(groupMatch[1]) } catch { throw new HttpError(400, 'Malformed folder ID') }
-        json(res, 200, method === 'DELETE' ? controller.contextVault.deleteGroup(id)
-          : controller.contextVault.renameGroup(id, (await readJson(req)).name))
+        if (method === 'DELETE') json(res, 200, controller.contextVault.deleteGroup(id))
+        else { const body = await readJson(req); live(); json(res, 200, controller.contextVault.renameGroup(id, body.name)) }
         controller.orchestration?.changed()
         return
       }
       const groupThreadId = routeThread(url.pathname, '/group')
       if (groupThreadId && method === 'PUT') {
         if (!controller.contextVault) throw new HttpError(503, 'Context vault is unavailable')
-        const body = await readJson(req)
-        await controller.assertThreadAccess(groupThreadId)
-        json(res, 200, controller.contextVault.assignThread(groupThreadId, body.groupId))
+        const body = await readJson(req); live()
+        await controller.assertThreadAccess(groupThreadId, live); live()
+        live(); json(res, 200, controller.contextVault.assignThread(groupThreadId, body.groupId))
         controller.orchestration?.changed()
         return
       }
       if (url.pathname === '/api/threads' && method === 'GET') {
-        json(res, 200, await controller.listThreads())
+        json(res, 200, await controller.listThreads(live))
         return
       }
       if (url.pathname === '/api/threads' && method === 'POST') {
-        const body = await readJson(req)
-        json(res, 201, await controller.createThread(body.workspaceId, body.fullAccess ?? false, ...(body.groupId === undefined ? [] : [body.groupId])))
+        const body = await readJson(req); live()
+        json(res, 201, await controller.createThread(body.workspaceId, body.fullAccess ?? false, body.groupId, live))
         return
       }
 
@@ -563,13 +578,13 @@ export function createRemoteHttpServer(
       }
       const readStateThreadId = routeThread(url.pathname, '/read-state')
       if (readStateThreadId && method === 'POST') {
-        const body = await readJson(req)
+        const body = await readJson(req); live()
         if (!Array.isArray(body.ids) || body.ids.length > 1000 || body.ids.some(id => typeof id !== 'string' || id.length > 256)) {
           throw new HttpError(400, 'Invalid completed reply IDs')
         }
         // Validate access without requiring a full history to be available for a live reply.
-        await controller.assertThreadAccess(readStateThreadId)
-        json(res, 200, readState.acknowledge(readStateThreadId, body.ids as string[]))
+        await controller.assertThreadAccess(readStateThreadId, live); live()
+        live(); json(res, 200, readState.acknowledge(readStateThreadId, body.ids as string[]))
         return
       }
       if (url.pathname === '/api/workspace-skills' && method === 'GET') {
@@ -578,43 +593,43 @@ export function createRemoteHttpServer(
       }
       const skillsThreadId = routeThread(url.pathname, '/skills')
       if (skillsThreadId && method === 'GET') {
-        json(res, 200, await controller.listSkills(skillsThreadId, url.searchParams.get('refresh') === '1'))
+        json(res, 200, await controller.listSkills(skillsThreadId, url.searchParams.get('refresh') === '1', live))
         return
       }
       const messageIdsThreadId = routeThread(url.pathname, '/message-ids')
       if (messageIdsThreadId && method === 'GET') {
-        const result = await controller.readMessageIds(messageIdsThreadId)
+        const result = await controller.readMessageIds(messageIdsThreadId, live); live()
         readState.observe(messageIdsThreadId, result.ids)
         json(res, 200, result)
         return
       }
       const readThreadId = routeThread(url.pathname, '')
       if (readThreadId && method === 'GET') {
-        json(res, 200, await controller.readThread(readThreadId))
+        json(res, 200, await controller.readThread(readThreadId, live))
         return
       }
       const resumeThreadId = routeThread(url.pathname, '/resume')
       if (resumeThreadId && method === 'POST') {
-        json(res, 200, await controller.resumeThread(resumeThreadId))
+        json(res, 200, await controller.resumeThread(resumeThreadId, live))
         return
       }
       const archiveThreadId = routeThread(url.pathname, '/archive')
       const renameThreadId = routeThread(url.pathname, '/name')
       if (renameThreadId && method === 'POST') {
-        const body = await readJson(req)
-        json(res, 200, await controller.renameThread(renameThreadId, body.name))
+        const body = await readJson(req); live()
+        json(res, 200, await controller.renameThread(renameThreadId, body.name, undefined, live))
         return
       }
       if (archiveThreadId && method === 'POST') {
-        json(res, 200, await controller.archiveThread(archiveThreadId))
+        json(res, 200, await controller.archiveThread(archiveThreadId, undefined, undefined, live))
         return
       }
       const turnThreadId = routeThread(url.pathname, '/turns')
       if (turnThreadId && method === 'POST') {
-        const body = await readJson(req)
+        const body = await readJson(req); live()
         if (body.collaborationMode !== undefined && body.collaborationMode !== 'plan' && body.collaborationMode !== 'default') throw new HttpError(400, 'Invalid collaboration mode')
         if (!attachments && body.attachmentIds !== undefined) throw new HttpError(503, 'File attachments are unavailable')
-        const operation = (_paths: string[], files: UploadedFile[]) => controller.startTurn(turnThreadId, body.text ?? '', body.model, body.effort, body.fullAccess ?? false, files.filter(file => file.kind === 'image').map(file => file.path), files.filter(file => file.kind === 'file'), body.skills, body.collaborationMode)
+        const operation = (_paths: string[], files: UploadedFile[]) => controller.startTurn(turnThreadId, body.text ?? '', body.model, body.effort, body.fullAccess ?? false, files.filter(file => file.kind === 'image').map(file => file.path), files.filter(file => file.kind === 'file'), body.skills, body.collaborationMode, undefined, live)
         json(res, 202, attachments
           ? await attachments.use(body.attachmentIds, session, operation)
           : await operation([], []))
@@ -622,17 +637,17 @@ export function createRemoteHttpServer(
       }
       const interruptThreadId = routeThread(url.pathname, '/interrupt')
       if (interruptThreadId && method === 'POST') {
-        const body = await readJson(req)
-        await controller.assertThreadAccess(interruptThreadId)
-        controller.orchestration?.userStop(interruptThreadId)
-        json(res, 200, await controller.interruptTurn(interruptThreadId, body.turnId))
+        const body = await readJson(req); live()
+        await controller.assertThreadAccess(interruptThreadId, live); live()
+        live(); controller.orchestration?.userStop(interruptThreadId)
+        json(res, 200, await controller.interruptTurn(interruptThreadId, body.turnId, live))
         return
       }
 
       const requestMatch = url.pathname.match(/^\/api\/requests\/([^/]+)\/respond$/)
       if (requestMatch && method === 'POST') {
-        const body = await readJson(req)
-        controller.respondToRequest(decodeURIComponent(requestMatch[1]), body)
+        const body = await readJson(req); live()
+        live(); controller.respondToRequest(decodeURIComponent(requestMatch[1]), body)
         json(res, 200, { ok: true })
         return
       }

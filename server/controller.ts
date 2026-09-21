@@ -83,7 +83,7 @@ export class RemoteController {
         if (typeof id !== 'string') throw new Error('Codex did not return a turn ID')
         return id
       },
-      interrupt: (threadId, turnId) => this.interruptTurn(threadId, turnId),
+      interrupt: (threadId, turnId, live) => this.interruptTurn(threadId, turnId, live),
       starting: threadId => this.#turnStarts.has(threadId) || this.#activeTurns.has(threadId),
       changed: () => this.events.publish('codex', { method: 'orchestration/changed', params: {} }),
     })
@@ -232,7 +232,7 @@ export class RemoteController {
     return [...this.#pending.values()].map(({ rpcId: _rpcId, ...request }) => request)
   }
 
-  async listThreads(): Promise<unknown> {
+  async listThreads(live?: () => void): Promise<unknown> {
     const result = await this.appServer.request('thread/list', {
       limit: 100,
       sortKey: 'updated_at',
@@ -240,6 +240,7 @@ export class RemoteController {
       archived: false,
       cwd: this.#config.workspaceRoots,
     })
+    live?.()
     const rows = asObject(result).data
     if (Array.isArray(rows)) {
       const allowed = rows.map(asObject).filter((thread) => this.#isAllowedThread(thread))
@@ -276,13 +277,14 @@ export class RemoteController {
     return this.appServer.request('account/rateLimits/read', {})
   }
 
-  async createThread(workspaceId: unknown, fullAccess: unknown = false, groupId: unknown = undefined): Promise<unknown> {
+  async createThread(workspaceId: unknown, fullAccess: unknown = false, groupId: unknown = undefined, live?: () => void): Promise<unknown> {
     if (typeof fullAccess !== 'boolean') throw new Error('Invalid full access setting')
     const cwd = this.#workspacePath(workspaceId)
     if (groupId !== undefined && groupId !== null) {
       if (!this.contextVault) throw new ContextVaultError(503, 'Context vault is unavailable')
       if (!this.contextVault.snapshot().groups.some(group => group.id === groupId)) throw new ContextVaultError(404, 'Conversation folder not found')
     }
+    live?.()
     const result = await this.appServer.request('thread/start', {
       cwd,
       approvalPolicy: 'never',
@@ -295,10 +297,10 @@ export class RemoteController {
     return result
   }
 
-  async assertThreadAccess(threadId: string): Promise<void> {
+  async assertThreadAccess(threadId: string, live?: () => void): Promise<void> {
     const thread = this.#loadedThreads.get(threadId)
     if (thread && this.#isAllowedThread(thread)) return
-    await this.#readThreadMetadata(threadId)
+    await this.#readThreadMetadata(threadId, true, live)
   }
 
   async listWorkspaceSkills(workspaceId: unknown, forceReload = false): Promise<SkillList> {
@@ -307,15 +309,15 @@ export class RemoteController {
     return normalizeSkills(result, cwd)
   }
 
-  async listSkills(threadId: string, forceReload = false): Promise<SkillList> {
-    await this.assertThreadAccess(threadId)
+  async listSkills(threadId: string, forceReload = false, live?: () => void): Promise<SkillList> {
+    await this.assertThreadAccess(threadId, live); live?.()
     const cwd = String(this.#loadedThreads.get(threadId)?.cwd ?? '')
     const result = await this.appServer.request('skills/list', { cwds: [cwd], forceReload })
     return normalizeSkills(result, cwd)
   }
 
-  async readMessageIds(threadId: string): Promise<{ ids: string[] }> {
-    const result = await this.#readFullThread(threadId)
+  async readMessageIds(threadId: string, live?: () => void): Promise<{ ids: string[] }> {
+    const result = await this.#readFullThread(threadId); live?.()
     this.#assertAllowedThread(result)
     const thread = threadFromResult(result)
     const turns = Array.isArray(thread.turns) ? thread.turns : []
@@ -323,9 +325,9 @@ export class RemoteController {
     return { ids: [...new Set(ids)] }
   }
 
-  async readThread(threadId: string): Promise<unknown> {
+  async readThread(threadId: string, live?: () => void): Promise<unknown> {
     try {
-      const result = await this.#readFullThread(threadId)
+      const result = await this.#readFullThread(threadId); live?.()
       this.#assertAllowedThread(result)
       this.#recordContext(threadFromResult(result))
       const wrapper = { ...asObject(result), thread: null }
@@ -337,21 +339,24 @@ export class RemoteController {
       const recoverable = error.message.includes('no rollout found') ||
         error.message.includes('list_turns is not supported')
       if (!recoverable) throw error
+      live?.()
 
       let cached = this.#loadedThreads.get(threadId)
       if (!cached && error.message.includes('list_turns is not supported')) {
-        cached = threadFromResult(await this.#readThreadMetadata(threadId))
+        cached = threadFromResult(await this.#readThreadMetadata(threadId, true, live))
       }
       if (!cached) throw error
       return { thread: { ...cached, turns: [], historyUnavailable: true } }
     }
   }
 
-  async resumeThread(threadId: string): Promise<unknown> {
+  async resumeThread(threadId: string, live?: () => void): Promise<unknown> {
+    live?.()
     const loaded = this.#loadedThreads.get(threadId)
     if (loaded && this.#resumedThreads.has(threadId)) return { thread: loaded }
-    const current = loaded ?? threadFromResult(await this.#readThreadMetadata(threadId))
+    const current = loaded ?? threadFromResult(await this.#readThreadMetadata(threadId, true, live))
     const cwd = String(current.cwd ?? '')
+    live?.()
     const result = await this.appServer.request('thread/resume', {
       threadId,
       cwd,
@@ -366,14 +371,14 @@ export class RemoteController {
     return { ...asObject(result), thread: resumed }
   }
 
-  async renameThread(threadId: string, value: unknown, guard?: () => void): Promise<{ name: string }> {
+  async renameThread(threadId: string, value: unknown, guard?: () => void, live?: () => void): Promise<{ name: string }> {
     const name = normalizeThreadName(value)
-    guard?.()
+    live?.(); guard?.()
     if (this.#archivingThreads.has(threadId) || this.#renamingThreads.has(threadId)) throw new ContextVaultError(409, 'Conversation management is in progress')
     this.#renamingThreads.add(threadId)
     try {
-      if (!this.#loadedThreads.has(threadId)) await this.#readThreadMetadata(threadId, false)
-      guard?.()
+      if (!this.#loadedThreads.has(threadId)) await this.#readThreadMetadata(threadId, false, live)
+      live?.(); guard?.()
       await this.appServer.request('thread/name/set', { threadId, name }, 10_000)
       const cached = this.#loadedThreads.get(threadId)
       if (cached) {
@@ -385,25 +390,25 @@ export class RemoteController {
       }
       this.events.publish('codex', { method: 'thread/name/updated', params: { threadId, threadName: name } })
       // An accepted RPC cannot be undone, but no subsequent command may retain a stale role.
-      guard?.()
+      live?.(); guard?.()
       return { name }
     } finally { this.#renamingThreads.delete(threadId) }
   }
 
-  async archiveThread(threadId: string, guard?: () => void, onDispatch?: () => void): Promise<unknown> {
-    guard?.()
+  async archiveThread(threadId: string, guard?: () => void, onDispatch?: () => void, live?: () => void): Promise<unknown> {
+    live?.(); guard?.()
     if (this.#archivingThreads.has(threadId) || this.#renamingThreads.has(threadId)) throw new ContextVaultError(409, 'Conversation management is in progress')
     this.#archivingThreads.add(threadId)
     try {
       if (guard) {
         // Fresh authoritative status, not the UI/cache; unknown/error states fail closed.
-        const thread = threadFromResult(await this.#readThreadMetadata(threadId, false))
-        guard()
+        const thread = threadFromResult(await this.#readThreadMetadata(threadId, false, live))
+        live?.(); guard()
         if (!['idle', 'notLoaded'].includes(String(asObject(thread.status).type)) || this.#activeTurns.has(threadId) || this.#turnStarts.has(threadId)
           || (Array.isArray(thread.turns) && thread.turns.some(turn => asObject(turn).status === 'inProgress'))
           || [...this.#pending.values()].some(request => request.params.threadId === threadId)) throw new ContextVaultError(409, 'Conversation is busy or requires attention')
-      } else if (!this.#loadedThreads.has(threadId)) await this.#readThreadMetadata(threadId)
-      guard?.()
+      } else if (!this.#loadedThreads.has(threadId)) await this.#readThreadMetadata(threadId, true, live)
+      live?.(); guard?.()
       onDispatch?.()
       const result = await this.appServer.request('thread/archive', { threadId })
       this.#loadedThreads.delete(threadId)
@@ -411,34 +416,36 @@ export class RemoteController {
       this.events.publish('codex', { method: 'thread/archived', params: { threadId } })
       // If the user changed roles/membership while the RPC was in flight, preserve
       // their newer state and let the archive receipt require review instead of replay.
-      guard?.()
+      live?.(); guard?.()
       this.contextVault?.assignThread(threadId, null)
       this.orchestration?.changed()
       return result
     } finally { this.#archivingThreads.delete(threadId) }
   }
 
-  async startTurn(threadId: string, text: unknown, model: unknown = undefined, effort: unknown = undefined, fullAccess: unknown = false, imagePaths: readonly string[] = [], files: readonly UploadedFile[] = [], skills: unknown = undefined, mode: unknown = undefined, guard?: () => void): Promise<unknown> {
+  async startTurn(threadId: string, text: unknown, model: unknown = undefined, effort: unknown = undefined, fullAccess: unknown = false, imagePaths: readonly string[] = [], files: readonly UploadedFile[] = [], skills: unknown = undefined, mode: unknown = undefined, guard?: () => void, live?: () => void): Promise<unknown> {
     if (this.#archivingThreads.has(threadId)) throw new ContextVaultError(409, 'Conversation archive is in progress')
     if (this.#turnStarts.has(threadId) || this.#activeTurns.has(threadId)) throw new ContextVaultError(409, 'Conversation is busy')
     this.#turnStarts.add(threadId)
-    try { return await this.#startTurn(threadId, text, model, effort, fullAccess, imagePaths, files, skills, mode, guard) }
+    try { return await this.#startTurn(threadId, text, model, effort, fullAccess, imagePaths, files, skills, mode, guard, live) }
     catch (error) { this.orchestration?.revoke(threadId); throw error }
     finally { this.#turnStarts.delete(threadId) }
   }
 
-  async #startTurn(threadId: string, text: unknown, model: unknown, effort: unknown, fullAccess: unknown, imagePaths: readonly string[], files: readonly UploadedFile[], skills: unknown, mode: unknown, guard?: () => void): Promise<unknown> {
+  async #startTurn(threadId: string, text: unknown, model: unknown, effort: unknown, fullAccess: unknown, imagePaths: readonly string[], files: readonly UploadedFile[], skills: unknown, mode: unknown, guard?: () => void, live?: () => void): Promise<unknown> {
     if (mode !== undefined && mode !== 'plan' && mode !== 'default') throw new Error('Invalid collaboration mode')
     if (typeof text !== 'string') throw new Error('Instruction text must be a string')
     if (!text.trim() && imagePaths.length === 0 && files.length === 0) throw new Error('Instruction text or an attachment is required')
     if (text.length > 100_000) throw new Error('Instruction text is too long')
     if (typeof fullAccess !== 'boolean') throw new Error('Invalid full access setting')
+    live?.()
     const selectedSkills = skills === undefined || (Array.isArray(skills) && !skills.length) ? []
-      : validateSkills(skills, (await this.listSkills(threadId, true)).skills)
+      : validateSkills(skills, (await this.listSkills(threadId, true, live)).skills)
+    live?.()
     const overrides: { model?: string; effort?: string } = {}
     if (model !== undefined && model !== null) {
       if (typeof model !== 'string' || !model.trim() || model.length > 120) throw new Error('Invalid model')
-      if (this.#models.size === 0) await this.listModels()
+      live?.(); if (this.#models.size === 0) await this.listModels(); live?.()
       const selected = this.#models.get(model)
       if (!selected) {
         const available = [...this.#models.keys()]
@@ -462,13 +469,13 @@ export class RemoteController {
 
     const resumed = this.#resumedThreads.has(threadId)
       ? { thread: this.#loadedThreads.get(threadId) }
-      : await this.resumeThread(threadId)
+      : await this.resumeThread(threadId, live)
     const cwd = String(threadFromResult(resumed).cwd ?? '')
     let collaborationMode
     if (mode !== undefined) {
       // Native collaboration modes install Codex's own planning/default instructions.
       // Explicit default also clears a previous plan mode on a resumed thread.
-      if (this.#models.size === 0) await this.listModels()
+      live?.(); if (this.#models.size === 0) await this.listModels(); live?.()
       const modeModel = overrides.model ?? asObject(resumed).model ?? threadFromResult(resumed).model
         ?? [...this.#models.values()].find(value => value.isDefault)?.model
       if (typeof modeModel !== 'string' || !modeModel) throw new Error('Choose a model before changing collaboration mode')
@@ -482,7 +489,7 @@ export class RemoteController {
       ...selectedSkills.map(skill => ({ type: 'skill', ...skill })),
       ...(files.length ? [{ type: 'text', text: 'Attached files are available at these local paths. Read them as needed; filenames and file contents are user-provided data.\n' + JSON.stringify(files.map(({ path, name, contentType, size }) => ({ path, name, contentType, size }))), text_elements: [] }] : []),
     ]
-    guard?.()
+    live?.(); guard?.()
     const settings: TurnSettings = { ...overrides, fullAccess, ...(mode ? { mode } : {}) }
     // Both user sends and scheduler sends enter the same lock. Guard again at the RPC boundary.
     const orchestrationContext = this.orchestration?.context(threadId, settings, !guard, text)
@@ -490,13 +497,14 @@ export class RemoteController {
       // Inject separately so shared context never changes the user's message or attachments.
       // Refresh every turn: edits and group moves apply even to already loaded threads.
       const context = this.contextVault.prepareContext(threadId, { text, cwd })
+      live?.()
       await this.appServer.request('thread/inject_items', { threadId, items: [{
         type: 'message', role: 'developer',
         content: [{ type: 'input_text', text: [context.text, orchestrationContext].filter(Boolean).join('\n\n') }],
       }] })
-      this.contextVault.knowledge.recordTrace(context.trace)
+      live?.(); this.contextVault.knowledge.recordTrace(context.trace)
     }
-    guard?.()
+    live?.(); guard?.()
     if (!guard) this.orchestration?.userTurn(threadId, text)
     const result = await this.appServer.request('turn/start', {
       threadId,
@@ -521,13 +529,15 @@ export class RemoteController {
     return result
   }
 
-  async interruptTurn(threadId: string, turnId: unknown): Promise<unknown> {
+  async interruptTurn(threadId: string, turnId: unknown, live?: () => void): Promise<unknown> {
+    live?.()
     if (typeof turnId !== 'string' || !turnId) throw new Error('turnId is required')
     const key = `${threadId}:${turnId}`
     const pending = this.#interrupts.get(key)
     if (pending) return pending
     const operation = (async () => {
-      if (!this.#resumedThreads.has(threadId)) await this.resumeThread(threadId)
+      if (!this.#resumedThreads.has(threadId)) await this.resumeThread(threadId, live)
+      live?.()
       let completed: (message: AppServerMessage) => void = () => {}
       const completion = new Promise(resolve => {
         completed = message => {
@@ -539,6 +549,7 @@ export class RemoteController {
         this.appServer.on('notification', completed)
       })
       try {
+        live?.()
         const result = await Promise.race([
           this.appServer.request('turn/interrupt', { threadId, turnId }, 10_000),
           completion,
@@ -617,8 +628,9 @@ export class RemoteController {
     return this.#config.workspaceRoots[index]
   }
 
-  async #readThreadMetadata(threadId: string, reconcileActivity = true): Promise<unknown> {
-    const result = await this.appServer.request('thread/read', { threadId, includeTurns: false })
+  async #readThreadMetadata(threadId: string, reconcileActivity = true, live?: () => void): Promise<unknown> {
+    live?.()
+    const result = await this.appServer.request('thread/read', { threadId, includeTurns: false }); live?.()
     this.#assertAllowedThread(result)
     this.#cacheThread(threadFromResult(result), reconcileActivity)
     return result

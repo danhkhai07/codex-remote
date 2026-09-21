@@ -27,7 +27,7 @@ export type OrchestrationDriver = {
   rename: (threadId: string, name: string, guard?: () => void) => Promise<unknown>
   archive: (threadId: string, guard: () => void, onDispatch: () => void) => Promise<unknown>
   start: (threadId: string, text: string, settings: TurnSettings, guard: () => void) => Promise<string>
-  interrupt: (threadId: string, turnId: string) => Promise<unknown>
+  interrupt: (threadId: string, turnId: string, live?: () => void) => Promise<unknown>
   starting: (threadId: string) => boolean
   changed: () => void
 }
@@ -327,14 +327,14 @@ export class ConversationOrchestrator {
     }
     this.kick()
   }
-  async cancel(taskId: string, reason = 'Stopped by the user') {
+  async cancel(taskId: string, reason = 'Stopped by the user', live?: () => void) {
     const task = this.#state.tasks.find(task => task.id === taskId)
     if (!task) throw new ContextVaultError(404, 'Task not found')
     if (!active(task)) return
     const turnId = task.turnId
-    task.status = 'stopping'; this.#save()
+    live?.(); task.status = 'stopping'; this.#save()
     if (turnId) {
-      try { await this.#driver.interrupt(task.threadId, turnId) }
+      try { await this.#driver.interrupt(task.threadId, turnId, live) }
       catch (error) {
         // A failed interrupt must stay actionable, not look like a stopped worker.
         if (task.status === 'stopping') { task.status = 'running'; task.result = 'Could not confirm the stop. Retry stopping this task.'; this.#save() }

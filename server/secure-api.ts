@@ -1,3 +1,4 @@
+import { bindRequestLifetime } from './request-lifetime.js'
 import { LoginRateLimiter } from './login-rate-limit.js'
 import { requestIp } from './request-ip.js'
 import type { SecureKey } from './secure-wire.js'
@@ -152,6 +153,10 @@ export class SecureApi {
         clearTimeout(timer); timer = undefined
         const inner = Readable.from(parts) as IncomingMessage
         Object.assign(inner, { method: head.method, url: head.path, headers: { ...head.headers, host: req.headers.host, cookie: req.headers.cookie, origin: req.headers.origin, 'content-length': String(inputBytes) }, socket: req.socket })
+        bindRequestLifetime(inner, () => {
+          this.#refresh()
+          if (res.destroyed || !valid()) throw Error('Secure request authorization expired')
+        })
         // Logout may revoke its own channel; only its minimal completion may finish.
         const logout = head.path === '/api/session/logout' && head.method === 'POST'
         if (logout) channel.active.delete(res)
