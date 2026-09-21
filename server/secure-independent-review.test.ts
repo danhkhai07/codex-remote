@@ -86,11 +86,11 @@ it.each(['logout','expiry','rotation'] as const)('R3 reproduces native side effe
  expect(interrupt).not.toHaveBeenCalled();gate.resolve();await effect.promise
  expect(interrupt).toHaveBeenCalledTimes(1) // BUG: effect occurs only AFTER revocation, no real RPC.
 })
-it('R4 detects all five fixture temp paths left at host compiled defaults without running Nginx',async()=>{
- const source=await readFile(new URL('../scripts/secure-proxy-fixture.mjs',import.meta.url),'utf8')
- const block=source.slice(source.indexOf('`daemon off;'),source.indexOf('await promisify(execFile)'))
- const missing=['client_body_temp_path','proxy_temp_path','fastcgi_temp_path','uwsgi_temp_path','scgi_temp_path'].filter(p=>!block.includes(p))
- expect(missing).toHaveLength(5)
- expect(source).toContain("['-t', '-p', root, '-c', nginxConfig]")
- // Review-only static safety finding; NEVER execute this fixture on the VPS.
+it('R4 confines all Nginx paths and both starts to non-root filesystem restrictions',async()=>{
+ const source=await readFile(new URL('../scripts/nginx-fixture.mjs',import.meta.url),'utf8')
+ for (const name of ['client_body_temp_path','proxy_temp_path','fastcgi_temp_path','uwsgi_temp_path','scgi_temp_path']) expect(source).toContain(name)
+ for (const rule of ['pid ${root}/nginx.pid','lock_file ${root}/nginx.lock','error_log ${root}/error.log','access_log ${root}/access.log', "['-e', 'stderr'", 'User=nobody', 'ProtectSystem=strict', 'ReadWritePaths=${root}', "'-t', ...nginxArgs"]) expect(source).toContain(rule)
+ const fixture=await readFile(new URL('../scripts/secure-proxy-fixture.mjs',import.meta.url),'utf8')
+ expect(fixture).toContain('await hostNginxIdentity(), hostBefore')
+ expect(fixture).not.toContain('spawn(binary')
 })
