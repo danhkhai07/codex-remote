@@ -3,12 +3,15 @@ import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
 import { api } from './api'
 import { useScreenState } from './screenState'
 
-export default function PptxPreview({ path, name }: { path: string; name: string }) {
+export default function PptxPreview({ path, name, format = 'pptx' }: { path: string; name: string; format?: 'pptx' | 'pdf' }) {
+  const pdfSource = format === 'pdf'
+  const unit = pdfSource ? 'trang' : 'slide'
+  const label = pdfSource ? 'PDF' : 'PPTX'
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null)
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
-  const [page, setPage] = useScreenState(`pptx:${path}:page`, 1)
-  const [zoom, setZoom] = useScreenState(`pptx:${path}:zoom`, 1)
+  const [page, setPage] = useScreenState(`${format}:${path}:page`, 1)
+  const [zoom, setZoom] = useScreenState(`${format}:${path}:zoom`, 1)
   const [width, setWidth] = useState(320)
   const [rendering, setRendering] = useState(false)
   const host = useRef<HTMLDivElement>(null)
@@ -25,7 +28,7 @@ export default function PptxPreview({ path, name }: { path: string; name: string
     void (async () => {
       const [library, blob] = await Promise.all([
         import('pdfjs-dist/legacy/build/pdf.mjs'),
-        api.pptxPreview(path, AbortSignal.any([controller.signal, AbortSignal.timeout(60_000)])),
+        (pdfSource ? api.pdfPreview : api.pptxPreview)(path, AbortSignal.any([controller.signal, AbortSignal.timeout(60_000)])),
       ])
       if (disposed) return
       library.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).href
@@ -33,9 +36,9 @@ export default function PptxPreview({ path, name }: { path: string; name: string
       if (disposed) { void task.destroy(); return }
       const document = await task.promise
       if (!disposed) setPdf(document)
-    })().catch(reason => { if (!disposed) setError(reason instanceof Error ? reason.message : 'Không mở được bản xem trước PPTX.') })
+    })().catch(reason => { if (!disposed) setError(reason instanceof Error ? reason.message : `Không mở được bản xem trước ${label}.`) })
     return () => { disposed = true; controller.abort(); void task?.destroy() }
-  }, [path, attempt])
+  }, [path, attempt, pdfSource, label])
 
   useEffect(() => {
     if (!host.current) return
@@ -64,25 +67,25 @@ export default function PptxPreview({ path, name }: { path: string; name: string
       render = slide.render({ canvas: target, viewport, transform: [ratio, 0, 0, ratio, 0, 0] })
       await render.promise
     }).catch(reason => {
-      if (!disposed) setError(reason instanceof Error ? reason.message : 'Không hiển thị được slide.')
+      if (!disposed) setError(reason instanceof Error ? reason.message : `Không hiển thị được ${unit}.`)
     }).finally(() => { if (!disposed) setRendering(false) })
     return () => { disposed = true; render?.cancel() }
-  }, [pdf, currentPage, currentZoom, width])
+  }, [pdf, currentPage, currentZoom, width, unit])
 
   return <div className="pptx-preview">
     <div className="pptx-slides" ref={host} aria-busy={!pdf || rendering}>
-      {error ? <div className="file-viewer-empty" role="alert"><strong>Không xem được PPTX</strong><p>{error}</p><button type="button" className="quiet-button" onClick={() => setAttempt(value => value + 1)}>Thử lại</button></div>
-        : !pdf ? <div className="file-viewer-empty" role="status"><span className="spinner" /><p>Đang tạo bản xem trước PPTX…</p><small>Lần đầu có thể mất tới 45 giây.</small></div>
-          : <canvas ref={canvas} role="img" aria-label={`${name} — slide ${currentPage} / ${pdf.numPages}`} />}
+      {error ? <div className="file-viewer-empty" role="alert"><strong>Không xem được {label}</strong><p>{error}</p><button type="button" className="quiet-button" onClick={() => setAttempt(value => value + 1)}>Thử lại</button></div>
+        : !pdf ? <div className="file-viewer-empty" role="status"><span className="spinner" /><p>Đang mở bản xem trước {label}…</p>{!pdfSource && <small>Lần đầu có thể mất tới 45 giây.</small>}</div>
+          : <canvas ref={canvas} role="img" aria-label={`${name} — ${unit} ${currentPage} / ${pdf.numPages}`} />}
     </div>
-    <div className="pptx-toolbar" aria-label="Điều khiển slide">
-      <button type="button" className="quiet-button" disabled={!pdf || currentPage <= 1} onClick={() => setPage(currentPage - 1)} aria-label="Slide trước">←</button>
+    <div className="pptx-toolbar" aria-label={`Điều khiển ${unit}`}>
+      <button type="button" className="quiet-button" disabled={!pdf || currentPage <= 1} onClick={() => setPage(currentPage - 1)} aria-label={pdfSource ? 'Trang trước' : 'Slide trước'}>←</button>
       <span aria-live="polite">{pdf ? `${currentPage} / ${pdf.numPages}` : '— / —'}</span>
-      <button type="button" className="quiet-button" disabled={!pdf || currentPage >= pdf.numPages} onClick={() => setPage(currentPage + 1)} aria-label="Slide sau">→</button>
-      <button type="button" className="quiet-button" disabled={!pdf || currentZoom <= 0.5} onClick={() => setZoom(currentZoom - 0.25)} aria-label="Thu nhỏ slide">−</button>
+      <button type="button" className="quiet-button" disabled={!pdf || currentPage >= pdf.numPages} onClick={() => setPage(currentPage + 1)} aria-label={pdfSource ? 'Trang sau' : 'Slide sau'}>→</button>
+      <button type="button" className="quiet-button" disabled={!pdf || currentZoom <= 0.5} onClick={() => setZoom(currentZoom - 0.25)} aria-label={`Thu nhỏ ${unit}`}>−</button>
       <button type="button" className="quiet-button" disabled={!pdf} onClick={() => setZoom(1)} title="Vừa chiều rộng">{Math.round(currentZoom * 100)}%</button>
-      <button type="button" className="quiet-button" disabled={!pdf || currentZoom >= 3} onClick={() => setZoom(currentZoom + 0.25)} aria-label="Phóng to slide">+</button>
+      <button type="button" className="quiet-button" disabled={!pdf || currentZoom >= 3} onClick={() => setZoom(currentZoom + 0.25)} aria-label={`Phóng to ${unit}`}>+</button>
     </div>
-    <p className="pptx-note">Bản xem tĩnh · Không chạy hiệu ứng, âm thanh hoặc video.</p>
+    <p className="pptx-note">{pdfSource ? 'Bản xem tĩnh · Tải bản gốc để dùng biểu mẫu và các chức năng PDF khác.' : 'Bản xem tĩnh · Không chạy hiệu ứng, âm thanh hoặc video.'}</p>
   </div>
 }

@@ -357,7 +357,7 @@ export function FileViewer({ reference, onClose, onOpenFile, onOpenLink }: {
           <SecureHtml frameRef={htmlFrameRef} key={`${reference.path}:${attempt}`} path={reference.path} title={info.name} />
         )}
         {!error && info?.kind === 'image' && <SecureMedia path={reference.path} title={info.name} image />}
-        {!error && info?.kind === 'pdf' && <SecureMedia path={reference.path} title={info.name} />}
+        {!error && info?.kind === 'pdf' && <Suspense fallback={<span className="spinner" aria-label="Đang tải trình xem PDF" />}><PptxPreview key={reference.path} path={reference.path} name={info.name} format="pdf" /></Suspense>}
         {!error && info?.kind === 'pptx' && info.previewable && <Suspense fallback={<span className="spinner" aria-label="Đang tải trình xem slide" />}><PptxPreview key={reference.path} path={reference.path} name={info.name} /></Suspense>}
         {!error && info?.kind === 'docx' && info.previewable && <DocxPreview key={reference.path} stateKey={reference.path} blob={docxBlob} name={info.name} onOpenLink={href => {
           const local = resolveMarkdownFileReference(href, reference.path)

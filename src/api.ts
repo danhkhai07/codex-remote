@@ -87,6 +87,7 @@ export const api = {
   htmlText: (path: string) => requestText(`/api/files/html-preview?${new URLSearchParams({ path })}`),
   fileText: (path: string) => requestText(serverFileUrl(path)),
   fileBlob: (path: string) => requestBlob(serverFileUrl(path, true)),
+  pdfPreview: (path: string, signal: AbortSignal) => requestBlob(serverFileUrl(path), signal, 64 * 1024 * 1024),
   pptxPreview: (path: string, signal: AbortSignal) => requestBlob(`/api/files/pptx-preview?${new URLSearchParams({ path })}`, signal, 32 * 1024 * 1024),
   uploadAttachment: (file: File, csrf: string) => request<{ id: string; size: number; contentType: string }>(`/api/attachments?${new URLSearchParams({ name: file.name })}`, {
     method: 'POST',
