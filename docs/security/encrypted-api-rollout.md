@@ -72,7 +72,14 @@ live transcript/cursor pair or open history offline.
 saves on compatible desktop browsers. Other browsers use an explicit 64 MiB Blob
 fallback; larger saves fail visibly. Mobile/Safari large-file parity is not
 implemented, and actual iOS/Safari/password-manager products were not tested.
-Existing native-share and text/DOCX/PPTX conversion limits remain. The Files HTML
+PDF/DOCX/PPTX renderer fidelity was not re-proven with end-to-end document fixtures
+in this task; the checked Files browser paths were HTML/text, raw binary save and
+upload. Include those document formats in the independent compatibility review.
+Existing native-share and text/DOCX/PPTX conversion limits remain. Blob collectors
+enforce actual response bytes as well as declared length: 20 MiB for share/DOCX,
+32 MiB for a PPTX's converted PDF, 64 MiB for other file-preview/download fallbacks.
+This also bounds a file that grows between metadata inspection and content fetch.
+The Files HTML
 viewer receives plaintext only in an opaque sandbox (allow-scripts without
 allow-same-origin; connections/forms/remote resources denied). DOCX has a static
 script-free render shell; PDF/images use revocable object URLs. No plaintext URL
@@ -184,7 +191,7 @@ All checks use codex-heavy with one Vitest worker, fake credentials/native RPC,
 temporary listeners/key files and no real model turn. Existing integration/security
 worktree and runtime were left unchanged.
 
-Final `npm run check`: 406 Vitest tests in 70 files, 11 Node tests, lint, TypeScript,
+Final `npm run check`: 409 Vitest tests in 71 files, 11 Node tests, lint, TypeScript,
 client/server builds and PWA validation pass. Fixture commands below also pass.
 
 Reproduction commands, after build:

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
+import { boundedBlob } from './boundedBlob'
 import { api, serverFileUrl } from './api'
 import { secureFetch, secureObjectUrl, secureRequired, revokeSecureUrl } from './secureApi'
 export function SecureHtml({ path, title, frameRef }: { path: string; title: string; frameRef?: RefObject<HTMLIFrameElement | null> }) {
@@ -27,13 +28,6 @@ export function SecureMedia({ path, title, image = false }: { path: string; titl
   if (error) return <p role="alert">{error}</p>
   if (!url) return <p role="status">Đang mở tệp…</p>
   return image ? <img src={url} alt={title} /> : <iframe src={url} title={title} sandbox="allow-same-origin" />
-}
-async function boundedBlob(response: Response, limit: number) {
-  if (!response.body) throw Error('Missing file body')
-  const reader = response.body.getReader(), parts: Uint8Array<ArrayBuffer>[] = []; let size = 0
-  try { while (true) { const next = await reader.read(); if (next.done) break; size += next.value.length; if (size > limit) throw Error('Tệp vượt giới hạn trình duyệt. Dùng trình duyệt hỗ trợ lưu trực tiếp.'); parts.push(new Uint8Array(next.value)) } }
-  finally { await reader.cancel().catch(() => {}); reader.releaseLock() }
-  return new Blob(parts, { type: response.headers.get('content-type') ?? 'application/octet-stream' })
 }
 export async function downloadSecureFile(path: string, name: string, size: number) {
   const picker = (window as unknown as { showSaveFilePicker?: (options: { suggestedName: string }) => Promise<{ createWritable(): Promise<WritableStream<Uint8Array>> }> }).showSaveFilePicker

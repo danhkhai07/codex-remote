@@ -1,4 +1,5 @@
 import { secureFetch } from './secureApi'
+import { boundedBlob } from './boundedBlob'
 import type { SkillList, SkillSelection } from '../server/skills'
 import type { ServiceInput, ServicesSnapshot } from '../server/services'
 import type { ReplySnapshot } from '../server/read-state'
@@ -50,13 +51,13 @@ async function requestText(path: string): Promise<string> {
   return response.text()
 }
 
-async function requestBlob(path: string, signal?: AbortSignal): Promise<Blob> {
+async function requestBlob(path: string, signal?: AbortSignal, limit = 20 * 1024 * 1024): Promise<Blob> {
   const response = await secureFetch(path, { credentials: 'same-origin', signal })
   if (!response.ok) {
     const body = await response.json().catch(() => ({})) as { error?: string }
     throw new ApiError(response.status, body.error ?? `Request failed (${response.status})`)
   }
-  return response.blob()
+  return boundedBlob(response, limit)
 }
 
 export const api = {
@@ -85,7 +86,7 @@ export const api = {
   htmlText: (path: string) => requestText(`/api/files/html-preview?${new URLSearchParams({ path })}`),
   fileText: (path: string) => requestText(serverFileUrl(path)),
   fileBlob: (path: string) => requestBlob(serverFileUrl(path, true)),
-  pptxPreview: (path: string, signal: AbortSignal) => requestBlob(`/api/files/pptx-preview?${new URLSearchParams({ path })}`, signal),
+  pptxPreview: (path: string, signal: AbortSignal) => requestBlob(`/api/files/pptx-preview?${new URLSearchParams({ path })}`, signal, 32 * 1024 * 1024),
   uploadAttachment: (file: File, csrf: string) => request<{ id: string; size: number; contentType: string }>(`/api/attachments?${new URLSearchParams({ name: file.name })}`, {
     method: 'POST',
     headers: { 'Content-Type': file.type || 'application/octet-stream' },
