@@ -18,7 +18,7 @@
     "build:server": "tsc -p tsconfig.server.json",
     "build": "npm run typecheck && npm run build:client && npm run build:server",
     "lint": "oxlint server src scripts vite.config.ts",
-    "test": "vitest run",
+    "test": "vitest run --exclude scripts/restart-readiness.test.mjs && node --test scripts/restart-readiness.test.mjs",
     "smoke": "node scripts/smoke.mjs",
     "check:pwa": "node scripts/validate-pwa.mjs",
     "check": "npm run lint && npm run test && npm run build && npm run check:pwa"
