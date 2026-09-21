@@ -4,6 +4,8 @@ import { dirname, join, resolve, relative } from 'node:path'
 import { execFileSync } from 'node:child_process'
 export const APP = '80843c0947c5e665a51a6207dbb871bf2c06a421'
 export const BASE = '783b1e3ae0efd683458c9fa0b3518b2e476b06a9'
+// APP identifies deployed executable bytes. SOURCE adds only independent tests/report.
+export const SOURCE = '00f9e197285e9c918372367f626c0b744d47d0d6'
 export const HOURS = 'b763a0f7b74c0341684e196855e85b3f5e3b123915a373b27463c17916702e93'
 export const HOSTS = [2345, 5180, 5210, 5211, 5212, 5213, 5215].map(port => `p${port}.danhkhai.io.vn`)
 export const MAIN = '/root/RUNNING-SERVICES/codex-remote'
@@ -25,6 +27,19 @@ export function record(path) {
     return { ...meta, size: stat.size, sha256: fileHash(path) }
   } catch (error) { if (error.code === 'ENOENT') return { absent: true }; throw error }
 }
+export function preimage(path) {
+  const value = record(path)
+  if (value.absent) return value
+  const stat = lstatSync(path)
+  return { ...value, dev: stat.dev, ino: stat.ino, mtimeMs: stat.mtimeMs }
+}
+export function parentIdentity(path) {
+  const value = record(path)
+  if (value.absent) return value
+  assert(value.directory, 'destination-parent-not-directory')
+  const stat = lstatSync(path)
+  return { ...value, dev: stat.dev, ino: stat.ino }
+}
 export function tree(root, prefix = '', output = {}) {
   for (const name of readdirSync(join(root, prefix)).sort()) {
     const path = join(prefix, name), value = record(join(root, path))
@@ -33,7 +48,8 @@ export function tree(root, prefix = '', output = {}) {
   }
   return output
 }
-export function same(actual, expected, code) { assert(JSON.stringify(actual) === JSON.stringify(expected), code) }
+const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value
+export function same(actual, expected, code) { assert(JSON.stringify(canonical(actual)) === JSON.stringify(canonical(expected)), code) }
 export function inside(root, name) {
   assert(typeof name === 'string' && name && !name.startsWith('/') && !name.split('/').includes('..'), 'unsafe-artifact-path')
   const target = resolve(root, name)
