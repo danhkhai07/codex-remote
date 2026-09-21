@@ -24,7 +24,7 @@ for (const item of inventory.groups.backend) assert.equal(fileHash(join(release,
 const meta = json(join(release, 'metadata.json'))
 assert.equal(meta.sourceTarget, SOURCE)
 assert.equal(git('diff', '--name-only', APP, SOURCE).trim(), 'docs/security/encrypted-api-rereview-80843c0.md\nserver/secure-independent-review.test.ts')
-for (const name of ['common.mjs', 'production.mjs', 'runner.mjs', 'verify.mjs', 'destinations.mjs', 'publication.mjs', 'lock.mjs']) assert.equal(readFileSync(join(release, 'runner', name), 'utf8'), git('show', meta.runnerSource + ':scripts/secure-release/' + name))
+for (const name of ['common.mjs', 'production.mjs', 'runner.mjs', 'verify.mjs', 'destinations.mjs', 'publication.mjs', 'lock.mjs', 'key-state.mjs', 'key-cutover.mjs', 'cutover-ops.mjs', 'cutover-bin/systemctl']) assert.equal(readFileSync(join(release, 'runner', name), 'utf8'), git('show', meta.runnerSource + ':scripts/secure-release/' + name))
 for (const name of ['package.json', 'package-lock.json']) assert.equal(readFileSync(join(release, 'dependencies', name), 'utf8'), git('show', APP + ':' + name))
 let checkedSources = 0
 for (const item of inventory.groups.client.filter(item => item.path.endsWith('.map'))) {

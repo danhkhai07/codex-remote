@@ -1,5 +1,5 @@
 import { readFileSync, mkdirSync, existsSync, realpathSync, lstatSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseEnv } from 'node:util'
 import { spawn } from 'node:child_process'
@@ -8,6 +8,7 @@ import { APP, BASE, SOURCE, HOURS, HOSTS, MAIN, assert, json, fileHash, hash, re
 import { Destinations } from './destinations.mjs'
 import { Publication } from './publication.mjs'
 import { DeploymentLock } from './lock.mjs'
+import { provisionPlan, ownerIdentity, boundOwner, processStart } from './key-state.mjs'
 const publicOrigin = 'https://codex.danhkhai.io.vn'
 const sites = { admin: '/etc/nginx/sites-available/codex.danhkhai.io.vn', preview: '/etc/nginx/sites-available/codex-preview-ports', ip: '/etc/nginx/snippets/codex-cloudflare-real-ip.conf' }
 export const requiredEvidence = ['protocol', 'infrastructure', 'migration', 'workboard', 'fixtures']
@@ -30,7 +31,7 @@ export function productionOps(release) {
   const meta = json(join(release, 'metadata.json')), baseline = json(join(release, 'baseline.json')), inventory = json(join(release, 'inventory.json'))
   assert(meta.app === APP && meta.main === MAIN && meta.release === release && meta.hours === HOURS && meta.requiredEncryption === true, 'wrong-release')
   const outside = release + '.activation', marker = outside + '/attempt.json', lock = '/root/.local/state/codex-remote/deployment.lock'
-  let sourceIntegrated = false, copied = false, clientPublished = false, newClient, config, ownedWatcher, boundReadiness, ownerReader, workboardInstalled = false
+  let sourceIntegrated = false, copied = false, clientPublished = false, newClient, config, ownedWatcher, boundReadiness, ownerReader, keyLocation, boundKey, cutoverArmed = false, workboardInstalled = false
   assert(meta.sourceTarget === SOURCE, 'source-target-not-reviewed')
   const destinations = new Destinations(baseline.destinations.entries, baseline.destinations.parents)
   const expectedNginx = structuredClone(baseline.nginxFiles)
@@ -86,18 +87,23 @@ export function productionOps(release) {
     const actual = tree(join(MAIN, 'dist-server'))
     assert(JSON.stringify(Object.entries(actual).sort()) === JSON.stringify(Object.entries(expected).sort()), 'backend-or-excluded-module-drift')
   }
-  async function candidateConfig() {
+  async function candidateConfig(preKey = true) {
     const { loadConfig } = await import(pathToFileURL(join(release, 'operator/dist-server/config.js')).href)
     config = loadConfig({ ...envBase(), ...envPatch, NODE_ENV: 'production' })
     assert(config.secureApiRequired && config.publicOrigin.origin === publicOrigin && config.host === '127.0.0.1' && config.port === 5173, 'required-config-contract')
-    const { readOwnerKey } = await import(pathToFileURL(join(release, 'operator/dist-server/secure-key.js')).href)
-    ownerReader = readOwnerKey
-    return keyIdentity()
+    const { readOwnerKey, assertKeyLocation } = await import(pathToFileURL(join(release, 'operator/dist-server/secure-key.js')).href)
+    ownerReader = readOwnerKey; keyLocation = assertKeyLocation
+    return preKey ? provisionPlan(meta, keyLocation) : keyIdentity()
   }
-  function keyIdentity() {
-    assert((lstatSync(dirname(meta.keyFile)).mode & 0o077) === 0 && lstatSync(dirname(meta.keyFile)).uid === 0, 'key-directory-permissions')
-    const value = ownerReader(meta.keyFile, meta.fileRoots)
-    return { app: value.app, generation: value.generation, digest: hash(JSON.stringify(value)), metadata: record(meta.keyFile), directory: record(dirname(meta.keyFile)) } // Hash/identity only; no key material.
+  function keyIdentity() { return ownerIdentity(meta, ownerReader) }
+  function keyBoundary() {
+    if (!cutoverArmed) { same(provisionPlan(meta, keyLocation), boundReadiness.provision, 'armed-provision-plan-drift'); return }
+    if (record(meta.keyFile).absent) { assert(!boundKey, 'bound-owner-key-removed'); return }
+    assert(processStart(baseline.oldProcess.pid) !== baseline.oldProcess.start, 'owner-key-exposed-to-old-process')
+    if (boundKey) { same(keyIdentity(), boundKey, 'bound-owner-key-drift'); return }
+    if (!record(join(outside, 'key-binding.json')).absent) { boundOwner(release, meta, fileHash(join(release, 'seal.json')), ownerReader); return }
+    const state = json(join(outside, 'key-cutover-state.json'))
+    assert(state.status === 'running' && ['generate-owner-key', 'bind-owner-key'].includes(state.phase), 'unexpected-unbound-owner-key')
   }
   function receiptBinding(evidence) {
     return { evidence: record(join(outside, 'evidence.json')), authority: record(join(outside, 'authorization.json')),
@@ -106,7 +112,7 @@ export function productionOps(release) {
       }))) }
   }
   async function gates(applying = false, bind = false) {
-    const blockers = meta.activationEligible === true ? [] : ['review-release-not-activation-eligible']; let seal, key, evidence = {}, receipts
+    const blockers = meta.activationEligible === true ? [] : ['review-release-not-activation-eligible']; let seal, provision, evidence = {}, receipts
     try { seal = sealCheck() } catch (error) { blockers.push(error.message) }
     try { stableCheck() } catch (error) { blockers.push(error.message) }
     try { same(tree(join(MAIN, 'node_modules')), baseline.dependencies, 'dependency-baseline-drift') } catch (error) { blockers.push(error.message) }
@@ -116,7 +122,7 @@ export function productionOps(release) {
     // whenever its own receipt is valid, even if migration/key readiness is pending.
     const infraErrors = evidenceErrors(outside, seal, evidence).filter(error => error.includes('infrastructure') || error.includes('dns-tls'))
     if (!infraErrors.length) { try { await verifyInfrastructure(evidence.infrastructure) } catch (error) { blockers.push(error.message) } }
-    try { key = await candidateConfig() } catch { blockers.push('private-owner-key-or-required-config-not-ready') }
+    try { provision = await candidateConfig(); assert(record(join(outside, 'key-binding.json')).absent, 'previous-key-binding'); same(command('/usr/bin/systemctl', ['show', 'codex-remote.service', '-p', 'Type', '-p', 'KillMode', '-p', 'SendSIGKILL', '-p', 'TriggeredBy', '-p', 'ControlGroup']), baseline.cutoverPolicy, 'service-stop-policy-drift') } catch (error) { blockers.push('pre-key-provision-not-ready:' + error.message) }
     if (applying) {
       try {
         const authority = json(join(outside, 'authorization.json'))
@@ -126,7 +132,7 @@ export function productionOps(release) {
         blockers.push(...evidenceErrors(outside, seal, json(join(outside, 'evidence.json'))))
         sourceCheck() // DNS/TLS/key awaits must not hide a concurrent Git transition.
       } catch (error) { blockers.push(error.message) }
-      const current = { receipts, key }
+      const current = { receipts, provision }
       if (boundReadiness) { try { same(current, boundReadiness, 'armed-readiness-changed') } catch (error) { blockers.push(error.message) } }
       if (bind && !blockers.length) boundReadiness = structuredClone(current)
     }
@@ -144,14 +150,15 @@ export function productionOps(release) {
     const evidence = json(join(outside, 'evidence.json')), authority = json(join(outside, 'authorization.json'))
     assert(Date.now() >= Date.parse(authority.at) && Date.now() - Date.parse(authority.at) < 60 * 60_000, 'execution-readiness-expired')
     assert(!evidenceErrors(outside, fileHash(join(release, 'seal.json')), evidence).length, 'execution-evidence-expired-or-invalid')
-    same({ receipts: receiptBinding(evidence), key: keyIdentity() }, boundReadiness, 'armed-readiness-changed')
+    same(receiptBinding(evidence), boundReadiness.receipts, 'armed-readiness-changed')
+    keyBoundary()
   }
   const runOld = (args, wait = false) => {
     const script = join(release, 'old/scripts/restart-when-idle.mjs')
     if (!wait) return jsonOutput(command(process.execPath, ['--env-file=' + join(MAIN, '.env'), script, ...args], MAIN, { PATH: process.env.PATH, HOME: '/root' }))
     return new Promise((resolve, reject) => {
       // Do not inherit CODEX_REMOTE_* overrides; the sealed old config must use original env values.
-      const child = spawn(process.execPath, ['--env-file=' + join(outside, 'backup/original.env'), script], { cwd: MAIN, stdio: 'ignore', env: { PATH: process.env.PATH, HOME: '/root' } })
+      const child = spawn(process.execPath, ['--env-file=' + join(outside, 'backup/original.env'), script], { cwd: MAIN, stdio: 'ignore', env: { PATH: join(release, 'runner/cutover-bin') + ':' + process.env.PATH, HOME: '/root' } })
       ownedWatcher = child
       const timer = setInterval(() => { try { sealCheck(); boundNow(); stableCheck({ after: serviceIdentity('codex-remote.service') !== baseline.service }) } catch { child.kill('SIGTERM') } }, 5000)
       const timeout = setTimeout(() => child.kill('SIGTERM'), 12 * 60 * 60_000)
@@ -254,7 +261,21 @@ export function productionOps(release) {
       boundNow(); destinations.all()
       destinations.write(join(MAIN, '.env'), kept + '\n' + Object.entries(envPatch).map(([name, value]) => `${name}=${value}`).join('\n') + '\n', baseline.stable[join(MAIN, '.env')].mode)
     },
-    async oldWatcherRestart() { destinations.all(); sourceCheck(); boundNow(); await runOld([], true) },
+    async oldWatcherRestart() {
+      destinations.all(); sourceCheck(); boundNow()
+      const { parseProperties, servicePolicy, assertServicePolicy } = await import('./cutover-ops.mjs')
+      const properties = parseProperties(command('/usr/bin/systemctl', ['show', 'codex-remote.service', '-p', 'Type', '-p', 'KillMode', '-p', 'SendSIGKILL', '-p', 'TriggeredBy', '-p', 'ControlGroup']))
+      assertServicePolicy(properties); assert(properties.ControlGroup === baseline.oldProcess.cgroup, 'old-cgroup-drift')
+      stableCheck(); boundNow()
+      assert(record(join(outside, 'key-cutover-permit.json')).absent, 'prior-cutover-permit')
+      const permit = { release, app: APP, seal: fileHash(join(release, 'seal.json')), runner: { pid: process.pid, start: processStart(process.pid) }, old: baseline.oldProcess, lock,
+        port: config.port, servicePolicy: servicePolicy(properties), receipts: boundReadiness.receipts, provision: boundReadiness.provision,
+        destinations: { entries: destinations.entries, parents: destinations.parents }, backend: tree(join(MAIN, 'dist-server')), dependencies: tree(join(MAIN, 'node_modules')),
+        remote: baseline.remote, unitHashes: baseline.unitHashes, stable: Object.fromEntries(Object.keys(baseline.stable).map(path => [path, record(path)])) }
+      atomicBytes(join(outside, 'key-cutover-permit.json'), JSON.stringify(permit) + '\n', 0o600)
+      cutoverArmed = true
+      await runOld([], true)
+    },
     async newBackend() {
       const identity = serviceIdentity('codex-remote.service')
       assert(identity.match(/MainPID=(\d+)/)?.[1] !== baseline.service.match(/MainPID=(\d+)/)?.[1] && /MainPID=[1-9]\d*/.test(identity) && identity.includes('ActiveState=active') && BigInt(identity.match(/ExecMainStartTimestampMonotonic=(\d+)/)?.[1] ?? 0) > BigInt(baseline.service.match(/ExecMainStartTimestampMonotonic=(\d+)/)?.[1] ?? 0), 'no-fresh-gateway-process')
@@ -262,7 +283,7 @@ export function productionOps(release) {
       assert(realpathSync('/proc/' + identity.match(/MainPID=(\d+)/)[1] + '/cwd') === MAIN, 'new-gateway-cwd-drift')
       assert(hash(readFileSync('/proc/' + identity.match(/MainPID=(\d+)/)[1] + '/cmdline')) === baseline.processCommand, 'new-entry-command-drift')
       const { maintenanceClient } = await import(pathToFileURL(join(release, 'operator/scripts/secure-maintenance.mjs')).href)
-      await candidateConfig(); boundNow(); newClient = await maintenanceClient(config)
+      await candidateConfig(false); boundKey = boundOwner(release, meta, fileHash(join(release, 'seal.json')), ownerReader); boundNow(); newClient = await maintenanceClient(config)
       const response = await newClient.fetch('/api/session', { signal: AbortSignal.timeout(10000) }); assert(response.ok, 'encrypted-proof-failed'); await response.arrayBuffer()
     },
     async workboard() {

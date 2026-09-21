@@ -23,10 +23,6 @@ try {
   const files = join(root, 'files'), vault = join(root, 'vault'), key = join(root, 'owner.json'); await mkdir(files); await mkdir(vault)
   const { getSession } = await import(pathToFileURL(join(release, 'old/dist-server/auth.js')).href)
   const env = { PATH: process.env.PATH, HOME: root, CODEX_REMOTE_PASSWORD: 'fixture password only', CODEX_REMOTE_SESSION_SECRET: 'fixture secret'.repeat(4), CODEX_REMOTE_PUBLIC_ORIGIN: 'http://127.0.0.1', CODEX_REMOTE_WORKSPACE_ROOTS: files, CODEX_REMOTE_FILE_ROOTS: files, CODEX_REMOTE_CONTEXT_VAULT: vault, CODEX_REMOTE_SECURE_API: 'required', CODEX_REMOTE_SECURE_KEY_FILE: key, CODEX_REMOTE_SESSION_STATE: join(root, 'sessions.json') }
-  // Offline provisioning works from the baseline (plaintext-era) environment;
-  // neither a new gateway nor DNS/TLS is needed for this fake private key fixture.
-  const provisionEnv = { ...env }; delete provisionEnv.CODEX_REMOTE_SECURE_API; delete provisionEnv.CODEX_REMOTE_SECURE_KEY_FILE
-  await run(process.execPath, [join(release, 'operator/scripts/secure-key.mjs'), 'init', key], { env: provisionEnv, cwd: root, timeout: 15000 })
   oldServer = createServer((req, res) => {
     if (!getSession(req, env.CODEX_REMOTE_SESSION_SECRET, false)) { res.writeHead(401); res.end('{}'); return }
     res.setHeader('content-type', 'application/json')
@@ -36,6 +32,10 @@ try {
   const oldCheck = () => run(process.execPath, [join(release, 'old/scripts/restart-when-idle.mjs'), '--check'], { env, cwd: root, timeout: 15000 })
   assert.equal(JSON.parse((await oldCheck()).stdout).ready, true)
   oldServer.closeAllConnections(); await new Promise(resolve => oldServer.close(resolve)); oldServer = null
+  // No reusable key exists until the old fixture listener has closed.
+  // The production adapter additionally proves whole process/cgroup death.
+  const provisionEnv = { ...env }; delete provisionEnv.CODEX_REMOTE_SECURE_API; delete provisionEnv.CODEX_REMOTE_SECURE_KEY_FILE
+  await run(process.execPath, [join(release, 'operator/scripts/secure-key.mjs'), 'init', key], { env: provisionEnv, cwd: root, timeout: 15000 })
   const config = loadConfig(env)
   controller = new RemoteController(config, new CodexAppServer(process.execPath, [resolve('server/fixtures/plan-questions.mjs')]), new ContextVault(vault))
   await controller.start()
@@ -53,7 +53,7 @@ try {
   client = await maintenanceClient(config)
   const ready = await restartReadiness(async path => { const response = await client.fetch(path); assert(response.ok); return response.json() })
   assert.equal(ready.ready, true)
-  console.log(JSON.stringify({ oldSealedWatcherAuthenticated: true, oldAdapterRejectedAfterReplacement: true, newEncryptedAdapterVerified: true, actualNewKnowledgeCheckedWriteAndServices: true, offlineProvisionFromOldEnv: true, realFakeGatewayLifecycle: true, nativeModelTurns: 0, productionRestarts: 0 }))
+  console.log(JSON.stringify({ oldSealedWatcherAuthenticated: true, oldAdapterRejectedAfterReplacement: true, newEncryptedAdapterVerified: true, actualNewKnowledgeCheckedWriteAndServices: true, postStopProvisionFromOldEnv: true, realFakeGatewayLifecycle: true, nativeModelTurns: 0, productionRestarts: 0 }))
 } finally {
   client?.close(); controller?.stop()
   for (const item of [oldServer, server]) if (item) { item.closeAllConnections(); await new Promise(resolve => item.close(resolve)) }

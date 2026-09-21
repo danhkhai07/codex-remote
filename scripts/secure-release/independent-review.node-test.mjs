@@ -34,8 +34,9 @@ export async function adapterFixture({ activationEligible = true } = {}) {
   put(MAIN + '/dist/index.html', 'old-index'); put(RELEASE + '/payload/dist/index.html', 'new-index'); put('/root/GITHUB/Workboard/server.py', 'old-workboard'); put(RELEASE + '/infra/workboard-server.py', 'new-workboard'); put(RELEASE + '/infra/workboard-isolated.conf', 'new-dropin');
   put(MAIN + '/.env', 'CODEX_REMOTE_PASSWORD=fake-only\n'); put(admin, 'old-admin'); put(preview, 'old-preview')
   const paths = [admin, preview, '/etc/nginx/snippets/codex-cloudflare-real-ip.conf', MAIN + '/.env', MAIN + '/dist/index.html', '/root/GITHUB/Workboard/server.py', '/etc/systemd/system/workboard.service.d/isolated-preview.conf']
-  const parents = {}; for (const target of paths) { for (let parent = path.dirname(target); ; parent = path.dirname(parent)) { parents[parent] = { directory: true }; if (parent === path.dirname(parent)) break } }
-  const baseline = { source: {}, remote: { fetch: digest('fake-origin'), push: digest('fake-origin') }, destinations: { entries: Object.fromEntries(paths.map(p => [p, record(p)])), parents }, service: identity, workboard: identity, stable: { [MAIN + '/.env']: record(MAIN + '/.env'), ['/root/GITHUB/Workboard/server.py']: record('/root/GITHUB/Workboard/server.py') }, nginxTempDirectories: {}, nginxFiles: { 'sites-available/codex.danhkhai.io.vn': record(admin), 'sites-available/codex-preview-ports': record(preview) }, unitHashes: {}, backend: {}, client: { 'index.html': record(MAIN + '/dist/index.html') }, dependencies: {}, workboardDropins: {} }
+  const parents = {}; for (const target of paths) { for (let parent = path.dirname(target); ; parent = path.dirname(parent)) { parents[parent] = { directory: true, uid: 0, gid: 0, mode: 0o700 }; if (parent === path.dirname(parent)) break } }
+  const policy = 'Type=simple\nKillMode=control-group\nSendSIGKILL=yes\nTriggeredBy=\nControlGroup=/system.slice/codex-remote.service'
+  const baseline = { cutoverPolicy: policy, oldProcess: { pid: 42, start: 'fake-start', cgroup: '/system.slice/codex-remote.service' }, source: {}, remote: { fetch: digest('fake-origin'), push: digest('fake-origin') }, destinations: { entries: Object.fromEntries(paths.map(p => [p, record(p)])), parents }, service: identity, workboard: identity, stable: { [MAIN + '/.env']: record(MAIN + '/.env'), ['/root/GITHUB/Workboard/server.py']: record('/root/GITHUB/Workboard/server.py') }, nginxTempDirectories: {}, nginxFiles: { 'sites-available/codex.danhkhai.io.vn': record(admin), 'sites-available/codex-preview-ports': record(preview) }, unitHashes: {}, backend: {}, client: { 'index.html': record(MAIN + '/dist/index.html') }, dependencies: {}, workboardDropins: {} }
   const releaseTree = { 'payload/file': { sha256: 'fake sealed bytes' } }
   put(RELEASE + '/metadata.json', { app: APP, sourceTarget: SOURCE, activationEligible, base: BASE, main: MAIN, release: RELEASE, hours: HOURS, requiredEncryption: true, keyFile: '/fake/private/key.json', fileRoots: ['/fake/files'] })
   put(RELEASE + '/baseline.json', baseline); put(RELEASE + '/inventory.json', { groups: { backend: [], client: [] } })
@@ -67,10 +68,11 @@ export async function adapterFixture({ activationEligible = true } = {}) {
     if (exe === 'git' && args[0] === 'status') return dirty ? ' M fake' : ''
     if (exe === 'git' && args[0] === 'ls-remote') return remote + '\trefs/heads/main'
     if (exe === '/usr/sbin/nginx' && args[0] === '-t') return ''
+    if (exe === '/usr/bin/systemctl') return policy
     if (exe === 'systemctl') return ''
     throw Error('unmocked command: ' + exe)
   }
-  const common = { APP, BASE, SOURCE, HOURS, HOSTS, MAIN, assert: (ok, code) => assert(ok, code), json: p => JSON.parse(read(p)), fileHash, hash: digest, record, preimage: record, parentIdentity: () => ({ directory: true }), tree, command,
+  const common = { APP, BASE, SOURCE, HOURS, HOSTS, MAIN, assert: (ok, code) => assert(ok, code), json: p => JSON.parse(read(p)), fileHash, hash: digest, record, preimage: record, parentIdentity: () => ({ directory: true, uid: 0, gid: 0, mode: 0o700 }), tree, command,
     same: compare, inside: (root, name) => path.join(root, name),
     atomicBytes: (p, bytes) => { trace.push(['write', p]); put(p, bytes.toString()); writeHook?.(p) }, serviceIdentity: () => identity }
   const fs = { readFileSync: (p, encoding) => encoding ? read(p).toString() : read(p), existsSync: p => files.has(p) || p.endsWith('/fullchain.pem'), lstatSync: () => ({ mode: 0o700, uid: 0 }),
@@ -87,15 +89,15 @@ export async function adapterFixture({ activationEligible = true } = {}) {
   const link = async identifier => {
     let values = modules[identifier]
     if (identifier.endsWith('/operator/dist-server/config.js')) values = { loadConfig: () => ({ secureApiRequired: true, publicOrigin: new URL('https://codex.danhkhai.io.vn'), host: '127.0.0.1', port: 5173 }) }
-    if (identifier.endsWith('/operator/dist-server/secure-key.js')) values = { readOwnerKey: () => { keyReads++; if (!keyAvailable) throw Error('fake-key-unavailable'); return { app: 'fake-app', generation: keyGeneration, key: 'fake never logged' } } }
-    if (!values && ['./destinations.mjs', './publication.mjs', './lock.mjs'].includes(identifier)) { const linked = new SourceTextModule(readFileSync(new URL(identifier, import.meta.url), 'utf8'), { context }); await linked.link(link); await linked.evaluate(); return linked }
+    if (identifier.endsWith('/operator/dist-server/secure-key.js')) values = { assertKeyLocation: () => { if (!keyAvailable) throw Error('fake-provision-unavailable') }, readOwnerKey: () => { keyReads++; if (!keyAvailable) throw Error('fake-key-unavailable'); return { app: 'fake-app', generation: keyGeneration, key: 'fake never logged' } } }
+    if (!values && ['./destinations.mjs', './publication.mjs', './lock.mjs', './key-state.mjs'].includes(identifier)) { const linked = new SourceTextModule(readFileSync(new URL(identifier, import.meta.url), 'utf8'), { context }); await linked.link(link); await linked.evaluate(); return linked }
     assert(values, 'unmocked import: ' + identifier)
     const module = new SyntheticModule(Object.keys(values), function () { for (const [key, value] of Object.entries(values)) this.setExport(key, value) }, { context })
     await module.link(() => { throw Error('unexpected nested import') }); await module.evaluate(); return module
   }
   const module = new SourceTextModule(readFileSync(new URL('./production.mjs', import.meta.url), 'utf8'), { context, importModuleDynamically: link })
   await module.link(link); await module.evaluate()
-  return { commandHook: hook => { commandHook = hook }, writeHook: hook => { writeHook = hook }, ops: module.namespace.productionOps(RELEASE), put, read, admin, outside, trace, setHead: v => { head = v }, setRemote: v => { remote = v }, setBranch: v => { branch = v }, setDirty: v => { dirty = v }, failPush: () => { pushFails = true }, heads: () => ({ head, remote }), rotateKey: () => { keyGeneration = 'rotated' }, removeKey: () => { keyAvailable = false }, breakTls: () => { tlsFingerprint = 'changed' }, breakDns: () => { dnsAvailable = false }, advance: ms => { now += ms }, stats: () => ({ keyReads, tlsChecks }) }
+  return { commandHook: hook => { commandHook = hook }, writeHook: hook => { writeHook = hook }, ops: module.namespace.productionOps(RELEASE), put, read, admin, outside, trace, setHead: v => { head = v }, setRemote: v => { remote = v }, setBranch: v => { branch = v }, setDirty: v => { dirty = v }, failPush: () => { pushFails = true }, heads: () => ({ head, remote }), rotateKey: () => { keyGeneration = 'rotated'; put('/fake/private/key.json', 'unexpected-fake-key-before-isolation') }, removeKey: () => { keyAvailable = false }, breakTls: () => { tlsFingerprint = 'changed' }, breakDns: () => { dnsAvailable = false }, advance: ms => { now += ms }, stats: () => ({ keyReads, tlsChecks }) }
 }
 
 test('R1: actual old Knowledge/Services read and checked write keep working throughout busy wait', { skip: !release }, async () => {
@@ -159,9 +161,9 @@ test('R2: unexpired receipt replacement or referenced report drift cannot refres
     await assert.rejects(f.ops.gateIngress()); assert(!f.trace.some(entry => entry[0] === 'write'))
   }
 })
-test('R2: infra checks are independent of missing app key; normal unchanged gates refresh', async () => {
+test('R2/R5: infra checks are independent of provision readiness; fresh keyless gates refresh', async () => {
   const f = await adapterFixture(); f.removeKey(); const result = await f.ops.check()
-  assert(result.blockers.includes('private-owner-key-or-required-config-not-ready')); assert.equal(f.stats().tlsChecks, 14)
+  assert(result.blockers.some(value => value.startsWith('pre-key-provision-not-ready:'))); assert.equal(f.stats().tlsChecks, 14)
   const good = await adapterFixture(); await good.ops.preflight(); await good.ops.preCopy(); assert(good.stats().tlsChecks >= 28)
 })
 test('R3: intervening config survives; no conflicting reload occurs', async () => {

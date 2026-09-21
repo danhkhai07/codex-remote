@@ -132,22 +132,27 @@ of arbitrary prior same-origin tampering. Independent protocol review stays open
 until the reviewer accepts this limitation and procedure.
 
 Record the existing user authorization and current readiness; no new routine
-permission is needed. The later operator can provision via the sealed CLI with the
-existing login env loaded privately and the explicit nonsecret file roots:
+permission is needed. The runner provisions only after the old gateway process, service cgroup and
+listener are proven stopped. **Do not run offline init before cutover:** the old
+root gateway has fileRoots `/`, so 0700/0600 cannot protect a preprovisioned key.
+The former manual init recipe is superseded. The one-use adapter invokes the
+sealed CLI with required config and explicit nonsecret roots after isolation:
 
-```sh
-CODEX_REMOTE_FILE_ROOTS=/root/RUNNING-SERVICES,/root/WORKTREES,/root/GITHUB,/root/VAULTS \
-node --env-file=/root/RUNNING-SERVICES/codex-remote/.env \
-  RELEASE/operator/scripts/secure-key.mjs init \
-  /root/.local/state/codex-remote/secure-owner/owner-key.json
-```
+The adapter's private init call is not an operator preparation command. Preflight
+requires the final key path **absent**, validates its path/parent identity and
+service stop policy, and binds structural provision readiness. An existing key
+blocks first activation; treat a previously exposed key as a separate incident,
+never silently adopt/delete/rotate it.
 
 This creates a random separate 256-bit owner key under root-private 0700/0600,
-outside all File roots. Use `rotate` at the same path for explicit later rotation;
-channels/cache generation invalidate without deleting history. CLI prints no key.
+outside all File roots. Normal restarts preserve the existing key and do not run the cutover adapter.
+Explicit later rotation remains a separate local operator action; channels/cache
+generation invalidate without deleting history. The deployment attempt's bound
+identity rejects rotation during cutover. CLI prints no key.
 Retrieve/store it privately through SSH and the user's password manager; never
 paste it into tool output, chat, logs, URLs, Git or Vault. No provisioning is part
-of this task. Missing/invalid key blocks the runner.
+of preparation. A missing key is required before initial cutover; after generation,
+a missing/invalid/changed key blocks start or encrypted verification.
 
 The later `authorization.json` binds `app`, `source` (00f9e197 full hash), `seal`,
 `runner` (production.mjs SHA256), `evidence` (evidence.json SHA256),
@@ -160,13 +165,17 @@ A changed/withdrawn record, report file, key identity/generation/permissions, so
 or remote aborts. The runner never refreshes timestamps. An expired attempt needs
 operator review and a new release/attempt, not automatic retry of unknown effects.
 
-Preflight binds receipt/report bytes and metadata plus only a digest and nonsecret
-owner-key identity; no key is copied to receipts. The runner rechecks this binding,
-ages, DNS/TLS/public canary and source at every wait-loop check, before the first
+Preflight binds receipt/report bytes and metadata plus the key-absent structural
+plan. Actual owner-key identity/digest is fsynced only after isolation/generation,
+then bound before new encrypted CLI use; no key is copied to receipts. The runner rechecks this binding,
+ages, DNS/TLS/public canary, key absence/provision plan and source at every wait-loop check, before the first
 production write, and **after** the final HTTP readiness await, before source/copy.
-Subsequent write/restart boundaries enforce the bound ages/key/receipts again.
-Infrastructure validation and the offline key CLI work with the original `.env`;
-there is no dependency requiring a new encrypted backend before provisioning.
+Subsequent write/restart boundaries enforce bound ages/receipts; the cutover
+adapter also rechecks installed bytes/config, old-process isolation and generated
+key binding before start. A one-use fsynced claim prevents replay of unknown effects.
+Infrastructure validation and structural provision readiness work with the original
+`.env`; no preprovisioned reusable key is required. Provisioning happens while
+the old process is stopped and the installed new required backend has not started.
 
 Production local main and remote main must remain exact BASE `783b1e3` and clean
 throughout waiting. Do not manually integrate source early: the old Knowledge and
@@ -190,7 +199,7 @@ production watcher. No unit has been created or armed by this task.
    apart. Require full ALL-thread coverage, idle, and zero pending; unknown/error/
    pagination fail closed. The outer wait ceiling is twelve hours, but the bound one-hour execution-readiness
    deadline normally aborts sooner; no timeout grants authority.
-3. Private backups; put admin into no-store 503 and previews into parked HTTPS.
+3. Private backups (no owner key exists); put admin into no-store 503 and previews into parked HTTPS.
    Old readiness uses direct loopback and remains available. Recheck all baselines,
    dependencies and a third ALL-idle/zero-pending immediately before copy.
 4. Guarded source fast-forward + push to exact SOURCE; keep a durable transition
@@ -199,8 +208,14 @@ production watcher. No unit has been created or armed by this task.
 5. Activate exact staged dependencies and merge only six nonsecret env settings
    while preserving login secrets/workspaces/root/fullAccess. Mandatory encryption.
 6. Run the sealed OLD watcher with the private original env. It does its own dual
-   ALL-idle check and exactly one restart. Never call the new adapter on old runtime.
-   The runner monitors drift and stops only its own watcher on failure.
+   ALL-idle check and exactly one cutover call through its invocation-local sealed
+   `runner/cutover-bin/systemctl`. Only `restart codex-remote.service` is accepted.
+   The adapter uses absolute `/usr/bin/systemctl`: stop, prove old PID/cgroup/listener
+   gone, init absent key, fsync identity, recheck, start exact required backend.
+   Pre-key service policy must be simple/control-group/SendSIGKILL with no activation
+   triggers. Never call the new encrypted adapter on the old runtime. The runner
+   monitors drift and stops only its owned watcher on failure. The adapter also
+   checks parent lifetime/phase/shared-lock ownership before each new effect.
 7. Prove a fresh actual PID/cwd/entry command and backend hashes, then use the new
    encrypted maintenance adapter. Activate reviewed Workboard, publish index last,
    enable isolated ingress, and verify full local/public bodies.
@@ -245,7 +260,8 @@ All sequential under `codex-heavy`, one worker. Fake fixtures never load live en
 ```sh
 VITEST_MAX_WORKERS=1 REVIEW_RELEASE=RELEASE node --experimental-vm-modules --test --test-concurrency=1 \
   scripts/secure-release/runner.node-test.mjs scripts/secure-release/independent-review.node-test.mjs \
-  scripts/secure-release/destinations.node-test.mjs scripts/secure-release/publication-crash.node-test.mjs
+  scripts/secure-release/destinations.node-test.mjs scripts/secure-release/publication-crash.node-test.mjs \
+  scripts/secure-release/key-preprovision-review.node-test.mjs scripts/secure-release/key-boundary.node-test.mjs
 node scripts/secure-release/lifecycle-fixture.mjs RELEASE
 node scripts/secure-release/nginx-stage-fixture.mjs RELEASE
 node scripts/secure-release/independent-artifacts.mjs RELEASE INDEPENDENT_808_BUILD SEAL_SHA256
@@ -275,3 +291,11 @@ is superseded and must not be armed; it remains immutable for review history.
 
 Runner review dffb132 / seal 056e397 and earlier 648fe14/a054 seals remain immutable
 history and must not be armed. See [finding dispositions](secure-release-review-fixes.md).
+
+R5 supersedes the early-key recipe in 37d8d5d/seal55fe4f as well. Those artifacts
+stay immutable and must not be armed. See [key cutover boundary](secure-release-key-cutover.md).
+A crash after stop can leave the unit down; after generation it can leave a bound
+or unbound key. The old process cannot serve it because its death, full cgroup
+and listener boundary precede generation. There is no automatic key rotation,
+old-code/config rollback or plaintext recovery. `key-cutover-state.json`, the
+one-use claim and `key-binding.json` retain exact/unknown outcomes for review.

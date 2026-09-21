@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseEnv } from 'node:util'
 import { APP, BASE, SOURCE, HOURS, MAIN, INFRA, assert, hash, json, fileHash, record, tree, command, inside, writeJson, serviceIdentity } from './common.mjs'
+import { processStart } from './key-state.mjs'
 import { destinationSnapshot } from './destinations.mjs'
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 export function verifyClient(source, inventory) {
@@ -82,7 +83,7 @@ export function prepare(output, inventoryPath, kind = 'review-only') {
     for (const match of text.matchAll(/(?:from\s*|import\s*)['"](\.[^'"]+)['"]/g)) pending.push(join(dirname(local), match[1]))
   }
   writeFileSync(join(output, 'old/package.json'), '{"type":"module"}\n')
-  for (const name of ['common.mjs', 'runner.mjs', 'production.mjs', 'verify.mjs', 'destinations.mjs', 'publication.mjs', 'lock.mjs']) copy(join(checkout, 'scripts/secure-release', name), 'runner/' + name)
+  for (const name of ['common.mjs', 'runner.mjs', 'production.mjs', 'verify.mjs', 'destinations.mjs', 'publication.mjs', 'lock.mjs', 'key-state.mjs', 'key-cutover.mjs', 'cutover-ops.mjs', 'cutover-bin/systemctl']) copy(join(checkout, 'scripts/secure-release', name), 'runner/' + name)
   const infraNames = ['admin-active.conf', 'admin-cutover-gated.conf', 'preview-active.conf', 'preview-parked.conf', 'cloudflare-real-ip.conf', 'workboard-isolated.conf', 'workboard-embedding.patch', 'workboard-review.bundle', 'workboard-delivery.json']
   for (const name of infraNames) copy(join(INFRA, name), 'infra/' + name)
   const admin = readFileSync(join(output, 'infra/admin-active.conf'), 'utf8')
@@ -103,7 +104,9 @@ export function prepare(output, inventoryPath, kind = 'review-only') {
   const stable = Object.fromEntries(configPaths.map(path => [path, record(path)]))
   const observed = Object.fromEntries(Object.entries(env).filter(([name, value]) => /(?:STATE|PRESENCE_FILE|HOURS_FILE|SERVICES_FILE|READ_STATE_FILE)$/.test(name) && value.startsWith('/')).map(([, path]) => [path, record(path)]))
   for (const path of ['/root/.local/state/codex-remote/services.json', '/root/.local/state/codex-remote/sessions.json', join(MAIN, '.remote-push.json')]) observed[path] = record(path)
-  const baseline = { capturedAt: new Date().toISOString(), main: BASE, service: serviceIdentity('codex-remote.service'), workboard: serviceIdentity('workboard.service'), nginx: serviceIdentity('nginx.service'),
+  const cutoverPolicy = command('/usr/bin/systemctl', ['show', 'codex-remote.service', '-p', 'Type', '-p', 'KillMode', '-p', 'SendSIGKILL', '-p', 'TriggeredBy', '-p', 'ControlGroup'])
+  assert(cutoverPolicy.includes('Type=simple\n') && cutoverPolicy.includes('KillMode=control-group\n') && cutoverPolicy.includes('SendSIGKILL=yes\n') && cutoverPolicy.includes('ControlGroup=/system.slice/codex-remote.service') && /(?:^|\n)TriggeredBy=(?:\n|$)/.test(cutoverPolicy), 'unproven-service-stop-policy')
+  const baseline = { cutoverPolicy, oldProcess: { pid: 1758426, start: processStart(1758426), cgroup: '/system.slice/codex-remote.service' }, capturedAt: new Date().toISOString(), main: BASE, service: serviceIdentity('codex-remote.service'), workboard: serviceIdentity('workboard.service'), nginx: serviceIdentity('nginx.service'),
     remote: Object.fromEntries(['fetch', 'push'].map(kind => [kind, hash(command('git', ['remote', 'get-url', ...(kind === 'push' ? ['--push'] : []), 'origin'], MAIN))])),
     destinations: destinationSnapshot([...inventory.groups.backend, ...inventory.groups.client].map(item => join(MAIN, item.path)).concat([join(MAIN, '.env'), join(MAIN, 'node_modules'), '/etc/nginx/sites-available/codex.danhkhai.io.vn', '/etc/nginx/sites-available/codex-preview-ports', '/etc/nginx/snippets/codex-cloudflare-real-ip.conf', '/root/GITHUB/Workboard/server.py', '/etc/systemd/system/workboard.service.d/isolated-preview.conf'])),
     processCommand: fileHash('/proc/1758426/cmdline'), processCwd: realpathSync('/proc/1758426/cwd'), backend: tree(join(MAIN, 'dist-server')), client: tree(join(MAIN, 'dist')), source: snapshotSource(MAIN), stable,
@@ -123,7 +126,7 @@ export function prepare(output, inventoryPath, kind = 'review-only') {
   for (const path of ['/etc/nginx/sites-available/codex.danhkhai.io.vn', '/root/GITHUB/Workboard/server.py']) copy(path, 'backup-baseline' + path)
   writeJson(join(output, 'metadata.json'), { version: 2, kind, activationEligible: kind === 'activation-candidate', status: 'not-armed', app: APP, sourceTarget: SOURCE, base: BASE, release: output, main: MAIN, runnerSource: command('git', ['rev-parse', 'HEAD'], checkout), hours: HOURS, nginxBodyLimit: '36m', requiredEncryption: true,
     oldWatcherFiles: [...old].sort(), fileRoots: ['/root/RUNNING-SERVICES', '/root/WORKTREES', '/root/GITHUB', '/root/VAULTS'], keyFile: '/root/.local/state/codex-remote/secure-owner/owner-key.json',
-    operatorFiles: [...operatorFiles].sort(), baselinePolicy: 'Review baseline only; final seal after actual infrastructure readiness. Mutable state is observation only, never restored or overwritten', activationAuthority: 'Existing user authorization; leader must record actual current readiness, no arm command in this preparation' })
+    keyProvisionPolicy: 'absent-until-proven-old-process-cgroup-listener-stop; init-only-once; no-automatic-rotation', operatorFiles: [...operatorFiles].sort(), baselinePolicy: 'Review baseline only; final seal after actual infrastructure readiness. Mutable state is observation only, never restored or overwritten', activationAuthority: 'Existing user authorization; leader must record actual current readiness, no arm command in this preparation' })
   console.log(JSON.stringify({ status: 'prepared-not-sealed', output, app: APP, backend: 46, client: 33, graphFiles: graph.graph.length }))
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) prepare(resolve(process.argv[2]), resolve(process.argv[3]), process.argv[4])

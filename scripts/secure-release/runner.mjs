@@ -42,7 +42,7 @@ export async function execute(ops) {
       await ops.assertInstalled()
     })
     // Old runtime holds its imported modules. The OLD watcher rechecks dual ALL-idle,
-    // authenticates with OLD auth/config, and performs exactly one restart itself.
+    // authenticates with OLD auth/config, and calls the one-use stop/prove/init/start adapter.
     await step('activate-dependencies-config', () => ops.activateDependenciesConfig())
     await step('old-watcher-restart', () => ops.oldWatcherRestart())
     await step('verify-new-backend', () => ops.newBackend())
