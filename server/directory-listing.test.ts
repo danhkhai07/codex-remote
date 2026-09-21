@@ -66,11 +66,11 @@ describe('workspace directory browsing', () => {
 
 it('supports filesystem root for browsing, reading files and following links outside the workspace', async () => {
   const { root, base } = await fixture()
-  const listing = await listDirectory(query(root), ['/'])
+  const listing = await listDirectory(query(root), [base])
   expect(listing.parentPath).toBe(base)
   expect(listing.entries.find(entry => entry.name === 'escape')).toMatchObject({ kind: 'file' })
-  expect((await listDirectory(query('/'), ['/'])).parentPath).toBeNull()
-  expect(await inspectServerFile(join(base, 'outside.txt'), ['/'])).toMatchObject({ kind: 'text', previewable: true })
-  expect(await inspectServerFile(join(root, 'escape'), ['/'])).toMatchObject({ path: join(base, 'outside.txt') })
+  await expect(listDirectory(query('/'), ['/'])).rejects.toMatchObject({ status: 403 })
+  expect(await inspectServerFile(join(base, 'outside.txt'), [base])).toMatchObject({ kind: 'text', previewable: true })
+  expect(await inspectServerFile(join(root, 'escape'), [base])).toMatchObject({ path: join(base, 'outside.txt') })
   await expect(inspectServerFile(join(base, 'outside.txt'), [root])).rejects.toMatchObject({ status: 403 })
 })

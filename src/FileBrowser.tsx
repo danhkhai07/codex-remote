@@ -27,6 +27,12 @@ export function FileBrowser({ initialPath, covered, onClose, onOpenFile }: {
   const [listing, setListing] = useState<DirectoryListing | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [roots, setRoots] = useState<string[]>([])
+  useEffect(() => {
+    const abort = new AbortController()
+    void api.fileRoots(abort.signal).then(result => { if (!abort.signal.aborted) setRoots(result.roots) }).catch(() => {})
+    return () => abort.abort()
+  }, [])
   const close = useRef<HTMLButtonElement>(null)
   const list = useRef<HTMLDivElement>(null)
   const lastFile = useRef<HTMLButtonElement | null>(null)
@@ -102,6 +108,7 @@ export function FileBrowser({ initialPath, covered, onClose, onOpenFile }: {
             <summary className="icon-button" aria-label="File browser options">⋯</summary>
             <div className="file-browser-menu-panel">
               <button type="button" onClick={() => navigate(initialPath)}>Working directory</button>
+              {roots.map(root => <button key={root} type="button" onClick={() => navigate(root)}>{root}</button>)}
               <button type="button" onClick={() => { setRevision(value => value + 1); if (menu.current) menu.current.open = false }}>Refresh</button>
               <label><input type="checkbox" checked={hidden} onChange={event => { setHidden(event.target.checked); setOffset(0) }} />Hidden files</label>
             </div>
@@ -128,7 +135,7 @@ export function FileBrowser({ initialPath, covered, onClose, onOpenFile }: {
           </div>)}
         </details>}
         {loading && !listing ? <div className="file-browser-empty" role="status"><span className="spinner" />Loading files…</div>
-          : error && !listing ? <div className="file-browser-empty" role="alert"><p>{error}</p><button className="quiet-button" onClick={() => setRevision(value => value + 1)}>Retry</button></div>
+          : error && !listing ? <div className="file-browser-empty" role="alert"><p>{error}</p>{roots.map(root => <button key={root} className="quiet-button" onClick={() => navigate(root)}>{root}</button>)}<button className="quiet-button" onClick={() => setRevision(value => value + 1)}>Retry</button></div>
           : listing?.entries.length === 0 ? <p className="file-browser-empty">{query ? 'No matching files in this folder.' : 'This folder is empty.'}</p>
           : listing?.entries.map(entry => <div className="file-browser-row" key={entry.path}><button type="button" className="file-browser-entry" disabled={entry.kind === 'unavailable'} title={entry.kind === 'unavailable' ? 'Unavailable or outside allowed workspaces' : entry.path}
             onClick={event => {

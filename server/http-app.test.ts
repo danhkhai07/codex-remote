@@ -117,7 +117,7 @@ describe('Codex Remote HTTP boundary', () => {
     const config: RemoteConfig = {
       host: '127.0.0.1', port: 5173, publicOrigin: new URL('https://remote.example.test'),
       password: 'correct horse battery staple', sessionSecret: 's'.repeat(48), sessionTtlSeconds: 600,
-      codexBin: 'unused', workspaceRoots: [workspace], fileRoots: ['/'], production: true,
+      codexBin: 'unused', workspaceRoots: [workspace], fileRoots: [base], production: true,
     }
     const server = createRemoteHttpServer(config, new RemoteController(config, new CodexAppServer('unused')), base, null)
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))

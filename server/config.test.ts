@@ -7,11 +7,9 @@ const env = {
   CODEX_REMOTE_PUBLIC_ORIGIN: 'https://remote.example.test',
   CODEX_REMOTE_WORKSPACE_ROOTS: '/tmp',
 }
-it('defaults file access to workspaces and allows an independent filesystem root', () => {
+it('defaults file access to explicit workspaces and rejects unsafe root grants', () => {
   expect(loadConfig(env).fileRoots).toEqual(['/tmp'])
-  const config = loadConfig({ ...env, CODEX_REMOTE_FILE_ROOTS: '/' })
-  expect(config.fileRoots).toEqual(['/'])
-  expect(config.workspaceRoots).toEqual(['/tmp'])
+  for (const root of ['/', '/root', '/etc', '/proc', '/dev']) expect(() => loadConfig({ ...env, CODEX_REMOTE_FILE_ROOTS: root })).toThrow(/explicit project/)
   expect(() => loadConfig({ ...env, CODEX_REMOTE_FILE_ROOTS: 'relative' })).toThrow('absolute')
 })
 
