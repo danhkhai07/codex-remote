@@ -194,3 +194,44 @@ it.each(['logout','expiry','rotation'] as const)('R3 actual fake-native pipe emi
  expect(await f.appServer.request('thread/start',{cwd:f.config.workspaceRoots[0]})).toMatchObject({thread:{id:'FAKE-ONLY'}})
  expect(await f.appServer.request('fixture/effects',{})).toEqual(['thread/start'])
 })
+
+// Independent re-review controls: accepted effects outlive the browser request.
+// The actual stdio-startup cancellation boundary is exercised above; here the
+// fake RPC explicitly accepts turn/start before we close the request lifetime.
+it.each(['logout', 'lock'] as const)('R3 accepted RPC bookkeeping and background work survive browser %s', async reason => {
+ const f = await fixture(true), accepted = deferred(), finish = deferred()
+ await f.client.unlock(f.material.key)
+ const calls: string[] = [], completed = vi.fn()
+ f.controller.onTurnCompleted = completed
+ vi.spyOn(f.appServer, 'request').mockImplementation(async (method, params, _timeout, beforeDispatch) => {
+  beforeDispatch?.()
+  calls.push(method)
+  if (method === 'turn/start') { accepted.resolve(); await finish.promise; return { turn: { id: 'ACCEPTED-FAKE-TURN' } } }
+  const id = (params as { threadId?: string }).threadId ?? 'FAKE-BACKGROUND'
+  return { thread: { id, cwd: f.config.workspaceRoots[0], status: { type: 'idle' }, turns: [] } }
+ })
+ const pending = f.client.request('/api/threads/worker/turns', {
+  method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf-token': f.issued.payload.csrf },
+  body: JSON.stringify({ text: 'FAKE ACCEPTED JOB ONLY', fullAccess: true }),
+ }).catch(() => null)
+ await accepted.promise
+ if (reason === 'logout') {
+  const logout = await f.client.request('/api/session/logout', { method: 'POST', headers: { 'x-csrf-token': f.issued.payload.csrf } })
+  expect(await logout.response.json()).toEqual({ ok: true })
+ } else f.client.lock()
+ await pending
+ finish.resolve()
+ await new Promise(resolve => setImmediate(resolve))
+ // Accepted native turn remains busy: bookkeeping was not skipped by a stale
+ // browser guard. No compensating turn/interrupt is sent.
+ await expect(f.controller.startTurn('worker', 'must remain busy')).rejects.toThrow(/busy/)
+ expect(calls.filter(method => method === 'turn/start')).toHaveLength(1)
+ expect(calls).not.toContain('turn/interrupt')
+ f.appServer.emit('notification', { method: 'turn/completed', params: { threadId: 'worker', turn: { id: 'ACCEPTED-FAKE-TURN', status: 'completed', items: [] } } })
+ expect(completed).toHaveBeenCalledWith('worker', 'ACCEPTED-FAKE-TURN', '')
+ // An independent scheduler/native intent has no HTTP lifetime argument. It
+ // can continue after the browser lifetime closes, including fullAccess.
+ expect(await f.controller.createThread('0', true)).toMatchObject({ thread: { id: 'FAKE-BACKGROUND' } })
+ expect(calls.at(-1)).toBe('thread/start')
+ expect(calls).not.toContain('turn/interrupt')
+})
