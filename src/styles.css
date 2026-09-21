@@ -506,20 +506,14 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
 .leader-star, .leader-toggle.is-leader { color: #e7c44a; }
 .leader-toggle { flex: 0 0 36px; width: 36px; height: 36px; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 25px; cursor: pointer; }
 .leader-toggle:disabled { opacity: .45; cursor: default; }
-.conversation-team-region { min-width: 0; padding: 6px max(12px, calc((100% - 860px) / 2)); border-bottom: 1px solid var(--line); background: var(--panel); }
-.conversation-team-region > .error-banner { margin: 0 0 6px; max-height: 64px; overflow: auto; }
-.conversation-team { margin: 0 0 0 auto; min-width: 0; flex: 0 1 auto; font-size: 13px; }
-.conversation-team-region:not(:has(.error-banner, .conversation-team-body:not([hidden]))) { display: none; }
-.conversation-team-body[hidden], .team-label-short { display: none; }
-.conversation-team > summary { cursor: pointer; padding: 10px 4px; display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 44px; }
-.conversation-team > summary::-webkit-details-marker { display: none; }
-.conversation-team > summary::before { content: '▸'; }
-.conversation-team[open] > summary::before { content: '▾'; }
-.conversation-team > summary > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.conversation-team > summary > span:first-of-type { flex: 1; min-width: 0; }
-.conversation-team > summary > .muted { flex: 0 1 auto; max-width: 45%; }
-.conversation-team-body { padding: 0 12px 12px; max-height: min(28dvh, 280px); overflow-y: auto; overscroll-behavior: contain; }
-.workspace-shell:has(> .pending-requests) .conversation-team-body { max-height: min(18dvh, 160px); }
+.workspace-notices { min-width: 0; max-height: 20dvh; overflow-y: auto; padding: 6px max(12px, calc((100% - 860px) / 2)); }
+.workspace-notices:empty { display: none; }
+.workspace-notices > .error-banner { margin: 0 0 6px; }
+.leader-page { min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 20px max(14px, calc((100% - 860px) / 2)); }
+.leader-page[hidden] { display: none; }
+.conversation-team { margin: 0; font-size: 13px; }
+.team-page-heading h2 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+.team-page-heading p { margin: 8px 0 16px; }
 .conversation-team-body > p { margin: 8px 0; }
 .team-tasks { list-style: none; padding: 0; margin: 12px 0 0; }
 .team-tasks > li { border-top: 1px solid var(--line); padding: 12px 0; }
@@ -685,7 +679,8 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
 
 .workspace-shell > .workspace-header { grid-row: 1; }
 .workspace-shell > .view-tabs { grid-row: 2; }
-.workspace-shell > .conversation-team-region { grid-row: 3; }
+.workspace-shell > .workspace-notices { grid-row: 3; }
+.workspace-shell > .leader-page { grid-row: 4; }
 .workspace-shell > .transcript-region { grid-row: 4; }
 .workspace-shell > .pending-requests { grid-row: 5; }
 .workspace-shell > .composer { grid-row: 6; }
@@ -700,9 +695,9 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
   background: var(--panel);
 }
 
-/* Let the question body shrink with its grid row when the team is also open.
+/* Let the question body shrink with its grid row in either workspace view.
    Approval cards retain their size and remain reachable in the outer scroller. */
-.workspace-shell:has(> .conversation-team-region) > .pending-requests { display: flex; flex-direction: column; }
+.workspace-shell > .pending-requests { display: flex; flex-direction: column; }
 .pending-requests > .request-card { flex-shrink: 0; }
 .pending-requests > .plan-question { flex-shrink: 1; }
 
@@ -892,8 +887,7 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
   background: #0d130f;
 }
 
-.view-tabs button,
-.view-tabs .conversation-view-label {
+.view-tabs button {
   padding: 10px 12px 11px;
   color: var(--muted);
   border: 0;
@@ -903,7 +897,7 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
   font-weight: 750;
 }
 
-.view-tabs .conversation-view-label {
+.view-tabs .is-active {
   color: var(--text);
   border-bottom-color: var(--accent);
 }
@@ -2069,18 +2063,9 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
 .file-browser-empty { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; min-height: 150px; padding: 24px; color: var(--muted); text-align: center; }
 .file-browser-footer { border-top: 1px solid var(--line); font-size: 0.75rem; color: var(--muted); }
 .view-tabs .files-tab { margin-left: auto; }
-.view-tabs:has(.conversation-team) .files-tab { margin-left: 0; }
-.view-tabs > button, .view-tabs > .conversation-view-label { flex-shrink: 0; }
-@media (max-width: 1100px) {
-  .conversation-team > summary > .muted { display: none; }
-}
+.view-tabs > button { flex-shrink: 0; }
 @media (max-width: 600px) {
-  .view-tabs:has(.conversation-team) { padding-inline: 8px; gap: 2px; }
-  .view-tabs:has(.conversation-team) > button,
-  .view-tabs:has(.conversation-team) > .conversation-view-label { padding-inline: 6px; font-size: 12px; }
-  .conversation-team { font-size: 12px; }
-  .team-label-full { display: none; }
-  .team-label-short { display: inline; }
+  .view-tabs > button { padding-inline: 8px; font-size: 12px; }
 }
 
 @media (max-width: 720px) {

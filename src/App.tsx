@@ -619,7 +619,7 @@ export function App() {
   const busy = operationBusy || !imagesReady || Boolean(composerKey && sending[composerKey])
   const [error, setError] = useState('')
   const [fileViewer, setFileViewer] = useScreenState<LocalFileReference | null>('file-viewer', null)
-  const [teamBodyContainer, setTeamBodyContainer] = useState<HTMLDivElement | null>(null)
+  const [leaderViewId, setLeaderViewId] = useState<string | null>(null)
   const [fileBrowserPath, setFileBrowserPath] = useScreenState<string | null>('file-browser', null)
   const browserScope = selectedId ?? 'new'
   const [browserTargets, setBrowserTargets] = useState<Record<string, string | null>>(() => window.self === window.top ? readScreenState('browser-targets', {}) : {})
@@ -1703,6 +1703,8 @@ export function App() {
   if (authLoading) return <main className="loading-shell"><span className="spinner" /><p>{online ? 'Reconnecting to Codex Remote…' : 'Offline — waiting for connection…'}</p></main>
   if (!session) return <Login installPrompt={installPrompt} offline={!online} onInstall={() => void installApp()} onLogin={setSession} />
   const selectedGroup = conversationGroup(groups.snapshot, thread?.id)
+  const hasTeam = !draftOpen && Boolean(thread && selectedGroup?.leaderThreadId)
+  const showLeader = hasTeam && leaderViewId === thread?.id
 
   return (
     <div className="app-shell">
@@ -1766,22 +1768,14 @@ export function App() {
         </header>
 
         <nav className="view-tabs" aria-label="Conversation view">
-          <span className="conversation-view-label">Conversation</span>
+          <button type="button" className={!showLeader ? 'is-active' : ''} aria-current={!showLeader ? 'page' : undefined} onClick={() => setLeaderViewId(null)}>Conversation</button>
           <button type="button" onClick={() => setLocalhostPreview('')}>Browser</button>
+          {hasTeam && <button type="button" className={showLeader ? 'is-active' : ''} aria-current={showLeader ? 'page' : undefined} onClick={() => setLeaderViewId(thread!.id)}>Leader</button>}
           <button className="files-tab" type="button" disabled={!thread} onClick={() => thread && setFileBrowserPath(thread.cwd)}>Files</button>
-          {!draftOpen && thread && selectedGroup?.leaderThreadId && <ConversationTeam key={`${thread.id}:${selectedGroup.id}`} threadId={thread.id} group={selectedGroup} threads={threads}
-            bodyContainer={teamBodyContainer} csrf={session.csrf} enabled={online && pageVisible} revision={teamRevision} onOpen={id => {
-              const target = threads.find(thread => thread.id === id)
-              void (target ? openThread(target) : api.thread(id).then(response => openThread(response.thread))).catch(error => setError(errorMessage(error)))
-            }} />}
         </nav>
 
-        {(groups.leaderError || (!draftOpen && thread && selectedGroup?.leaderThreadId)) && <section className="conversation-team-region" aria-label="Conversation team">
+        <div className="workspace-notices">
           {groups.leaderError && <p className="error-banner" role="alert">{groups.leaderError}</p>}
-          <div ref={setTeamBodyContainer} />
-        </section>}
-
-        <TranscriptViewport key={`${selectedId}-conversation`} viewKey={`${selectedId}-conversation`} ready={Boolean(thread) && historyReady} positions={readingPositions.current}>
           {updateWorker && (
             <div className="update-banner" role="status">
               <div><strong>Update ready</strong><span>A fresher Codex Remote is available.</span></div>
@@ -1791,7 +1785,18 @@ export function App() {
           {error && <div className="error-banner global-error" role="alert"><span>{error}</span><button onClick={() => setError('')}>×</button></div>}
           {sendError && <div className="error-banner global-error" role="alert"><span>{sendError}</span><button onClick={() => setSendError('')}>×</button></div>}
           {yoloSaveError && <p className="error-banner" role="alert">{yoloSaveError}</p>}
+        </div>
 
+        {hasTeam && thread && selectedGroup && <section className="leader-page" aria-label="Leader workspace" hidden={!showLeader}>
+          <ConversationTeam key={`${thread.id}:${selectedGroup.id}`} threadId={thread.id} group={selectedGroup} threads={threads}
+            csrf={session.csrf} enabled={online && pageVisible && showLeader} revision={teamRevision} onOpen={id => {
+              setLeaderViewId(null)
+              const target = threads.find(thread => thread.id === id)
+              void (target ? openThread(target) : api.thread(id).then(response => openThread(response.thread))).catch(error => setError(errorMessage(error)))
+            }} />
+        </section>}
+
+        {!showLeader && <TranscriptViewport key={`${selectedId}-conversation`} viewKey={`${selectedId}-conversation`} ready={Boolean(thread) && historyReady} positions={readingPositions.current}>
           {draftOpen && <section className="new-conversation-setup" aria-label="New conversation setup">
             <div className="new-conversation-heading"><h2>A fresh conversation</h2>
               <button type="button" className="quiet-button" disabled={busy} onClick={() => {
@@ -1830,7 +1835,7 @@ export function App() {
           </div>}
           {thread?.historyCacheTruncated && <p className="history-note">{thread.historyTruncation === 'head' ? 'Hội thoại vượt giới hạn 5 MB: phần cũ nhất đã được rút gọn trong bản xem/cache. Lịch sử gốc vẫn giữ nguyên.' : thread.historyTruncation === 'tail' ? 'Hội thoại vượt giới hạn 5 MB: phần cuối đã được rút gọn trong bản xem/cache. Lịch sử gốc vẫn giữ nguyên.' : 'Showing recent cached messages. Full history refreshes when connected.'}</p>}
           {thread && historyReady && <Conversation thread={thread} activeTurnId={activeTurnId} items={transcripts[thread.id] ?? EMPTY_ITEMS} pendingMessage={sentMessages[thread.id]} yoloMode={yoloMode} onOpenFile={openFile} onOpenLink={openLink} onSuggestion={suggestPrompt} />}
-        </TranscriptViewport>
+        </TranscriptViewport>}
 
         {selectedPending.length > 0 && <section className="pending-requests" aria-label="Questions and approvals">
           {selectedPending.map((request) => (
