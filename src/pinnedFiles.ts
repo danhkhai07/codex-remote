@@ -55,6 +55,8 @@ export function togglePinnedFile(pin: PinnedFile) {
   listeners.forEach(listener => listener())
 }
 
+export function forgetPinnedFilesMemory() { snapshot = undefined }
+
 export function usePinnedFiles() {
   return { ...useSyncExternalStore(subscribe, getSnapshot, getSnapshot), togglePin: togglePinnedFile }
 }

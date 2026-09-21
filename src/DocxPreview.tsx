@@ -129,7 +129,7 @@ export function DocxPreview({ blob, name, onOpenLink, stateKey = name }: {
 
   return <div className="docx-preview">
     <div className="docx-preview-content" aria-busy={status === 'loading'}>
-      <iframe ref={frame} src="/api/files/docx-frame" title={`Xem trước ${name}`} sandbox="allow-same-origin" referrerPolicy="no-referrer"
+      <iframe ref={frame} src="/secure-docx-frame" title={`Xem trước ${name}`} sandbox="allow-same-origin" referrerPolicy="no-referrer"
         onLoad={() => setFrameDocument(frame.current?.contentDocument ?? null)}
         style={{ visibility: status === 'ready' ? 'visible' : 'hidden' }} />
       {status === 'loading' && <div className="docx-preview-overlay" role="status"><span className="spinner" />Đang mở tệp Word…</div>}

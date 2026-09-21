@@ -1,3 +1,4 @@
+import { SecureHtml } from './SecureFiles'
 import { useEffect, useRef, useState } from 'react'
 import { api, ApiError } from './api'
 import { Login } from './App'
@@ -40,7 +41,6 @@ export function WorkingHoursPage() {
   </>
   return <main className="working-hours-shell">
     {error && <p className="working-hours-error" role="alert">{error}</p>}
-    <iframe ref={frame} key={attempt} title="Flint Software working hours" sandbox="allow-scripts" referrerPolicy="no-referrer"
-      src={`/api/files/html-preview?${new URLSearchParams({ path: WORK_TIMER_PATH, version: String(attempt) })}`} />
+    <SecureHtml frameRef={frame} key={attempt} title="Flint Software working hours" path={WORK_TIMER_PATH} />
   </main>
 }

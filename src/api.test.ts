@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from './api'
+// These tests exercise JSON/status handling above the authenticated transport.
+vi.mock('./secureApi', () => ({ secureFetch: (...args: Parameters<typeof fetch>) => fetch(...args) }))
 
 afterEach(() => vi.unstubAllGlobals())
 

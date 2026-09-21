@@ -1,3 +1,5 @@
+import { secureRequired } from './secureApi'
+import { SecureEvents } from './secureEvents'
 import { QuestionRequest } from './QuestionRequest'
 import { PendingRequests } from './pendingRequests'
 import { useCollaborationMode, type CollaborationMode } from './useCollaborationMode'
@@ -1016,7 +1018,7 @@ export function App() {
       setConnected(false)
       return
     }
-    const source = new EventSource(`/api/events?${new URLSearchParams({ after: String(eventCursor.current), epoch: eventEpoch.current })}`)
+    const source = new SecureEvents(`/api/events?${new URLSearchParams({ after: String(eventCursor.current), epoch: eventEpoch.current })}`)
     const assembler = new EventAssembler()
     const epoch = sessionEpoch.current
     let queued: RemoteEvent[] = []
@@ -1610,6 +1612,12 @@ export function App() {
       await api.logout(session.csrf)
     } catch (requestError) {
       setError(`Could not lock the app: ${errorMessage(requestError)}`)
+      return
+    }
+    if (secureRequired()) {
+      // SecureGate already unmounted private state. Preserve the user's draft
+      // stores instead of running the legacy destructive logout cleanup.
+      await clearConversationSnapshot(true)
       return
     }
     await clearConversationSnapshot()

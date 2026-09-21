@@ -1,3 +1,4 @@
+import { secureFetch } from './secureApi'
 import type { SkillList, SkillSelection } from '../server/skills'
 import type { ServiceInput, ServicesSnapshot } from '../server/services'
 import type { ReplySnapshot } from '../server/read-state'
@@ -24,7 +25,7 @@ async function request<T>(path: string, init: RequestInit = {}, csrf?: string): 
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   if (csrf && !['GET', 'HEAD'].includes(init.method ?? 'GET')) headers.set('X-CSRF-Token', csrf)
   const signal = init.signal ?? (['GET', 'HEAD'].includes(init.method ?? 'GET') ? AbortSignal.timeout(10_000) : undefined)
-  const response = await fetch(path, { ...init, signal, headers, credentials: 'same-origin' })
+  const response = await secureFetch(path, { ...init, signal, headers, credentials: 'same-origin' })
   const body = await response.json().catch((error: unknown) => {
     if (!response.ok) return {}
     if (error instanceof SyntaxError) throw new ApiError(502, 'Server returned incomplete or invalid data. Please retry.')
@@ -41,7 +42,7 @@ export function serverFileUrl(path: string, download = false): string {
 }
 
 async function requestText(path: string): Promise<string> {
-  const response = await fetch(path, { credentials: 'same-origin' })
+  const response = await secureFetch(path, { credentials: 'same-origin' })
   if (!response.ok) {
     const body = await response.json().catch(() => ({})) as { error?: string }
     throw new ApiError(response.status, body.error ?? `Request failed (${response.status})`)
@@ -50,7 +51,7 @@ async function requestText(path: string): Promise<string> {
 }
 
 async function requestBlob(path: string, signal?: AbortSignal): Promise<Blob> {
-  const response = await fetch(path, { credentials: 'same-origin', signal })
+  const response = await secureFetch(path, { credentials: 'same-origin', signal })
   if (!response.ok) {
     const body = await response.json().catch(() => ({})) as { error?: string }
     throw new ApiError(response.status, body.error ?? `Request failed (${response.status})`)
@@ -81,6 +82,7 @@ export const api = {
   fileRoots: (signal?: AbortSignal) => request<{ roots: string[] }>('/api/files/roots', { signal }),
   directory: (path: string, options: { search: string; hidden: boolean; offset: number }, signal?: AbortSignal) => request<DirectoryListing>(`/api/files/list?${new URLSearchParams({ path, search: options.search, hidden: options.hidden ? '1' : '0', offset: String(options.offset) })}`, { signal }),
   fileInfo: (path: string) => request<ServerFileInfo>(`/api/files/info?${new URLSearchParams({ path })}`),
+  htmlText: (path: string) => requestText(`/api/files/html-preview?${new URLSearchParams({ path })}`),
   fileText: (path: string) => requestText(serverFileUrl(path)),
   fileBlob: (path: string) => requestBlob(serverFileUrl(path, true)),
   pptxPreview: (path: string, signal: AbortSignal) => requestBlob(`/api/files/pptx-preview?${new URLSearchParams({ path })}`, signal),

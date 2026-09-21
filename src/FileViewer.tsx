@@ -1,3 +1,5 @@
+import { SecureHtml, SecureMedia, downloadSecureFile } from './SecureFiles'
+import { secureRequired } from './secureApi'
 import { attachWorkTimerStorage, WORK_TIMER_PATH } from './workTimerStorage'
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
@@ -144,7 +146,7 @@ function MarkdownPreview({ text, currentPath, onOpenFile, onOpenLink }: {
         },
         img: ({ src, alt, title }) => {
           const localFile = resolveMarkdownFileReference(src, currentPath)
-          return <img src={localFile ? serverFileUrl(localFile.path) : src} alt={alt ?? ''} title={title} />
+          return localFile ? <SecureMedia path={localFile.path} title={alt ?? ''} image /> : <img src={src} alt={alt ?? ''} title={title} />
         },
       }}
     >{text}</ReactMarkdown>
@@ -275,6 +277,7 @@ export function FileViewer({ reference, onClose, onOpenFile, onOpenLink }: {
       })
       return
     }
+    if (secureRequired() && info) { void downloadSecureFile(reference.path, info.name, info.size).catch(error => { if (error?.name !== 'AbortError') setSaveError(error instanceof Error ? error.message : 'Download failed') }); return }
     const opened = window.open(downloadUrl, '_blank', 'noopener,noreferrer')
     if (!opened) setSaveError('Your browser blocked the new download window. Use “Open copy” below instead.')
   }
@@ -306,7 +309,7 @@ export function FileViewer({ reference, onClose, onOpenFile, onOpenLink }: {
         </button>
         <div className="file-viewer-actions">
           {info && <button type="button" className="file-pin-button" aria-label={pinned ? 'Bỏ ghim file' : 'Ghim file'} aria-pressed={pinned} onClick={() => togglePin({ path: info.path, kind: 'file' })}>{pinned ? '★' : '☆'}</button>}
-          {info?.previewable && !svg && !['docx', 'pptx'].includes(info.kind) && <a className="quiet-button" href={html ? htmlPreviewUrl : previewUrl} target="_blank" rel="noreferrer">Open</a>}
+          {!secureRequired() && info?.previewable && !svg && !['docx', 'pptx'].includes(info.kind) && <a className="quiet-button" href={html ? htmlPreviewUrl : previewUrl} target="_blank" rel="noreferrer">Open</a>}
           {info && <button className="primary-button" type="button" onClick={saveFile} disabled={nativeShare && sharePreparing}>
             {nativeShare ? (sharePreparing ? 'Preparing…' : 'Save / Share') : 'Download'}
           </button>}
@@ -351,10 +354,10 @@ export function FileViewer({ reference, onClose, onOpenFile, onOpenLink }: {
         )}
         {!error && svg && info.previewable && text !== null && textMode === 'preview' && <SvgPreview key={reference.path} text={text} name={info.name} />}
         {!error && html && info.previewable && text !== null && textMode === 'preview' && (
-          <iframe ref={htmlFrameRef} key={`${reference.path}:${attempt}`} src={htmlPreviewUrl} title={info.name} sandbox="allow-scripts" referrerPolicy="no-referrer" />
+          <SecureHtml frameRef={htmlFrameRef} key={`${reference.path}:${attempt}`} path={reference.path} title={info.name} />
         )}
-        {!error && info?.kind === 'image' && <img src={previewUrl} alt={info.name} />}
-        {!error && info?.kind === 'pdf' && <iframe src={previewUrl} title={info.name} />}
+        {!error && info?.kind === 'image' && <SecureMedia path={reference.path} title={info.name} image />}
+        {!error && info?.kind === 'pdf' && <SecureMedia path={reference.path} title={info.name} />}
         {!error && info?.kind === 'pptx' && info.previewable && <Suspense fallback={<span className="spinner" aria-label="Đang tải trình xem slide" />}><PptxPreview key={reference.path} path={reference.path} name={info.name} /></Suspense>}
         {!error && info?.kind === 'docx' && info.previewable && <DocxPreview key={reference.path} stateKey={reference.path} blob={docxBlob} name={info.name} onOpenLink={href => {
           const local = resolveMarkdownFileReference(href, reference.path)
@@ -368,7 +371,7 @@ export function FileViewer({ reference, onClose, onOpenFile, onOpenLink }: {
             <button className="primary-button" type="button" onClick={saveFile} disabled={nativeShare && sharePreparing}>
               {nativeShare ? (sharePreparing ? 'Preparing file…' : 'Save / Share') : `Download ${info.name}`}
             </button>
-            <a className="quiet-button" href={downloadUrl} target="_blank" rel="noreferrer">Open copy</a>
+            <a className="quiet-button" href={secureRequired() ? undefined : downloadUrl} onClick={event => { if (secureRequired()) { event.preventDefault(); saveFile() } }} target="_blank" rel="noreferrer">Open copy</a>
           </div>
           {saveError && <p className="file-viewer-save-error" role="alert">{saveError}</p>}
         </div>}

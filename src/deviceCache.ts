@@ -1,3 +1,4 @@
+import { secureRequired } from './secureApi'
 import type { Session, Thread } from './types'
 import type { TranscriptItem } from './transcript'
 import { HISTORY_CACHE_LIMIT, compactThreadHistory, isCachedThread, isThreadMetadata } from './threadHistoryCache'
@@ -85,6 +86,7 @@ async function writeValue(value: unknown, key: string): Promise<void> {
 }
 
 export async function loadConversationSnapshot(): Promise<ConversationSnapshot | null> {
+  if (secureRequired()) return null // Only fresh authorized resource revalidation may restore private data.
   try {
     const value = await readDeviceValue() as Partial<ConversationSnapshot> | undefined
     if (!value || value.version !== 1 || typeof value.savedAt !== 'number' || Date.now() - value.savedAt > MAX_CACHE_AGE_MS) return null
@@ -107,6 +109,7 @@ export async function loadConversationSnapshot(): Promise<ConversationSnapshot |
 }
 
 export async function saveConversationSnapshot(snapshot: Omit<ConversationSnapshot, 'version' | 'savedAt'>): Promise<void> {
+  if (secureRequired()) return // Secure API cache owns private persistence.
   try {
     const selectedTranscripts = snapshot.selectedId ? snapshot.transcripts[snapshot.selectedId] ?? [] : []
     const thread = snapshot.thread ? limitConversation(snapshot.thread, MAX_CONVERSATION_BYTES - 64) : null
@@ -125,6 +128,6 @@ export async function saveConversationSnapshot(snapshot: Omit<ConversationSnapsh
   }
 }
 
-export async function clearConversationSnapshot(): Promise<void> {
-  try { await Promise.all([writeDeviceValue(), writeDeviceValue(undefined, 'draft-images')]) } catch { /* Best-effort cache cleanup on logout. */ }
+export async function clearConversationSnapshot(preserveDrafts = false): Promise<void> {
+  try { await Promise.all([writeDeviceValue(), ...(preserveDrafts ? [] : [writeDeviceValue(undefined, 'draft-images')])]) } catch { /* Best-effort cache cleanup on logout. */ }
 }

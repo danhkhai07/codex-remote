@@ -3042,3 +3042,5 @@ html.browser-scroll-locked, html.browser-scroll-locked body { overflow: hidden; 
 .composer-controls .composer-mode { flex: 0 0 auto; min-width: 48px; white-space: nowrap; }
 .composer-controls .composer-mode.is-plan { color: var(--accent); background: var(--panel-soft); }
 .plan-implementation { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 8px 0; }
+
+.secure-lock-button { position: fixed; right: 12px; bottom: 12px; z-index: 80; background: var(--panel, #fff); box-shadow: 0 2px 10px #0002; }

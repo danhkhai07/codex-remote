@@ -1,3 +1,4 @@
+import { SecureGate } from './SecureGate'
 import { unregisterLegacyPreviewWorkers } from './legacyPreviewWorkers'
 import { WorkingHoursPage, isWorkingHoursPath } from './WorkingHoursPage'
 import { ServicesPage, isServicesPath } from './ServicesPage'
@@ -17,7 +18,7 @@ if (import.meta.hot) import.meta.hot.dispose(removeZoomLock)
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <AppRecovery>{isKnowledgePath(window.location.pathname) ? <Suspense fallback={<main className="login-shell"><p role="status">Đang mở Knowledge…</p></main>}><KnowledgePage /></Suspense> : isServicesPath(window.location.pathname) ? <ServicesPage /> : isWorkingHoursPath(window.location.pathname) ? <WorkingHoursPage /> : <App />}</AppRecovery>
+    <AppRecovery><SecureGate>{isKnowledgePath(window.location.pathname) ? <Suspense fallback={<main className="login-shell"><p role="status">Đang mở Knowledge…</p></main>}><KnowledgePage /></Suspense> : isServicesPath(window.location.pathname) ? <ServicesPage /> : isWorkingHoursPath(window.location.pathname) ? <WorkingHoursPage /> : <App />}</SecureGate></AppRecovery>
   </StrictMode>,
 )
 

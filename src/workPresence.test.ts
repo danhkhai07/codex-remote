@@ -1,11 +1,12 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { startWorkPresence } from './workPresence'
+vi.mock('./secureApi', () => ({ secureFetch: (...args: Parameters<typeof fetch>) => fetch(...args) }))
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
 it('reports idle foreground time, hides, and closes the final interval on cleanup', () => {
   vi.useFakeTimers()
   const doc = Object.assign(new EventTarget(), { visibilityState: 'visible' })
   const win = Object.assign(new EventTarget(), { setInterval })
-  const fetcher = vi.fn().mockResolvedValue({ ok: true })
+  const fetcher = vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new ArrayBuffer(0) })
   vi.stubGlobal('document', doc); vi.stubGlobal('window', win); vi.stubGlobal('fetch', fetcher)
   vi.stubGlobal('crypto', { randomUUID: () => 'test-tab' })
   const stop = startWorkPresence('csrf', false)
@@ -18,7 +19,7 @@ it('reports idle foreground time, hides, and closes the final interval on cleanu
   expect(fetcher.mock.calls[0][1].headers['X-CSRF-Token']).toBe('csrf')
 })
 it('flags processing intervals even while the screen remains visible', () => {
-  vi.useFakeTimers(); const fetcher = vi.fn().mockResolvedValue({ ok: true })
+  vi.useFakeTimers(); const fetcher = vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new ArrayBuffer(0) })
   vi.stubGlobal('document', Object.assign(new EventTarget(), { visibilityState: 'visible' }))
   vi.stubGlobal('window', Object.assign(new EventTarget(), { setInterval }))
   vi.stubGlobal('fetch', fetcher); vi.stubGlobal('crypto', { randomUUID: () => 'test-tab' })

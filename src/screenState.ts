@@ -69,6 +69,8 @@ export function flushScreenState() {
   try { localStorage.setItem(KEY, JSON.stringify(values)) } catch { /* Storage may be full or disabled. */ }
 }
 
+export function forgetScreenStateMemory() { flushScreenState(); values = undefined }
+
 export function clearScreenState() {
   clearTimeout(timer)
   timer = undefined
