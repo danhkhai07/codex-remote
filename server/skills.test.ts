@@ -19,10 +19,10 @@ it('uses the conversation cwd, refreshes selection and sends native skill inputs
   })
   const controller = new RemoteController({ workspaceRoots: ['/repo'] } as never, app)
   await controller.startTurn('a', 'Review this', undefined, undefined, false, [], [], [skill])
-  expect(request).toHaveBeenCalledWith('skills/list', { cwds: ['/repo'], forceReload: true })
+  expect(request).toHaveBeenCalledWith('skills/list', { cwds: ['/repo'], forceReload: true }, undefined, undefined)
   expect(request).toHaveBeenCalledWith('turn/start', expect.objectContaining({ input: [
     { type: 'text', text: 'Review this', text_elements: [] }, { type: 'skill', name: skill.name, path: skill.path },
-  ] }))
+  ] }), undefined, expect.any(Function))
   app.emit('notification', { method: 'turn/completed', params: { threadId: 'a', turn: { id: 'turn', status: 'completed' } } })
   request.mockClear()
   await expect(controller.startTurn('a', 'Review', undefined, undefined, false, [], [], [{ ...skill, path: '/fake' }])).rejects.toThrow('unavailable')
