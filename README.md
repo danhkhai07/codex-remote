@@ -16,12 +16,23 @@ cp .env.example .env
 # Edit .env with this machine's values before starting.
 npm ci
 npm run check
+# Before the first production start, provision the separate unlock key locally:
+# see docs/security/encrypted-api-rollout.md (never put a real key in this repo).
 npm start
 ```
 
 `npm start`, `npm run dev`, and `npm run status` load the ignored `.env`.
 Keep credentials and `.remote-push.json` private; preserve both across moves.
 See [operation and configuration](docs/codex-remote-control.md).
+
+The encrypted API candidate adds a separate owner key after login and requires
+unlock again on reload. Private API responses can use an IndexedDB ciphertext
+cache after fresh server authorization; keys and decrypted responses are not
+persisted by that cache. Preview apps keep their separate HTTPS origin and
+private HTTP revalidation. See the [protocol/review contract](docs/security/encrypted-api-protocol.md)
+and [rollout, compatibility and evidence](docs/security/encrypted-api-rollout.md).
+This candidate still requires independent review and CR2 migration integration;
+it is not a statement that the live deployment has this feature.
 
 All deployment-specific values belong in `.env`: public origin, gateway password,
 session secret, Codex binary, and workspace roots. Historical Codex threads retain
@@ -39,8 +50,10 @@ uploads. Failed sends retain the browser draft for retry.
 
 Server files: click an absolute file link in a Codex response to open the
 authenticated in-app viewer. Text/source files, Word DOCX, PowerPoint PPTX, PDF, PNG, JPEG, WebP and GIF can
-be previewed; every regular file can be downloaded to the current device. Paths
-are canonicalized and must stay inside `CODEX_REMOTE_WORKSPACE_ROOTS`, including
+be previewed. In encrypted mode, large downloads stream to a file in browsers
+with File System Access; other browsers have an explicit 64 MiB download/preview
+limit. Paths are canonicalized and must stay inside `CODEX_REMOTE_FILE_ROOTS`
+(workspace roots by default), including
 after symlink resolution. Text preview is capped at 10 MB; larger or unsupported
 files remain download-only. Markdown files open as rendered documents by default
 with a Preview/Raw toggle; line-target links open in Raw mode so the requested
