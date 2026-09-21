@@ -13,7 +13,7 @@ import { listenOrchestration } from './orchestration-socket.js'
 
 const cleanups: Array<() => void | Promise<void>> = []
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup() })
-const settings = { model: 'test-model', effort: 'high', fullAccess: false }
+const settings = { model: 'gpt-6-astra', effort: 'high', fullAccess: false }
 type Info = Awaited<ReturnType<OrchestrationDriver['read']>>
 function setup() {
   const root = mkdtempSync(join(tmpdir(), 'orchestra-'))
@@ -30,6 +30,10 @@ function setup() {
   })
   let sequence = 0
   const driver: OrchestrationDriver = {
+    models: vi.fn(async () => ({ data: [
+      { model: 'gpt-6-astra', supportedReasoningEfforts: ['high', 'xhigh', 'max'].map(reasoningEffort => ({ reasoningEffort })) },
+      { model: 'gpt-5.6-sol', supportedReasoningEfforts: ['low', 'high', 'xhigh'].map(reasoningEffort => ({ reasoningEffort })) },
+    ] })),
     workspaces: () => [{ id: '0', label: 'workspace', path: '/workspace' }], read, inspect: read,
     normalizeName: normalizeThreadName,
     archive: vi.fn(async (id, guard, onDispatch) => { guard(); onDispatch(); vault.assignThread(id, null) }),
@@ -384,4 +388,94 @@ it('accepts rename/archive through the same private CLI transport and returns na
   await expect(command(archive)).resolves.toMatchObject({ archived: true, duplicate: false })
   await expect(command(archive)).resolves.toMatchObject({ archived: true, duplicate: true })
   expect(f.driver.archive).toHaveBeenCalledTimes(1)
+})
+
+it('filters the live model catalog and exposes only safe fields', async () => {
+  const f = setup(), cap = f.token()
+  f.driver.models = vi.fn(async () => ({ data: [
+    { model: 'gpt-6-astra', secret: 'private', supportedReasoningEfforts: [{ reasoningEffort: 'max', description: 'private' }] },
+    { model: 'gpt-5.6-sol', hidden: true },
+    { model: 'other', supportedReasoningEfforts: [{ reasoningEffort: 'high' }] },
+  ] }))
+  expect(await f.orchestra.command(cap, { action: 'models' })).toEqual({
+    models: [{ model: 'gpt-6-astra', supportedReasoningEfforts: ['max'] }],
+  })
+})
+
+it.each([
+  { model: 'other', effort: 'high' },
+  { model: 'gpt-5.6-sol', effort: 'max' },
+  { model: '', effort: 'high' },
+  { model: 'gpt-6-astra', effort: null },
+])('rejects invalid settings before creating, reserving or spending budgets: %j', async override => {
+  const f = setup(), cap = f.token()
+  await expect(f.orchestra.command(cap, { action: 'spawn', requestId: 'invalid', title: 'Task', text: 'Task', ...override })).rejects.toMatchObject({ status: 400 })
+  expect(f.driver.create).not.toHaveBeenCalled()
+  expect(f.orchestra.snapshot('leader')).toMatchObject({ tasks: [], limits: { dispatchesLeft: 20 } })
+})
+
+it('rejects missing or disallowed inherited settings without defaults', async () => {
+  const f = setup()
+  for (const inherited of [{ fullAccess: false }, { model: 'gpt-6-astra', fullAccess: false }, { model: 'other', effort: 'high', fullAccess: false }]) {
+    const cap = f.orchestra.context('leader', inherited, true).match(/--capability ([\w-]+)/)![1]
+    await expect(f.delegate(cap)).rejects.toMatchObject({ status: 400 })
+  }
+  expect(f.orchestra.snapshot('leader').tasks).toEqual([])
+})
+
+it('pins overridden task settings across simultaneous retries and leaves leader wakeups unchanged', async () => {
+  const f = setup(), inherited = { ...settings, mode: 'plan' as const }, cap = f.token('leader', inherited)
+  const command = { action: 'spawn', requestId: 'override', title: 'Task', text: 'Task', model: 'gpt-5.6-sol', effort: 'low', fullAccess: true, mode: 'default' }
+  const [first, retry] = await Promise.all([f.orchestra.command(cap, command), f.orchestra.command(cap, command)]) as Array<{ task: ConversationTask }>
+  expect(first.task.id).toBe(retry.task.id)
+  const chosen = { ...inherited, model: 'gpt-5.6-sol', effort: 'low' }
+  expect(first.task.settings).toEqual(chosen)
+  expect(f.driver.create).toHaveBeenCalledExactlyOnceWith('0', f.group.id, chosen)
+  await f.orchestra.start(); await f.orchestra.pump()
+  expect(f.driver.start).toHaveBeenCalledWith(first.task.threadId, expect.any(String), chosen, expect.any(Function))
+  expect(await f.orchestra.command(cap, { ...command, model: 'other', effort: 'invalid' })).toMatchObject({ duplicate: true, task: { settings: chosen } })
+  expect(f.orchestra.snapshot('leader').tasks[0].settings).toEqual({ model: chosen.model, effort: chosen.effort })
+  f.finish(first.task.threadId, first.task.turnId!)
+  await f.orchestra.pump()
+  expect(f.driver.start).toHaveBeenLastCalledWith('leader', expect.any(String), inherited, expect.any(Function))
+})
+
+it('rechecks role and manual control after asynchronous catalog reads before reservation', async () => {
+  for (const change of ['role', 'manual']) {
+    const f = setup(), cap = f.token(), models = f.driver.models
+    if (change === 'manual') await f.delegate(cap, 'worker', 'earlier')
+    f.driver.models = async () => {
+      if (change === 'role') f.vault.setLeader(f.group.id, 'second')
+      else f.orchestra.userTurn('worker', 'Direct control')
+      return models()
+    }
+    await expect(f.delegate(cap)).rejects.toMatchObject({ status: change === 'role' ? 403 : 409 })
+    expect(f.orchestra.snapshot('leader').tasks).toHaveLength(change === 'manual' ? 1 : 0)
+  }
+})
+
+it('fails queued tasks if the pinned effort disappears instead of lowering it at dispatch', async () => {
+  const f = setup(), cap = f.token()
+  await f.delegate(cap)
+  f.driver.models = async () => ({ data: [{ model: settings.model, supportedReasoningEfforts: [{ reasoningEffort: 'low' }] }] })
+  await f.orchestra.start(); await f.orchestra.pump()
+  expect(vi.mocked(f.driver.start).mock.calls.filter(([id]) => id === 'worker')).toHaveLength(0)
+  expect(f.orchestra.snapshot('leader').tasks[0]).toMatchObject({ status: 'failed', settings: { effort: 'high' } })
+})
+
+it.each([[], [{ model: 'gpt-6-astra' }]])('rejects unavailable models or unknown effort support before reservation', async data => {
+  const f = setup(), cap = f.token()
+  f.driver.models = async () => ({ data })
+  await expect(f.delegate(cap)).rejects.toMatchObject({ status: 400 })
+  expect(f.orchestra.snapshot('leader').tasks).toEqual([])
+  expect(f.driver.start).not.toHaveBeenCalled()
+})
+
+it('inherits effort for a model-only override and model for an effort-only override', async () => {
+  const f = setup(), cap = f.token()
+  const base = { action: 'delegate', threadId: 'worker', title: 'Task', text: 'Task' }
+  expect(await f.orchestra.command(cap, { ...base, requestId: 'model-only', model: 'gpt-5.6-sol' }))
+    .toMatchObject({ task: { settings: { ...settings, model: 'gpt-5.6-sol' } } })
+  expect(await f.orchestra.command(cap, { ...base, requestId: 'effort-only', effort: 'max' }))
+    .toMatchObject({ task: { settings: { ...settings, effort: 'max' } } })
 })
