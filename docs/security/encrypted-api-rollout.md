@@ -1,7 +1,10 @@
 # Encrypted API candidate: review and rollout
 
-Base `9151e6746e56687b0bdac896ce9b36726f8a71b6`, branch
-`feat/secure-api-cache`, worktree `/root/WORKTREES/cr-secure-api-cache`.
+Current integration: branch `integration/secure-api-foundation-hours`, worktree
+`/root/WORKTREES/cr-secure-api-foundation-hours`, from exact d88b163dc9c39412307031e037f655576e2ee311,
+merged foundation 1706f3ba9b844885ccffea8069015e13894052c7 and main
+783b1e3ae0efd683458c9fa0b3518b2e476b06a9. See
+[combined candidate evidence and manifest](secure-api-foundation-hours.md).
 This is a candidate, not a deployed feature or completed security audit.
 See [the protocol and threat model](encrypted-api-protocol.md).
 
@@ -72,9 +75,13 @@ live transcript/cursor pair or open history offline.
 saves on compatible desktop browsers. Other browsers use an explicit 64 MiB Blob
 fallback; larger saves fail visibly. Mobile/Safari large-file parity is not
 implemented, and actual iOS/Safari/password-manager products were not tested.
-PDF/DOCX/PPTX renderer fidelity was not re-proven with end-to-end document fixtures
-in this task; the checked Files browser paths were HTML/text, raw binary save and
-upload. Include those document formats in the independent compatibility review.
+The integration fixture uses real two-page PDF, two-slide PPTX (isolated
+LibreOffice conversion), and DOCX text/table documents over the mandatory tunnel.
+PDF now uses PDF.js page/zoom rendering because native sandboxed iframe viewing
+was blank in Chromium. This is explicitly a static preview; interactive PDF
+forms, scripts, embedded media, annotations and text selection are not offered
+in that preview. Download preserves the original bytes for a full document app.
+These small fixtures do not establish fidelity for arbitrary office documents.
 Existing native-share and text/DOCX/PPTX conversion limits remain. Blob collectors
 enforce actual response bytes as well as declared length: 20 MiB for share/DOCX,
 32 MiB for a PPTX's converted PDF, 64 MiB for other file-preview/download fallbacks.
@@ -82,7 +89,7 @@ This also bounds a file that grows between metadata inspection and content fetch
 The Files HTML
 viewer receives plaintext only in an opaque sandbox (allow-scripts without
 allow-same-origin; connections/forms/remote resources denied). DOCX has a static
-script-free render shell; PDF/images use revocable object URLs. No plaintext URL
+script-free render shell; PDF renders one bounded canvas page, images use revocable object URLs. No plaintext URL
 fallback is used for large files.
 
 Existing plaintext conversation snapshots are no longer read/written in required
@@ -101,22 +108,22 @@ Fixtures are implementation evidence, not a substitute for independent review.
 Review challenge binding/consumption, admission caps, nonce/sequence/context,
 unknown mutation outcome, lifecycle races and ciphertext cache authorization.
 
-CR2 owns old service-worker/tab migration and login limiter changes. This branch
-has not copied or approved those patches. Install `installMigrationReady(hook)`
-from `src/secureApi.ts` before rendering `SecureGate`; the hook is awaited before
-initial restore/setup, login and unlock and must reject while migration is unsafe.
-The default hook is only a composition point, so this branch alone is NOT ready
-for rollout. Merge conflicts are expected around `src/main.tsx`, `server/http-app.ts`
-and environment/docs. Preserve the hook, mandatory private-API gate, isolated
-preview origins, parent-session grants/watchers and security response filters.
-Do not replace the new gate with legacy unregister-only cleanup.
+Foundation 1706f3b is integrated: root PreviewMigrationGate wraps SecureGate, and
+installMigrationReady rechecks ensurePreviewMigrationReady(true) before setup,
+login and unlock. api.session also rechecks. Handshake proof attempts use a
+separate bounded LoginRateLimiter before reading body, with beginAttempt/finally
+finish and trusted IP handling. Successful password login does not reset proof
+failures. Private-API enforcement, isolated origins, parent-session grants,
+revocation watchers, CSRF/file checks and response filters are preserved.
 
 The first operator migration must terminate old same-origin preview documents and
 workers before entering credentials/key. Do not mark that P1 fixed using these
 new-page browser fixtures. Keep the base migration reproduction and CR2 acceptance
 proof. Workboard must obtain an encrypted preview ticket through the client flow;
 required mode rejects old cookie-only `/preview/<port>/` administrator shortcuts.
-HTTPS/DNS/TLS/Nginx/Workboard and P2 limiter acceptance remain leader gates.
+HTTPS/DNS/TLS/Nginx/Workboard, a clean browser profile and independent protocol
+review remain leader gates. Automatic cleanup does not attest arbitrary SW/tab
+residue absent; do not mark this threat solved merely because a fixture passes.
 
 ## Local provisioning and rotation (after review, not executed on production)
 
@@ -148,7 +155,7 @@ those for rollout validation. Public status/health needs no private metadata.
 ## Artifact manifest and deployment sequence
 
 Do not arm/edit old releases, copy this worktree over live files, or restart from
-this task. Leader prepares a NEW seal after independent review and CR2 integration.
+this task. Leader prepares a NEW seal after independent review and verified Hours recovery/fresh baseline.
 
 | Group | Artifacts to include in the new seal |
 | --- | --- |
@@ -159,13 +166,14 @@ this task. Leader prepares a NEW seal after independent review and CR2 integrati
 | Operator tools | scripts/secure-key.mjs, secure-maintenance.mjs, knowledge.mjs, services.mjs, restart-when-idle.mjs; retain restart-readiness/session-cookie helpers |
 | Configuration/private state | reviewed required mode/key path; operator-provisioned key directory (not a release artifact); preserve session registry/history/attachments/other runtime data |
 | Admin proxy | deploy/nginx/secure-api-location.conf in the NEW seal; exact request location allows 36 MiB wire data, retains header filters and disables request/response buffering; keep preview's separate policy |
-| Preserve exactly | live work-hours.js SHA256 a9a74ac46cd4c72b5ff350188d3edf648d8b4ffe2a5fbf4a494f68fab691bd91, plus its matching map |
+| Preserve exactly | live work-hours.js SHA256 b763a0f7b74c0341684e196855e85b3f5e3b123915a373b27463c17916702e93, plus its matching map |
 
-The base build emits a different work-hours.js from the pinned live artifact even
-without source edits. Exclude it from the copied artifact manifest and preserve the
-pinned live file/map; no Working Hours backend change is required by this feature.
-Only the parent UI transport adapter changes. Do not replace all dist-server files
-indiscriminately.
+The integration build emits the approved pause-aware work-hours.js hash exactly.
+Preserve that JS/map and the matching working-hours/update.py and template from
+783b1e3. The old a9a74ac pin is superseded by user authorization. Do not touch the
+active Hours recovery runner/marker or old release seals. Fresh runtime baseline
+is pending the recovery owner's verification; source hash equality alone does
+not finalize that deployment. Do not replace all dist-server files indiscriminately.
 
 Review and seal client/server/dependency/CLI together. Provision the key privately
 only after approval, prepare config and backups, and await the reviewed idle watcher
@@ -191,7 +199,7 @@ All checks use codex-heavy with one Vitest worker, fake credentials/native RPC,
 temporary listeners/key files and no real model turn. Existing integration/security
 worktree and runtime were left unchanged.
 
-Final `npm run check`: 409 Vitest tests in 71 files, 11 Node tests, lint, TypeScript,
+Prior standalone d88b163 `npm run check`: 409 Vitest tests in 71 files, 11 Node tests, lint, TypeScript,
 client/server builds and PWA validation pass. Fixture commands below also pass.
 
 Reproduction commands, after build:
@@ -229,11 +237,11 @@ limit is not a claim of a 64 MiB renderer RAM bound. These are artificial fixtur
 measurements, not user-device latency/memory forecasts. Large mobile save support
 and real password-manager/iOS behavior remain unproved as stated above.
 
-The only added runtime dependency is exact jose 6.2.12. The main client bundle
-grows by about 15 KiB gzip; existing lazy PDF/DOCX bundles remain separate. The
-existing Vite >500 kB bundle advisory remains. `npm audit` reports two inherited
-moderate development dependency entries (vitest/@vitest/mocker 4.1.10), no jose
-finding. This candidate does not update the unrelated test runner; review the
-[maintainer advisory and 4.1.11 fix](https://github.com/vitest-dev/vitest/security/advisories/GHSA-82fw-gwwq-j7x9)
-with the security/dependency owner. Do not report the overall dependency audit as
-clean or treat fixtures as independent cryptographic review.
+The only added runtime dependency is exact jose 6.2.12. Existing lazy PDF/DOCX
+bundles remain separate; Vite's >500 kB main bundle advisory remains. Integration
+patches the development-only Vitest family 4.1.10 -> 4.1.11. The
+[maintainer advisory](https://github.com/vitest-dev/vitest/security/advisories/GHSA-82fw-gwwq-j7x9)
+identifies 4.1.11 as the fixed version for mocker redirect traversal. Fresh npm ci
+and audit report zero findings at the check time; this does not constitute an
+independent cryptographic audit. No new document-generation dependency is added:
+the fixture generator uses Python's standard library.

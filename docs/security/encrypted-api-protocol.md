@@ -41,6 +41,9 @@ eight concurrent handshakes globally / one per session; 64 channels globally /
 eight per session, 15-minute lifetime bounded by session expiry; 32 active requests
 globally / 12 per channel; 2,048 used request IDs per channel. Admission is reserved
 before asynchronous work. Old idle channels can be evicted only after valid proof.
+Failed proof admission also uses a bounded per-IP limiter (eight failures per 15 minutes,
+4,096 identities; trusted-proxy resolution, Retry-After). It reserves before body
+reads and finishes on every outcome; password-login success cannot reset it.
 All public/setup metadata is version/type checked before selecting client mode.
 
 Only authenticated /api/secure/request dispatches business APIs in required
@@ -80,11 +83,12 @@ stop being written/read in required mode; existing drafts are not newly migrated
 
 ## Client and migration merge contract (CR2)
 
-Outer SecureGate mounts app pages only after setup, authenticated key proof and
-fresh session load. Export a migration-ready hook awaited BEFORE initial session
-restore, login and unlock; fail closed on hook rejection. CR2 owns the migration
-implementation and rate limiter, and must replace/compose this hook when merging.
-Do not transplant CR2's unfinished tree. Gate is NOT itself proof of cleanup.
+PreviewMigrationGate wraps SecureGate before any session effects. The installed
+`installMigrationReady(() => ensurePreviewMigrationReady(true))` rechecks before
+setup, login and unlock; api.session also rechecks before restore. Reject cleanup
+errors without sending credentials or deriving keys. Foundation 1706f3b is merged.
+This known-residue gate is NOT proof of origin integrity; rollout at the existing
+URL still requires a new browser profile. See migration-readiness-contract.md.
 Unmount private UI on lock/logout, cancel requests and revoke generated object
 URLs. Password-manager-compatible unlock field uses current-password but distinct
 label/name from login. No automatic password-manager access; tab visibility does
@@ -94,7 +98,9 @@ Encrypted HTML uses an opaque-origin sandbox, retaining existing connect/form/
 network restrictions; never combine allow-scripts and allow-same-origin. DOCX
 render shell has no scripts. Large downloads use a user-chosen stream destination
 where supported; any browser fallback limit is explicit. Working Hours backend
-module/hash must not change; its parent-frame API adapter uses secure transport.
+uses the pause-aware 783b1e3 source and matching generator/template. Its parent-frame
+get/start/stop/pause/resume/replace-totals adapter uses secure transport. Preserve
+the new approved runtime hash below; do not reinstall the superseded estimator.
 Maintenance knowledge/services/restart watcher use the same authenticated protocol
 adapter, no localhost exception. Push payloads are generic, not chat excerpts.
 
@@ -110,7 +116,7 @@ one worker; full npm run check. Report limits and unimplemented paths explicitly
 Separate protocol/backend/client/cache/tests/docs commits, push and preserve tree.
 No production key generation, merge/deploy/restart or existing release edits.
 New pinned release includes dependency/runtime/CLI artifacts; preserve work-hours
-SHA a9a74ac46cd4c72b5ff350188d3edf648d8b4ffe2a5fbf4a494f68fab691bd91.
+SHA b763a0f7b74c0341684e196855e85b3f5e3b123915a373b27463c17916702e93.
 
 Primary references checked 2026-09-21:
 - https://github.com/panva/jose (v6, WebCrypto runtimes)

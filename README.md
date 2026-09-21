@@ -31,7 +31,8 @@ cache after fresh server authorization; keys and decrypted responses are not
 persisted by that cache. Preview apps keep their separate HTTPS origin and
 private HTTP revalidation. See the [protocol/review contract](docs/security/encrypted-api-protocol.md)
 and [rollout, compatibility and evidence](docs/security/encrypted-api-rollout.md).
-This candidate still requires independent review and CR2 migration integration;
+This candidate includes migration/limiter and pause-aware Hours integration, and
+still requires independent protocol review and a fresh rollout baseline;
 it is not a statement that the live deployment has this feature.
 
 All deployment-specific values belong in `.env`: public origin, gateway password,
