@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 const { ready } = vi.hoisted(() => ({ ready: vi.fn() }))
 vi.mock('./legacyPreviewWorkers', () => ({ ensurePreviewMigrationReady: ready }))
-vi.mock('./secureApi', () => ({ secureFetch: (...args: Parameters<typeof fetch>) => fetch(...args) }))
+vi.mock('./secureApi', async importOriginal => ({ ...await importOriginal<typeof import('./secureApi')>(), secureFetch: (...args: Parameters<typeof fetch>) => fetch(...args) }))
 import { api } from './api'
 afterEach(() => { vi.unstubAllGlobals(); ready.mockReset() })
 

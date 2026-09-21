@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { secureIntent } from './secureApi'
 import { api, ApiError } from './api'
 import { Login } from './App'
 import { LocalhostPreview } from './LocalhostPreview'
@@ -21,8 +22,8 @@ function ServiceEditor({ initial, existing, csrf, onClose, onSaved }: {
   useEffect(() => { dialog.current?.showModal() }, [])
   const field = (name: keyof ServiceInput, text: string) => setValue(current => ({ ...current, [name]: text }))
   const submit = async (event: FormEvent) => {
-    event.preventDefault(); setBusy(true); setError('')
-    try { await api.saveService(value, csrf); onSaved(); onClose() }
+    event.preventDefault(); const intent = secureIntent(); intent.assert(); setBusy(true); setError('')
+    try { await api.saveService(value, csrf); intent.assert(); onSaved(); onClose() }
     catch (reason) { setError(message(reason)) }
     finally { setBusy(false) }
   }
@@ -94,8 +95,9 @@ export function ServicesPage() {
   })
   const remove = async (service: ServiceInput) => {
     if (!window.confirm(`Xóa “${service.name}” khỏi danh sách? Dịch vụ vẫn tiếp tục chạy.`)) return
+    const intent = secureIntent(); intent.assert()
     setRemoving(keyOf(service))
-    try { await api.removeService(keyOf(service), session.csrf); await refresh() }
+    try { await api.removeService(keyOf(service), session.csrf); intent.assert(); await refresh() }
     catch (reason) { setError(message(reason)) }
     finally { setRemoving('') }
   }

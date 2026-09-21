@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from './api'
+import { lockSecure } from './secureApi'
 // These tests exercise JSON/status handling above the authenticated transport.
-vi.mock('./secureApi', () => ({ secureFetch: (...args: Parameters<typeof fetch>) => fetch(...args) }))
+vi.mock('./secureApi', async importOriginal => ({ ...await importOriginal<typeof import('./secureApi')>(), secureFetch: (...args: Parameters<typeof fetch>) => fetch(...args) }))
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -33,4 +34,14 @@ describe('conversation response failures', () => {
     await expect(api.thread('pos')).rejects.toThrow('incomplete or invalid data')
     await expect(api.thread('pos')).resolves.toEqual({ thread })
   })
+})
+
+it('does not publish a parsed cached response after its intent was locked', async () => {
+  let release!: (value: unknown) => void, entered!: () => void
+  const waiting = new Promise<void>(resolve => { entered = resolve })
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => { entered(); return new Promise(resolve => { release = resolve }) } }))
+  const result = api.thread('pos'); await waiting
+  lockSecure(false, false)
+  release({ thread: { id: 'pos', cwd: '/tmp', turns: [] } })
+  await expect(result).rejects.toThrow(/cancel/i)
 })

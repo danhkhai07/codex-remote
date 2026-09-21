@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { boundedBlob } from './boundedBlob'
 import { api, serverFileUrl } from './api'
-import { secureFetch, secureObjectUrl, secureRequired, revokeSecureUrl } from './secureApi'
+import { secureFetch, secureIntent, secureObjectUrl, secureRequired, revokeSecureUrl } from './secureApi'
 export function SecureHtml({ path, title, frameRef }: { path: string; title: string; frameRef?: RefObject<HTMLIFrameElement | null> }) {
   const local = useRef<HTMLIFrameElement>(null), frame = frameRef ?? local
   const [html, setHtml] = useState<string | null>(null), [loaded, setLoaded] = useState(false), [error, setError] = useState('')
@@ -30,14 +30,21 @@ export function SecureMedia({ path, title, image = false }: { path: string; titl
   return image ? <img src={url} alt={title} /> : <iframe src={url} title={title} sandbox="allow-same-origin" />
 }
 export async function downloadSecureFile(path: string, name: string, size: number) {
+  const intent = secureIntent(); intent.assert()
   const picker = (window as unknown as { showSaveFilePicker?: (options: { suggestedName: string }) => Promise<{ createWritable(): Promise<WritableStream<Uint8Array>> }> }).showSaveFilePicker
   // Ask for the destination during the click gesture, before the network await.
-  const destination = picker ? await picker({ suggestedName: name }) : undefined
+  const destination = picker ? await picker({ suggestedName: name }) : undefined; intent.assert()
   if (!destination && size > 64 * 1024 * 1024) throw Error('Tệp lớn hơn 64 MiB cần trình duyệt hỗ trợ lưu trực tiếp (Chrome/Edge desktop).')
-  const response = await secureFetch(serverFileUrl(path, true))
+  const response = await secureFetch(serverFileUrl(path, true), { signal: intent.signal }); intent.assert()
   if (!response.ok || !response.body) { await response.body?.cancel(); throw Error('Không tải được tệp') }
-  if (destination) { await response.body.pipeTo(await destination.createWritable()); return }
-  const url = secureObjectUrl(await boundedBlob(response, 64 * 1024 * 1024))
+  if (destination) {
+    const writable = await destination.createWritable()
+    try { intent.assert(); await response.body.pipeTo(writable, { signal: intent.signal }); intent.assert() }
+    catch (error) { await response.body.cancel().catch(() => {}); await writable.abort().catch(() => {}); throw error }
+    return
+  }
+  const blob = await boundedBlob(response, 64 * 1024 * 1024); intent.assert()
+  const url = secureObjectUrl(blob)
   const a = document.createElement('a'); a.href = url; a.download = name; a.click()
   setTimeout(() => revokeSecureUrl(url), 60_000)
 }

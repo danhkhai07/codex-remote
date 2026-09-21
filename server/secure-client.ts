@@ -28,7 +28,7 @@ export class SecureTransport {
     this.lock(); const epoch = this.#epoch, owner = await importOwner(value)
     if (epoch !== this.#epoch) throw Error('Unlock cancelled')
     this.#owner = owner
-    try { await this.connect() } catch (error) { this.lock(); throw error }
+    try { await this.connect(); if (epoch !== this.#epoch) throw Error('Unlock cancelled') } catch (error) { if (epoch === this.#epoch) this.lock(); throw error }
   }
   lock() { this.#epoch++; this.#owner = undefined; this.#channel = undefined; this.#connecting = undefined; for (const controller of this.#requests) controller.abort(); this.#requests.clear() }
   async connect() {
@@ -36,13 +36,18 @@ export class SecureTransport {
     if (this.#connecting) return this.#connecting
     const epoch = this.#epoch, owner = this.#owner
     if (!owner) throw new SecureTransportError(423, 'Unlock first')
+    const assertLive = () => { if (epoch !== this.#epoch || owner !== this.#owner) throw Error('Handshake cancelled') }
     const operation = (async () => {
+      assertLive()
       const result = await this.#public('/api/secure/challenge', { method: 'POST' })
+      assertLive()
       if (!result.ok) throw new SecureTransportError(result.status, 'Sign in before unlocking')
-      const challenge = await result.json() as Challenge
+      const challenge = await result.json() as Challenge; assertLive()
       if (challenge.v !== 1 || challenge.expiresAt <= Date.now()) throw Error('Invalid challenge')
       const proof = await seal(await channelKey(owner, challenge, 'proof'), context(challenge.channel, 'proof', challenge.id, 0, 'proof'), jsonBytes({ challenge: challenge.id }))
+      assertLive()
       const response = await this.#public('/api/secure/handshake', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: challenge.id, proof }) })
+      assertLive()
       if (!response.ok) throw new SecureTransportError(response.status, 'Unlock key rejected or session expired')
       const ready = await response.json() as { channel: string; proof: string }
       const responseKey = await channelKey(owner, challenge, 'response')
@@ -55,8 +60,10 @@ export class SecureTransport {
     try { await operation } finally { if (this.#connecting === operation) this.#connecting = undefined }
   }
   async request(path: string, init: RequestInit = {}, cache?: { resource: string; revision?: string }): Promise<{ response: Response; meta: ResponseMeta }> {
+    const epoch = this.#epoch
     await this.connect()
-    const channel = this.#channel!, epoch = this.#epoch, requestId = randomId(), resource = cache?.resource ?? randomId()
+    if (epoch !== this.#epoch || init.signal?.aborted) throw Error('Secure request cancelled')
+    const channel = this.#channel!, requestId = randomId(), resource = cache?.resource ?? randomId()
     const controller = new AbortController(); this.#requests.add(controller)
     const signal = init.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal
     let transferred = false
@@ -78,16 +85,18 @@ export class SecureTransport {
         }
       }
       parts.push((await seal(channel.request, context(channel.id, 'request', requestId, sequence++, 'end'), jsonBytes({ bytes, chunks }))) + '\n')
+      if (signal.aborted || epoch !== this.#epoch) throw Error('Secure request cancelled')
       dispatched = true
       const result = await this.#public('/api/secure/request', { method: 'POST', signal, headers: { 'Content-Type': 'application/x-codex-secure', 'X-Secure-Channel': channel.id, 'X-Secure-Request': requestId }, body: new Blob(parts) })
       if (!result.ok) {
-        if (result.status === 412) this.#channel = undefined
+        if (result.status === 412 && epoch === this.#epoch && this.#channel === channel) this.#channel = undefined
         throw new SecureTransportError(result.status, result.status === 409 ? 'Duplicate request rejected; check current state before retrying.' : 'Secure request rejected. Reconnect or unlock again.')
       }
       if (!result.body || epoch !== this.#epoch) throw Error('Secure request cancelled')
       const lines = wireLines(webBytes(result.body)), first = await lines.next()
       if (first.done) throw Error('Missing secure response')
       const meta = JSON.parse(text.decode(await unseal(channel.response, context(channel.id, 'response', requestId, 0, 'head'), first.value))) as ResponseMeta
+      if (epoch !== this.#epoch || signal.aborted) throw Error('Secure request cancelled')
       if (meta.resource !== resource || !Number.isInteger(meta.status) || meta.status < 200 || meta.status > 599 || !meta.headers) throw Error('Invalid response metadata')
       let nextSequence = 1, received = 0, count = 0
       const stream = new ReadableStream<Uint8Array>({
@@ -103,6 +112,7 @@ export class SecureTransport {
             if (kind === 'end') {
               const end = JSON.parse(text.decode(value))
               if (end.bytes !== received || end.chunks !== count || !(await lines.next()).done) throw Error('Invalid response completion')
+              if (signal.aborted || epoch !== this.#epoch) throw Error('Secure stream closed')
               target.close(); cleanup()
             } else { if (value.length > FRAME_BYTES) throw Error('Oversized response'); received += value.length; count++; target.enqueue(value) }
           } catch (error) { controller.abort(); cleanup(); target.error(!['GET', 'HEAD'].includes(method) ? new SecureTransportError(0, 'Result is uncertain after connection loss. Check current state before retrying this action.') : error) }

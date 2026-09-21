@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 const { ready } = vi.hoisted(() => ({ ready: vi.fn() }))
 vi.mock('./legacyPreviewWorkers', () => ({ ensurePreviewMigrationReady: ready }))
-import { secureSetup, secureLogin, unlockSecure, secureTransport } from './secureApi'
+import { lockSecure, secureSetup, secureLogin, unlockSecure, secureTransport } from './secureApi'
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); ready.mockReset(); secureTransport.lock() })
 it('blocks setup, login and key derivation until a fresh migration check succeeds', async () => {
   let release!: () => void
@@ -24,4 +24,14 @@ it('fails closed on migration errors without network or derivation', async () =>
   await expect(secureLogin('fake')).rejects.toThrow('Close old tabs')
   await expect(unlockSecure('fake')).rejects.toThrow('Close old tabs')
   expect(setup).not.toHaveBeenCalled(); expect(unlock).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled()
+})
+
+it('does not restore a session after Lock during its migration check', async () => {
+  const { api } = await import('./api')
+  let release!: () => void
+  ready.mockImplementation(() => new Promise<void>(resolve => { release = resolve }))
+  const fetch = vi.fn(); vi.stubGlobal('fetch', fetch)
+  const pending = api.session(); lockSecure(false, false); release()
+  await expect(pending).rejects.toThrow(/cancel/i)
+  expect(fetch).not.toHaveBeenCalled()
 })

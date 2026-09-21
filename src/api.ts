@@ -1,4 +1,4 @@
-import { secureFetch } from './secureApi'
+import { secureFetch, secureIntent } from './secureApi'
 import { boundedBlob } from './boundedBlob'
 import { ensurePreviewMigrationReady } from './legacyPreviewWorkers'
 import type { SkillList, SkillSelection } from '../server/skills'
@@ -23,16 +23,21 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init: RequestInit = {}, csrf?: string): Promise<T> {
+  const intent = secureIntent(); intent.assert()
+  // Successful logout deliberately invalidates its own lifetime and returns only a public acknowledgement.
+  const check = () => { if (path !== '/api/session/logout') intent.assert() }
   const headers = new Headers(init.headers)
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   if (csrf && !['GET', 'HEAD'].includes(init.method ?? 'GET')) headers.set('X-CSRF-Token', csrf)
   const signal = init.signal ?? (['GET', 'HEAD'].includes(init.method ?? 'GET') ? AbortSignal.timeout(10_000) : undefined)
   const response = await secureFetch(path, { ...init, signal, headers, credentials: 'same-origin' })
+  check()
   const body = await response.json().catch((error: unknown) => {
     if (!response.ok) return {}
     if (error instanceof SyntaxError) throw new ApiError(502, 'Server returned incomplete or invalid data. Please retry.')
     throw error
   }) as { error?: string }
+  check()
   if (!response.ok) throw new ApiError(response.status, body.error ?? `Request failed (${response.status})`)
   return body as T
 }
@@ -44,21 +49,25 @@ export function serverFileUrl(path: string, download = false): string {
 }
 
 async function requestText(path: string): Promise<string> {
+  const intent = secureIntent(); intent.assert()
   const response = await secureFetch(path, { credentials: 'same-origin' })
+  intent.assert()
   if (!response.ok) {
-    const body = await response.json().catch(() => ({})) as { error?: string }
+    const body = await response.json().catch(() => ({})) as { error?: string }; intent.assert()
     throw new ApiError(response.status, body.error ?? `Request failed (${response.status})`)
   }
-  return response.text()
+  const value = await response.text(); intent.assert(); return value
 }
 
 async function requestBlob(path: string, signal?: AbortSignal, limit = 20 * 1024 * 1024): Promise<Blob> {
+  const intent = secureIntent(); intent.assert()
   const response = await secureFetch(path, { credentials: 'same-origin', signal })
+  intent.assert()
   if (!response.ok) {
-    const body = await response.json().catch(() => ({})) as { error?: string }
+    const body = await response.json().catch(() => ({})) as { error?: string }; intent.assert()
     throw new ApiError(response.status, body.error ?? `Request failed (${response.status})`)
   }
-  return boundedBlob(response, limit)
+  const value = await boundedBlob(response, limit); intent.assert(); return value
 }
 
 export const api = {
@@ -103,11 +112,13 @@ export const api = {
   subscribePush: (subscription: PushSubscriptionJSON, csrf: string) => request<{ ok: boolean }>('/api/push/subscription', { method: 'POST', body: JSON.stringify(subscription) }, csrf),
   unsubscribePush: (csrf: string) => request<{ ok: boolean }>('/api/push/subscription', { method: 'DELETE', body: '{}' }, csrf),
   session: async (signal?: AbortSignal) => {
-    await ensurePreviewMigrationReady(true)
+    const intent = secureIntent(false)
+    await ensurePreviewMigrationReady(true); intent.assert()
     return request<Session>('/api/session', { signal })
   },
   login: async (password: string) => {
-    await ensurePreviewMigrationReady(true)
+    const intent = secureIntent(false)
+    await ensurePreviewMigrationReady(true); intent.assert()
     return request<Session>('/api/session/login', { method: 'POST', body: JSON.stringify({ password }) })
   },
   logout: (csrf: string) => request<{ ok: boolean }>('/api/session/logout', { method: 'POST', body: '{}' }, csrf),

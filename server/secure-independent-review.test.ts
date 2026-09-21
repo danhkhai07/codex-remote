@@ -1,7 +1,4 @@
-/** Independent adversarial reproductions against fixed d88b163. These tests
- * intentionally ASSERT THE OBSERVED BUGS; green means reproducible, not secure.
- * Switch the bad-result assertions to denial when validating an integrator fix.
- */
+/** Inverse acceptance of the seven independent d88b163 reproductions. */
 import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -44,31 +41,32 @@ async function browserModule(f:Awaited<ReturnType<typeof fixture>>) {
  vi.stubGlobal('fetch',f.fetcher);vi.stubGlobal('BroadcastChannel',undefined);vi.resetModules()
  const module=await import('../src/secureApi');cleanups.push(()=>module.lockSecure(false,false));return module
 }
-it('R1 reproduces pending unlock restoring owner/channel after cross-tab Lock',async()=>{
+it('R1 rejects pending unlock after cross-tab Lock',async()=>{
  const f=await fixture(),api=await browserModule(f),barrier=deferred(),entered=deferred()
  api.installMigrationReady(async()=>{entered.resolve();await barrier.promise})
  const pending=api.unlockSecure(f.material.key);await entered.promise
  api.lockSecure(false,false);expect(api.secureUnlocked()).toBe(false)
- barrier.resolve();await pending
- // BUG: lock was crossed without new user intent; private API is accessible.
- expect(api.secureUnlocked()).toBe(true)
- expect(await (await api.secureFetch('/api/read')).json()).toMatchObject({canary:'REVIEW ONLY'})
+ barrier.resolve();await expect(pending).rejects.toThrow(/cancel/i)
+ expect(api.secureUnlocked()).toBe(false)
+ await expect(api.secureFetch('/api/read')).rejects.toThrow()
 })
-it('R1 reproduces setup-delayed unlock ignoring a newer Lock',async()=>{
+it('R1 rejects setup-delayed unlock after a newer Lock',async()=>{
  const f=await fixture(),api=await browserModule(f),gate=deferred(),entered=deferred()
  const original=api.secureTransport.setup.bind(api.secureTransport)
  vi.spyOn(api.secureTransport,'setup').mockImplementationOnce(async()=>{entered.resolve();await gate.promise;return original()})
- const pending=api.unlockSecure(f.material.key);await entered.promise;api.lockSecure(false,false);gate.resolve();await pending
- expect(api.secureUnlocked()).toBe(true) // BUG, acceptance must be false/rejected.
+ const pending=api.unlockSecure(f.material.key);await entered.promise;api.lockSecure(false,false);gate.resolve();await expect(pending).rejects.toThrow(/cancel/i)
+ expect(api.secureUnlocked()).toBe(false)
 })
-it('R2 reproduces pre-lock pending mutation dispatched through a newly unlocked channel',async()=>{
+it('R2 rejects pre-lock pending mutation after a newly unlocked channel',async()=>{
  const f=await fixture(),api=await browserModule(f);await api.unlockSecure(f.material.key)
  const {CipherCache}=await import('../src/secureCache'),gate=deferred(),entered=deferred()
  vi.spyOn(CipherCache.prototype,'identify').mockImplementationOnce(async()=>{entered.resolve();await gate.promise;return randomId()})
  const pending=api.secureFetch('/api/mutation',{method:'POST',body:'{}'});await entered.promise
  api.lockSecure(false,false);await api.unlockSecure(f.material.key);expect(f.effects()).toBe(0)
- gate.resolve();expect(await (await pending).json()).toMatchObject({effects:1}) // BUG: stale operation is not cancelled.
- expect(f.effects()).toBe(1)
+ gate.resolve();await expect(pending).rejects.toThrow(/cancel/i)
+ expect(f.effects()).toBe(0)
+ expect(api.secureUnlocked()).toBe(true)
+ expect(await (await api.secureFetch('/api/mutation',{method:'POST',body:'{}'})).json()).toMatchObject({effects:1})
 })
 it.each(['logout','expiry','rotation'] as const)('R3 prevents native side effect after %s invalidates a request stalled in access check',async(reason)=>{
  const f=await fixture(true),gate=deferred(),entered=deferred(),accessDone=deferred();await f.client.unlock(f.material.key)
@@ -97,6 +95,40 @@ it('R4 confines all Nginx paths and both starts to non-root filesystem restricti
  expect(fixture).not.toContain('spawn(binary')
 })
 
+it.each(['setup', 'proof', 'cache'] as const)('R1 stale %s completion never clears a newer successful unlock', async stage => {
+ const f=await fixture(),api=await browserModule(f),gate=deferred(),entered=deferred()
+ if(stage==='setup') {
+  const original=api.secureTransport.setup.bind(api.secureTransport)
+  vi.spyOn(api.secureTransport,'setup').mockImplementationOnce(async()=>{const value=await original();entered.resolve();await gate.promise;return value})
+ } else if(stage==='proof') {
+  const original=api.secureTransport.fetcher;let hold=true
+  vi.spyOn(api.secureTransport,'fetcher').mockImplementation(async(path,init)=>{const value=await original(path,init);if(hold&&String(path).endsWith('/handshake')){hold=false;entered.resolve();await gate.promise}return value})
+ } else {
+  const {CipherCache}=await import('../src/secureCache')
+  vi.spyOn(CipherCache.prototype,'unlock').mockImplementationOnce(async()=>{entered.resolve();await gate.promise})
+ }
+ const pending=api.unlockSecure(f.material.key);await entered.promise
+ api.lockSecure(false,false);await api.unlockSecure(f.material.key)
+ gate.resolve();await expect(pending).rejects.toThrow(/cancel|stale/i)
+ expect(api.secureUnlocked()).toBe(true)
+ expect((await api.secureFetch('/api/read')).ok).toBe(true)
+})
+it.each(['get', 'body'] as const)('R2 does not refetch after Lock while awaiting cached %s', async stage => {
+ const f=await fixture(),api=await browserModule(f);await api.unlockSecure(f.material.key)
+ const {CipherCache}=await import('../src/secureCache'),gate=deferred(),entered=deferred()
+ const resource=randomId();vi.spyOn(CipherCache.prototype,'identify').mockResolvedValue(resource)
+ const first=await api.secureTransport.request('/api/read',{}, {resource});await first.response.arrayBuffer()
+ const cached={entry:{},meta:{path:'/api/read',representation:'{}',response:first.meta,expires:Date.now()+60000}}
+ vi.spyOn(CipherCache.prototype,'get').mockImplementation(async()=>{if(stage==='get'){entered.resolve();await gate.promise}return cached as never})
+ vi.spyOn(CipherCache.prototype,'body').mockImplementation(async()=>{entered.resolve();await gate.promise;throw Error('storage/decryption failed')})
+ const spy=vi.spyOn(api.secureTransport,'request')
+ const pending=api.secureFetch('/api/read');await entered.promise
+ const dispatched=spy.mock.calls.length
+ api.lockSecure(false,false);await api.unlockSecure(f.material.key);gate.resolve()
+ await expect(pending).rejects.toThrow(/cancel/i)
+ expect(spy.mock.calls.length).toBe(dispatched)
+ expect(api.secureUnlocked()).toBe(true)
+})
 it.each(['rename', 'archive', 'resume', 'interrupt', 'turn', 'skills'] as const)('R3 controller %s never dispatches a new native effect after an awaited precondition', async action => {
  const f=await fixture(true),gate=deferred(),entered=deferred();await f.client.unlock(f.material.key)
  const calls:string[]=[]

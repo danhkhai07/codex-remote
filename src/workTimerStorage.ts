@@ -1,3 +1,4 @@
+import { secureIntent } from './secureApi'
 import { api } from './api'
 export const WORK_TIMER_PATH = '/root/VAULTS/Flint-Software/Working-Hours/index.html'
 export const WORK_TIMER_CHANNEL = 'flint-work-timer-storage'
@@ -8,13 +9,16 @@ export function attachWorkTimerStorage(frame: () => Window | null) {
     const input = event.data
     if (!input || input.channel !== WORK_TIMER_CHANNEL || typeof input.id !== 'string' || input.id.length > 80) return
     const reply = (result: object) => (event.source as Window).postMessage({ channel: WORK_TIMER_CHANNEL, id: input.id, ...result }, '*')
+    const intent = secureIntent()
     try {
+      intent.assert()
       let result
       if (input.action === 'get') result = await api.workHours()
       else if (input.action === 'command' && ['start', 'stop', 'pause', 'resume', 'replace-totals'].includes(input.command)) {
-        const session = await api.session()
+        const session = await api.session(); intent.assert()
         result = await api.changeWorkHours({ action: input.command, expectedRevision: input.expectedRevision, ...(input.command === 'replace-totals' ? { totals: input.totals } : {}) }, session.csrf)
       } else { reply({ error: 'Invalid working-hours request' }); return }
+      intent.assert()
       reply({ shared: true, revision: result.revision, serverNow: result.serverNow, values: {
         'flint-software-working-hours-overrides-v1': JSON.stringify(result.totals),
         'flint-software-working-hours-timer-v1': JSON.stringify(result.timer),

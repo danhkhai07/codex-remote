@@ -1,4 +1,4 @@
-import { secureRequired } from './secureApi'
+import { secureRequired, secureIntent } from './secureApi'
 import { SecureEvents } from './secureEvents'
 import { QuestionRequest } from './QuestionRequest'
 import { PendingRequests } from './pendingRequests'
@@ -1434,6 +1434,7 @@ export function App() {
       setSending(current => ({ ...current, [created.id]: true }))
     }
     if (draftOpen && newConversation.thread) reserveNewThread(newConversation.thread)
+    const intent = secureIntent(); intent.assert()
     const epoch = sessionEpoch.current
     const sendingSkills = selectedSkills
     const sendingImages = attachments
@@ -1449,17 +1450,19 @@ export function App() {
       for (const [index, image] of sendingImages.entries()) {
         setUploadStatus(`Uploading file ${index + 1} of ${sendingImages.length} · ${image.file.name}`)
         uploadedIds.push((await api.uploadAttachment(image.file, session.csrf)).id)
-        if (epoch !== sessionEpoch.current) return
+        if (epoch !== sessionEpoch.current || intent.signal.aborted) return
+        intent.assert()
       }
       let target = thread
       if (draftOpen) {
         setUploadStatus('Creating conversation…')
         target = await prepareNewConversation(newConversation, session.workspaces[0]?.id ?? '0', session.csrf, yoloMode, created => {
-          if (epoch !== sessionEpoch.current) throw new Error('Session changed')
+          intent.assert(); if (epoch !== sessionEpoch.current) throw new Error('Session changed')
           reserveNewThread(created)
           rememberNewThread(created)
         })
-        if (epoch !== sessionEpoch.current) return
+        if (epoch !== sessionEpoch.current || intent.signal.aborted) return
+        intent.assert()
         sendingThreadId = target.id
         saveThreadMode(target.id, turnMode)
         if (effectiveModel) saveThreadSettings(target.id, { model: effectiveModel, effort: effectiveEffort })
@@ -1476,7 +1479,8 @@ export function App() {
         attachmentIds: uploadedIds,
         skills: sendingSkills,
       })
-      if (epoch !== sessionEpoch.current) return
+      if (epoch !== sessionEpoch.current || intent.signal.aborted) return
+      intent.assert()
       setThreadSkills(lockKey, current => current.filter(skill => !sendingSkills.some(sent => sent.path === skill.path)))
       if (!completedTurns.current.has(response.turn.id)) {
         setSentMessages(current => ({ ...current, [targetId]: { ...sent, turnId: response.turn.id } }))
@@ -1505,14 +1509,17 @@ export function App() {
         void refreshThreads().catch(() => undefined)
       }
     } catch (requestError) {
+      if (intent.signal.aborted) return
+      intent.assert()
       await Promise.allSettled(uploadedIds.map(id => api.deleteAttachment(id, session.csrf)))
-      if (epoch !== sessionEpoch.current) return
+      if (epoch !== sessionEpoch.current || intent.signal.aborted) return
+      intent.assert()
       setSentMessages(current => { const next = { ...current }; if (sendingThreadId) delete next[sendingThreadId]; return next })
       if (!draftOpen) setComposer(current => current ? `${instruction}\n${current}` : instruction)
       if (!draftOpen) setAttachments(current => [...sendingImages, ...current])
       setSendError(errorMessage(requestError))
     } finally {
-      if (epoch === sessionEpoch.current) {
+      if (epoch === sessionEpoch.current && !intent.signal.aborted) {
         setUploadStatus('')
         sendingLocks.current.delete(lockKey)
         if (draftOpen && sendingThreadId) sendingLocks.current.delete(sendingThreadId)

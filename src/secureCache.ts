@@ -127,11 +127,25 @@ export class CipherCache {
     }).catch(() => {})
     this.#writes = operation; await operation
   }
-  async purgeOtherGenerations() {
+  async purgeOtherGenerations(assertLive: () => void = () => {}, signal?: AbortSignal) {
+    const epoch = this.#epoch
     try {
-      const entries = await transaction<RecordEntry[]>('entries', 'readonly', s => s.getAll()), app = this.namespace.split(':')[0] + ':'
-      for (const entry of entries) if (entry.namespace.startsWith(app) && entry.namespace !== this.namespace) await transaction('entries', 'readwrite', s => s.delete(entry.id))
-    } catch { /* Online reads still work without cache. */ }
+      const db = await database()
+      try { assertLive(); if (epoch !== this.#epoch) return
+        await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction('entries', 'readwrite'), store = tx.objectStore('entries')
+          const abort = () => { try { tx.abort() } catch { /* closed */ } }
+          signal?.addEventListener('abort', abort, { once: true })
+          const timer = setTimeout(abort, 3000)
+          const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort) }
+          const app = this.namespace.split(':')[0] + ':', current = this.namespace + ':'
+          // Delete by opaque primary-key ranges, without reading ciphertext rows.
+          store.delete(IDBKeyRange.bound(app, current, false, true))
+          store.delete(IDBKeyRange.bound(current + '\uffff', app + '\uffff', true, false))
+          tx.oncomplete = () => { cleanup(); resolve() }; tx.onabort = tx.onerror = () => { cleanup(); reject(Error('Cache unavailable')) }
+        })
+      } finally { db.close() }
+    } catch { assertLive(); /* Online reads work without cache. */ }
   }
   async purgeApp() {
     this.lock(); await this.#writes
