@@ -619,6 +619,7 @@ export function App() {
   const busy = operationBusy || !imagesReady || Boolean(composerKey && sending[composerKey])
   const [error, setError] = useState('')
   const [fileViewer, setFileViewer] = useScreenState<LocalFileReference | null>('file-viewer', null)
+  const [teamBodyContainer, setTeamBodyContainer] = useState<HTMLDivElement | null>(null)
   const [fileBrowserPath, setFileBrowserPath] = useScreenState<string | null>('file-browser', null)
   const browserScope = selectedId ?? 'new'
   const [browserTargets, setBrowserTargets] = useState<Record<string, string | null>>(() => window.self === window.top ? readScreenState('browser-targets', {}) : {})
@@ -1768,15 +1769,16 @@ export function App() {
           <span className="conversation-view-label">Conversation</span>
           <button type="button" onClick={() => setLocalhostPreview('')}>Browser</button>
           <button className="files-tab" type="button" disabled={!thread} onClick={() => thread && setFileBrowserPath(thread.cwd)}>Files</button>
+          {!draftOpen && thread && selectedGroup?.leaderThreadId && <ConversationTeam key={`${thread.id}:${selectedGroup.id}`} threadId={thread.id} group={selectedGroup} threads={threads}
+            bodyContainer={teamBodyContainer} csrf={session.csrf} enabled={online && pageVisible} revision={teamRevision} onOpen={id => {
+              const target = threads.find(thread => thread.id === id)
+              void (target ? openThread(target) : api.thread(id).then(response => openThread(response.thread))).catch(error => setError(errorMessage(error)))
+            }} />}
         </nav>
 
         {(groups.leaderError || (!draftOpen && thread && selectedGroup?.leaderThreadId)) && <section className="conversation-team-region" aria-label="Conversation team">
           {groups.leaderError && <p className="error-banner" role="alert">{groups.leaderError}</p>}
-          {!draftOpen && thread && selectedGroup?.leaderThreadId && <ConversationTeam key={`${thread.id}:${selectedGroup.id}`} threadId={thread.id} group={selectedGroup} threads={threads}
-            csrf={session.csrf} enabled={online && pageVisible} revision={teamRevision} onOpen={id => {
-              const target = threads.find(thread => thread.id === id)
-              void (target ? openThread(target) : api.thread(id).then(response => openThread(response.thread))).catch(error => setError(errorMessage(error)))
-            }} />}
+          <div ref={setTeamBodyContainer} />
         </section>}
 
         <TranscriptViewport key={`${selectedId}-conversation`} viewKey={`${selectedId}-conversation`} ready={Boolean(thread) && historyReady} positions={readingPositions.current}>

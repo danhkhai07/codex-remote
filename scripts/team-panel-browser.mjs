@@ -20,7 +20,7 @@ try {
   await controller.start()
   server.listen(0, '127.0.0.1'); await once(server, 'listening')
   config.publicOrigin = new URL(`http://127.0.0.1:${server.address().port}`)
-  for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }, { width: 390, height: 600 }]) {
+  for (const viewport of [{ width: 1280, height: 900 }, { width: 320, height: 600 }, { width: 390, height: 844 }, { width: 390, height: 600 }]) {
     const context = await browser.newContext({ viewport, serviceWorkers: 'block' })
     const page = await context.newPage()
     page.setDefaultTimeout(10000)
@@ -65,7 +65,7 @@ try {
     })
     await context.request.post(`${config.publicOrigin}api/session/login`, { headers: { Origin: config.publicOrigin.origin }, data: { password: config.password } })
     await page.goto(config.publicOrigin.origin)
-    const transcript = page.locator('.workspace-content'), team = page.locator('.conversation-team'), summary = team.locator(':scope > summary'), composer = page.locator('#instruction')
+    const transcript = page.locator('.workspace-content'), team = page.locator('.conversation-team-region'), summary = page.locator('.conversation-team > summary'), composer = page.locator('#instruction')
     await composer.waitFor()
     await page.waitForFunction(() => document.querySelector('.workspace-content')?.scrollTop > 1000)
     const isOnscreen = locator => locator.evaluate(el => {
@@ -83,8 +83,10 @@ try {
       assert.equal(await isOnscreen(composer), true, 'Composer remains visible')
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight), false, 'No outer page overflow')
       assert.equal(await team.evaluate(el => !!el.closest('.transcript-region')), false)
-      const tab = await page.locator('.view-tabs').boundingBox(), bar = await team.boundingBox()
-      assert.ok(bar.y >= tab.y + tab.height && bar.y - tab.y - tab.height < 20, 'Team sits just below tabs')
+      const tab = await page.locator('.view-tabs').boundingBox(), bar = await summary.boundingBox()
+      assert.ok(bar.y >= tab.y && bar.y + bar.height <= tab.y + tab.height, 'Leader control shares the tabs row')
+      assert.equal(await summary.evaluate(el => !!el.closest('.view-tabs')), true)
+      assert.ok(bar.width >= 44 && bar.height >= 44, 'Leader control remains usable on narrow screens')
     }
     await layout()
     if (shots) await page.screenshot({ path: resolve(shots, `collapsed-${viewport.width}x${viewport.height}.png`) })
@@ -94,7 +96,7 @@ try {
     await transcript.evaluate(el => { el.scrollTop = 500 })
     await page.waitForTimeout(100)
     const top = await transcript.evaluate(el => el.scrollTop)
-    await summary.click()
+    await summary.focus(); await summary.press('Enter')
     await team.locator('.team-tasks > li').first().waitFor()
     assert.equal(await team.getByText('Gửi mục tiêu', { exact: false }).count(), 0, 'Redundant leader hint is removed')
     await layout()
@@ -107,7 +109,7 @@ try {
     const refreshed = page.waitForResponse(response => response.url().endsWith('/orchestration'))
     controller.events.publish('codex', { method: 'orchestration/changed', params: {} })
     await refreshed
-    assert.equal(await team.getAttribute('open'), '', 'Team stays open during live refresh')
+    assert.equal(await page.locator('.conversation-team').getAttribute('open'), '', 'Team stays open during live refresh')
     assert.equal(await body.evaluate(el => el.scrollTop), bodyTop, 'Live refresh preserves team reading position')
     await layout()
     assert.equal(await transcript.evaluate(el => el.scrollTop), top, 'Team scrolling does not scroll history')
@@ -147,7 +149,7 @@ try {
     await layout()
     assert.equal(await isOnscreen(page.locator('.plan-question').getByRole('button', { name: 'Send', exact: true })), true, 'Plan answer remains reachable with team expanded')
     if (shots) await page.screenshot({ path: resolve(shots, `team-${viewport.width}x${viewport.height}.png`) })
-    if (viewport.height === 600) {
+    if (viewport.width === 390 && viewport.height === 600) {
       // Combined integration: reload from the logo while a native question and
       // expanded team share the short viewport. No real conversation is used.
       await page.getByRole('button', { name: 'Open conversations', exact: true }).click()
@@ -193,7 +195,7 @@ try {
     assert.equal(await isOnscreen(composer), true)
     assert.equal(await page.locator('.conversation-team-region').count(), 0)
     await page.getByRole('button', { name: 'Đặt làm leader', exact: true }).click()
-    await team.waitFor()
+    await summary.waitFor()
     // Draft setup hides even an existing leader panel without leaving an empty slot.
     if (viewport.width < 800) await page.getByRole('button', { name: 'Open conversations', exact: true }).click()
     await page.getByRole('button', { name: '＋ New conversation', exact: true }).click()

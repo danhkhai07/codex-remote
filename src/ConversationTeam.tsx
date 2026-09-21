@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { api } from './api'
 import { threadTitle } from './model'
 import type { Thread } from './types'
@@ -13,11 +14,14 @@ export type TeamSnapshot = {
 const statuses: Record<string, string> = { creating: 'Đang tạo convo', queued: 'Đang chờ', starting: 'Đang gửi', running: 'Đang làm', stopping: 'Đang dừng', completed: 'Hoàn tất', failed: 'Có lỗi', cancelled: 'Đã dừng', interrupted: 'Bị ngắt' }
 const unfinished = (status: string) => ['creating', 'queued', 'starting', 'running', 'stopping'].includes(status)
 
-export function ConversationTeam({ threadId, group, threads, csrf, enabled, revision, onOpen }: {
+export function ConversationTeam({ threadId, group, threads, csrf, enabled, revision, onOpen, bodyContainer }: {
   threadId: string; group: ConversationGroup; threads: Thread[]; csrf: string; enabled: boolean; revision: number
+  bodyContainer: HTMLDivElement | null
   onOpen: (id: string) => void
 }) {
   const [team, setTeam] = useState<TeamSnapshot | null>(null)
+  const [open, setOpen] = useState(false)
+  const bodyId = useId()
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   useEffect(() => {
@@ -46,10 +50,14 @@ export function ConversationTeam({ threadId, group, threads, csrf, enabled, revi
   const pending = team?.tasks.filter(task => unfinished(task.status)).length ?? 0
   const isLeader = group.leaderThreadId === threadId
   const paused = team?.paused.includes(threadId)
-  return <details className="conversation-team">
-    <summary><span>{isLeader ? '★ Bạn đang ở convo leader' : group.leaderThreadId ? `Leader: ${title(group.leaderThreadId)}` : 'Điều phối đã tắt'}</span>
+  const label = isLeader ? '★ Bạn đang ở convo leader' : group.leaderThreadId ? `Leader: ${title(group.leaderThreadId)}` : 'Điều phối đã tắt'
+  return <details className="conversation-team" onToggle={event => setOpen(event.currentTarget.open)}>
+    <summary aria-controls={bodyId} aria-label={label} title={label}><span>
+      <span className={isLeader ? 'team-label-full' : undefined}>{label}</span>
+      {isLeader && <span className="team-label-short" aria-hidden="true">★ Leader</span>}
+    </span>
       <span className="muted">{paused ? 'Bạn đang điều khiển' : pending ? `${pending} việc đang xử lý` : 'Công việc'}</span></summary>
-    <div className="conversation-team-body">
+    {bodyContainer && createPortal(<div id={bodyId} className="conversation-team-body" hidden={!open}>
       {!isLeader && <p className="muted">Bạn có thể chat trực tiếp ở đây. Khi bạn gửi tin nhắn, convo tạm dừng nhận việc từ leader.</p>}
       {!isLeader && group.leaderThreadId && <button type="button" className="quiet-button" onClick={() => onOpen(group.leaderThreadId!)}>Mở convo leader ↗</button>}
       {paused && <button type="button" className="quiet-button" disabled={!enabled || saving} onClick={() => void action({ action: 'release' })}>Cho leader giao việc trở lại</button>}
@@ -67,6 +75,6 @@ export function ConversationTeam({ threadId, group, threads, csrf, enabled, revi
           {task.result && <details className="team-task-result"><summary>Kết quả</summary><p>{task.result}</p></details>}
         </li>)}</ul>
       </>}
-    </div>
+    </div>, bodyContainer)}
   </details>
 }

@@ -508,8 +508,10 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
 .leader-toggle:disabled { opacity: .45; cursor: default; }
 .conversation-team-region { min-width: 0; padding: 6px max(12px, calc((100% - 860px) / 2)); border-bottom: 1px solid var(--line); background: var(--panel); }
 .conversation-team-region > .error-banner { margin: 0 0 6px; max-height: 64px; overflow: auto; }
-.conversation-team { margin: 0; border: 1px solid var(--line); border-radius: 12px; font-size: 13px; }
-.conversation-team > summary { cursor: pointer; padding: 10px 12px; display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 42px; }
+.conversation-team { margin: 0 0 0 auto; min-width: 0; flex: 0 1 auto; font-size: 13px; }
+.conversation-team-region:not(:has(.error-banner, .conversation-team-body:not([hidden]))) { display: none; }
+.conversation-team-body[hidden], .team-label-short { display: none; }
+.conversation-team > summary { cursor: pointer; padding: 10px 4px; display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 44px; }
 .conversation-team > summary::-webkit-details-marker { display: none; }
 .conversation-team > summary::before { content: '▸'; }
 .conversation-team[open] > summary::before { content: '▾'; }
@@ -882,6 +884,7 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
 }
 
 .view-tabs {
+  min-width: 0;
   display: flex;
   gap: 4px;
   padding: 8px 22px 0;
@@ -2066,6 +2069,19 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
 .file-browser-empty { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; min-height: 150px; padding: 24px; color: var(--muted); text-align: center; }
 .file-browser-footer { border-top: 1px solid var(--line); font-size: 0.75rem; color: var(--muted); }
 .view-tabs .files-tab { margin-left: auto; }
+.view-tabs:has(.conversation-team) .files-tab { margin-left: 0; }
+.view-tabs > button, .view-tabs > .conversation-view-label { flex-shrink: 0; }
+@media (max-width: 1100px) {
+  .conversation-team > summary > .muted { display: none; }
+}
+@media (max-width: 600px) {
+  .view-tabs:has(.conversation-team) { padding-inline: 8px; gap: 2px; }
+  .view-tabs:has(.conversation-team) > button,
+  .view-tabs:has(.conversation-team) > .conversation-view-label { padding-inline: 6px; font-size: 12px; }
+  .conversation-team { font-size: 12px; }
+  .team-label-full { display: none; }
+  .team-label-short { display: inline; }
+}
 
 @media (max-width: 720px) {
   .file-browser-backdrop { padding: 0; }
