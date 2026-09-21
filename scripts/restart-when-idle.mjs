@@ -4,6 +4,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createSession } from '../dist-server/auth.js'
 import { loadConfig } from '../dist-server/config.js'
+import { restartReadiness } from './restart-readiness.mjs'
 
 // One restart per invocation. Run in a separate systemd unit so gateway shutdown
 // does not terminate the watcher before it verifies the new process.
@@ -16,16 +17,14 @@ const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, millise
 
 async function readiness() {
   const session = createSession(config.sessionSecret, 300)
-  const response = await fetch(`${base}/api/threads`, {
-    headers: { Cookie: `codex_remote_session=${session.token}` },
-    signal: AbortSignal.timeout(10_000),
+  return restartReadiness(async path => {
+    const response = await fetch(`${base}${path}`, {
+      headers: { Cookie: `codex_remote_session=${session.token}` },
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!response.ok) throw Error(`Idle status returned HTTP ${response.status}`)
+    return response.json()
   })
-  if (!response.ok) throw Error(`Thread status returned HTTP ${response.status}`)
-  const result = await response.json()
-  if (!Array.isArray(result.data)) throw Error('Thread status response is incomplete')
-  const busy = result.data.filter(thread => !['idle', 'notLoaded'].includes(thread.status?.type)).length
-  // Never infer global idleness from a partial page of conversations.
-  return { ready: !result.nextCursor && busy === 0, busy, incomplete: Boolean(result.nextCursor) }
 }
 
 if (process.argv.includes('--check')) {
