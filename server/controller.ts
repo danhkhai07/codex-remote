@@ -291,7 +291,7 @@ export class RemoteController {
       approvalsReviewer: 'user',
       sandbox: fullAccess ? 'danger-full-access' : 'workspace-write',
       serviceName: 'codex_remote_control',
-    })
+    }, undefined, live)
     this.#markResumed(threadFromResult(result))
     if (groupId !== undefined && groupId !== null) this.contextVault!.assignThread(String(threadFromResult(result).id), groupId)
     return result
@@ -312,7 +312,7 @@ export class RemoteController {
   async listSkills(threadId: string, forceReload = false, live?: () => void): Promise<SkillList> {
     await this.assertThreadAccess(threadId, live); live?.()
     const cwd = String(this.#loadedThreads.get(threadId)?.cwd ?? '')
-    const result = await this.appServer.request('skills/list', { cwds: [cwd], forceReload })
+    const result = await this.appServer.request('skills/list', { cwds: [cwd], forceReload }, undefined, live)
     return normalizeSkills(result, cwd)
   }
 
@@ -364,7 +364,7 @@ export class RemoteController {
       approvalsReviewer: 'user',
       sandbox: 'workspace-write',
       excludeTurns: true,
-    })
+    }, undefined, live)
     this.#assertAllowedThread(result)
     const resumed = { ...threadFromResult(result), turns: [], historyUnavailable: true }
     this.#markResumed(resumed)
@@ -379,7 +379,7 @@ export class RemoteController {
     try {
       if (!this.#loadedThreads.has(threadId)) await this.#readThreadMetadata(threadId, false, live)
       live?.(); guard?.()
-      await this.appServer.request('thread/name/set', { threadId, name }, 10_000)
+      await this.appServer.request('thread/name/set', { threadId, name }, 10_000, () => { live?.(); guard?.() })
       const cached = this.#loadedThreads.get(threadId)
       if (cached) {
         // A name update is not an authoritative status read. Preserve active-turn
@@ -410,7 +410,7 @@ export class RemoteController {
       } else if (!this.#loadedThreads.has(threadId)) await this.#readThreadMetadata(threadId, true, live)
       live?.(); guard?.()
       onDispatch?.()
-      const result = await this.appServer.request('thread/archive', { threadId })
+      const result = await this.appServer.request('thread/archive', { threadId }, undefined, () => { live?.(); guard?.() })
       this.#loadedThreads.delete(threadId)
       this.#resumedThreads.delete(threadId)
       this.events.publish('codex', { method: 'thread/archived', params: { threadId } })
@@ -501,7 +501,7 @@ export class RemoteController {
       await this.appServer.request('thread/inject_items', { threadId, items: [{
         type: 'message', role: 'developer',
         content: [{ type: 'input_text', text: [context.text, orchestrationContext].filter(Boolean).join('\n\n') }],
-      }] })
+      }] }, undefined, () => { live?.(); guard?.() })
       live?.(); this.contextVault.knowledge.recordTrace(context.trace)
     }
     live?.(); guard?.()
@@ -517,7 +517,7 @@ export class RemoteController {
       input,
       ...overrides,
       ...(collaborationMode ? { collaborationMode } : {}),
-    })
+    }, undefined, () => { live?.(); guard?.() })
     const turn = asObject(asObject(result).turn)
     if (typeof turn.id === 'string') {
       if (!this.#completedTurns.has(turn.id)) this.#activeTurns.set(threadId, turn.id)
@@ -551,7 +551,7 @@ export class RemoteController {
       try {
         live?.()
         const result = await Promise.race([
-          this.appServer.request('turn/interrupt', { threadId, turnId }, 10_000),
+          this.appServer.request('turn/interrupt', { threadId, turnId }, 10_000, live),
           completion,
         ])
         this.#clearPending(request => request.params.threadId === threadId && request.params.turnId === turnId)
@@ -630,7 +630,7 @@ export class RemoteController {
 
   async #readThreadMetadata(threadId: string, reconcileActivity = true, live?: () => void): Promise<unknown> {
     live?.()
-    const result = await this.appServer.request('thread/read', { threadId, includeTurns: false }); live?.()
+    const result = await this.appServer.request('thread/read', { threadId, includeTurns: false }, undefined, live); live?.()
     this.#assertAllowedThread(result)
     this.#cacheThread(threadFromResult(result), reconcileActivity)
     return result

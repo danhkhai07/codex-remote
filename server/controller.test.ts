@@ -206,7 +206,7 @@ describe('RemoteController', () => {
     const controller = new RemoteController(config, appServer)
     const request = vi.spyOn(appServer, 'request').mockResolvedValue({ thread: { id: 'outside', cwd: '/outside' } })
     await expect(controller.renameThread('outside', 'New name')).rejects.toThrow()
-    expect(request).not.toHaveBeenCalledWith('thread/name/set', expect.anything(), expect.anything())
+    expect(request.mock.calls.some(([method]) => method === 'thread/name/set')).toBe(false)
     request.mockRestore()
     await controller.listThreads()
     const publish = vi.spyOn(controller.events, 'publish')
@@ -223,7 +223,7 @@ describe('RemoteController', () => {
     const baseline = appServer.listenerCount('notification')
     const first = controller.interruptTurn('thread-new', 'turn-target')
     const duplicate = controller.interruptTurn('thread-new', 'turn-target')
-    expect(request).toHaveBeenCalledExactlyOnceWith('turn/interrupt', { threadId: 'thread-new', turnId: 'turn-target' }, 10_000)
+    expect(request).toHaveBeenCalledExactlyOnceWith('turn/interrupt', { threadId: 'thread-new', turnId: 'turn-target' }, 10_000, undefined)
     let settled = false
     void first.then(() => { settled = true })
     appServer.emit('notification', { method: 'turn/completed', params: { threadId: 'thread-new', turn: { id: 'other-turn' } } })

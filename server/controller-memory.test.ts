@@ -48,6 +48,6 @@ describe('controller history memory', () => {
     for (let i = 0; i < 257; i++) await controller.readThread(`thread-${i}`)
     request.mockClear()
     await controller.resumeThread('thread-0')
-    expect(request).toHaveBeenCalledWith('thread/read', { threadId: 'thread-0', includeTurns: false })
+    expect(request).toHaveBeenCalledWith('thread/read', { threadId: 'thread-0', includeTurns: false }, undefined, undefined)
   })
 })

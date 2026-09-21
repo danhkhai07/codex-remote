@@ -1,6 +1,8 @@
 /** Inverse acceptance of the seven independent d88b163 reproductions. */
 import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { fileURLToPath } from 'node:url'
+import { once } from 'node:events'
 import { join } from 'node:path'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -18,7 +20,7 @@ import type { RemoteConfig } from './config'
 const cleanups: Array<() => Promise<unknown> | void> = []
 afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllGlobals(); for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); vi.resetModules() })
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(r => {resolve = r}); return {promise, resolve} }
-async function fixture(realRouter = false) {
+async function fixture(realRouter = false, nativeFixture = false) {
  const root = await mkdtemp(join(tmpdir(), 'secure-independent-')), files = join(root, 'files'), keyFile = join(root, 'owner.json')
  cleanups.push(()=>rm(root,{recursive:true,force:true})); await mkdir(files)
  const material={version:1,app:randomId(),generation:randomId(),key:randomId(32)}
@@ -26,7 +28,8 @@ async function fixture(realRouter = false) {
  const config:RemoteConfig={host:'127.0.0.1',port:0,publicOrigin:new URL('http://localhost'),password:'FAKE review password',sessionSecret:'FAKE independent session '.repeat(3),sessionTtlSeconds:600,codexBin:'UNUSED',production:true,workspaceRoots:[files],fileRoots:[files],secureApiRequired:true,secureKeyFile:keyFile,sessionStateFile:join(root,'sessions.json')}
  const issued=createSession(config.sessionSecret,600,config.password),registry=new SessionRegistry(config.sessionSecret,config.sessionStateFile,config.password)
  const secure=new SecureApi(config,registry,[files]);cleanups.push(()=>secure.close())
- const appServer=new CodexAppServer('UNUSED'),vault=realRouter?new ContextVault(join(root,'vault')):undefined
+ const appServer=nativeFixture?new CodexAppServer(process.execPath,[fileURLToPath(new URL('./fixtures/secure-request-lifetime.mjs',import.meta.url))]):new CodexAppServer('UNUSED'),vault=realRouter?new ContextVault(join(root,'vault')):undefined
+ cleanups.push(()=>appServer.stop())
  const controller=new RemoteController(config,appServer,vault)
  let effects=0
  const server:Server=realRouter?createRemoteHttpServer(config,controller,files,null):createServer((req,res)=>{void secure.handle(req,res,async (inside,result)=>{if(inside.method==='POST')effects++;result.setHeader('Content-Type','application/json');result.end(JSON.stringify({canary:'REVIEW ONLY',effects}))})})
@@ -173,4 +176,21 @@ it('R3 observes rotation at the native boundary without another request or perio
  await writeFile(f.keyFile,JSON.stringify({...f.material,generation:randomId(),key:randomId(32)}))
  gate.resolve();await pending;await new Promise(resolve=>setImmediate(resolve))
  expect(calls).toEqual(['thread/read'])
+})
+
+it.each(['logout','expiry','rotation'] as const)('R3 actual fake-native pipe emits no mutation after %s during startup', async reason=>{
+ const f=await fixture(true,true);await f.client.unlock(f.material.key)
+ const initializing=once(f.appServer,'notification')
+ const pending=f.client.request('/api/threads',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':f.issued.payload.csrf},body:JSON.stringify({workspaceId:'0'})}).catch(()=>null)
+ expect((await initializing)[0].method).toBe('fixture/initializing')
+ if(reason==='logout') {
+  const logout=await f.client.request('/api/session/logout',{method:'POST',headers:{'x-csrf-token':f.issued.payload.csrf}});await logout.response.arrayBuffer()
+ } else if(reason==='expiry') vi.spyOn(Date,'now').mockReturnValue(Date.now()+601000)
+ else await writeFile(f.keyFile,JSON.stringify({...f.material,generation:randomId(),key:randomId(32)}))
+ f.appServer.notify('fixture/release',{})
+ await pending
+ expect(await f.appServer.request('fixture/effects',{})).toEqual([])
+ // A separate explicit native test intent still works; no real model/turn.
+ expect(await f.appServer.request('thread/start',{cwd:f.config.workspaceRoots[0]})).toMatchObject({thread:{id:'FAKE-ONLY'}})
+ expect(await f.appServer.request('fixture/effects',{})).toEqual(['thread/start'])
 })

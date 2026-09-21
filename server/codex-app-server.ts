@@ -104,8 +104,11 @@ export class CodexAppServer extends EventEmitter {
     this.#setState('ready')
   }
 
-  async request(method: string, params: unknown, timeoutMs = 60_000): Promise<unknown> {
+  async request(method: string, params: unknown, timeoutMs = 60_000, beforeDispatch?: () => void): Promise<unknown> {
+    beforeDispatch?.()
     await this.start()
+    // Startup/reconnect may await I/O. Reauthorize at the final synchronous pipe write.
+    beforeDispatch?.()
     return this.#requestRaw(method, params, timeoutMs)
   }
 

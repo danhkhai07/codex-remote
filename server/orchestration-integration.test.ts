@@ -143,7 +143,7 @@ it('renames through native RPC/events and archives without deleting vault contex
   const before = readdirSync(sources).map(name => [name, readFileSync(join(sources, name), 'utf8')])
   const publish = vi.spyOn(f.controller.events, 'publish')
   await expect(orchestra.command(cap, { action: 'rename', threadId: 'worker', name: '  Worker QA  ' })).resolves.toMatchObject({ name: 'Worker QA' })
-  expect(f.rpc).toHaveBeenCalledWith('thread/name/set', { threadId: 'worker', name: 'Worker QA' }, 10_000)
+  expect(f.rpc).toHaveBeenCalledWith('thread/name/set', { threadId: 'worker', name: 'Worker QA' }, 10_000, expect.any(Function))
   expect(publish).toHaveBeenCalledWith('codex', { method: 'thread/name/updated', params: { threadId: 'worker', threadName: 'Worker QA' } })
   await expect(f.controller.readThread('worker')).resolves.toMatchObject({ thread: { name: 'Worker QA' } })
   await expect(orchestra.command(cap, { action: 'archive', threadId: 'worker', requestId: 'remove-worker' })).resolves.toMatchObject({ archived: true })
