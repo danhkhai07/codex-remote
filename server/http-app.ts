@@ -241,15 +241,18 @@ export function createRemoteHttpServer(
       if (url.pathname === '/api/session/login' && method === 'POST') {
         if (!isAllowedOrigin(req, config)) throw new HttpError(403, 'Origin is not allowed')
         const ip = requestIp(req, config.trustedProxies)
-        if (loginRateLimiter.isBlocked(ip)) {
-          throw new HttpError(429, 'Too many login attempts. Try again later.')
+        const admission = loginRateLimiter.beginAttempt(ip)
+        if (!admission.allowed) {
+          res.setHeader('Retry-After', String(admission.retryAfterSeconds))
+          throw new HttpError(admission.reason === 'capacity' ? 503 : 429,
+            admission.reason === 'capacity' ? 'Login is busy. Try again shortly.' : 'Too many login attempts. Try again later.')
         }
-        const body = await readJson(req)
-        if (!passwordMatches(body.password, config.password)) {
-          loginRateLimiter.recordFailure(ip)
-          throw new HttpError(401, 'Incorrect password')
-        }
-        loginRateLimiter.clear(ip)
+        let accepted = false
+        try {
+          const body = await readJson(req)
+          accepted = passwordMatches(body.password, config.password)
+          if (!accepted) throw new HttpError(401, 'Incorrect password')
+        } finally { admission.finish(accepted) }
         const session = createSession(config.sessionSecret, config.sessionTtlSeconds, config.password)
         setSessionCookie(res, session.token, config.sessionTtlSeconds, secureCookie)
         json(res, 200, {
