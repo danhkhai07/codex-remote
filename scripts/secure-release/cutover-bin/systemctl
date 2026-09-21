@@ -1,0 +1,6 @@
+#!/usr/local/bin/node --experimental-default-type=module
+import { resolve, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { main } from '../key-cutover.mjs'
+const release = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+main(process.argv.slice(2), release).catch(error => { console.error(error.message); process.exitCode = 1 })

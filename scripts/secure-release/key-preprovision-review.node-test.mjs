@@ -1,76 +1,140 @@
-// Inverse PoC: PASS means the old gateway exposes a newly staged fake owner key.
-// Loopback fixture only; no production request, credential, key, native turn or restart.
+// R5 inverse proof converted to real old-process / actual cutover acceptance.
+// Only fake credentials, owned tempdirs and loopback child processes.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, readFile, rm, stat } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, chmod, unlink } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { pathToFileURL } from 'node:url'
-import { createHash } from 'node:crypto'
-import { execFile } from 'node:child_process'
+import { fork, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { once } from 'node:events'
-
-const run = promisify(execFile)
-const release = process.env.REVIEW_RELEASE
-const oldMain = '/root/RUNNING-SERVICES/codex-remote'
-const digest = bytes => createHash('sha256').update(bytes).digest('hex')
-
-test('P1 inverse PoC: old authenticated Files returns 0700/0600 fake owner key before ingress gating', { skip: !release }, async () => {
-  const baseline = JSON.parse(await readFile(join(release, 'baseline.json'), 'utf8'))
-  assert.equal(digest(await readFile(join(oldMain, 'dist-server/http-app.js'))), baseline.backend['http-app.js'].sha256)
-  const { createRemoteHttpServer } = await import(pathToFileURL(join(oldMain, 'dist-server/http-app.js')).href)
-  const { createSession } = await import(pathToFileURL(join(oldMain, 'dist-server/auth.js')).href)
-  const root = await mkdtemp(join(tmpdir(), 'key-preprovision-review-'))
-  let server
-  try {
-    const files = join(root, 'files'), privateKey = join(root, 'private', 'owner-key.json')
-    await mkdir(files)
-    const env = {
-      PATH: process.env.PATH, HOME: root,
-      CODEX_REMOTE_PASSWORD: 'fake-fixture-password',
-      CODEX_REMOTE_SESSION_SECRET: 'fake-session-secret'.repeat(4),
-      CODEX_REMOTE_PUBLIC_ORIGIN: 'http://127.0.0.1',
-      CODEX_REMOTE_WORKSPACE_ROOTS: files, CODEX_REMOTE_FILE_ROOTS: files,
-    }
-    await run(process.execPath, [join(release, 'operator/scripts/secure-key.mjs'), 'init', privateKey], { cwd: root, env, timeout: 10000 })
-    assert.equal((await stat(join(root, 'private'))).mode & 0o777, 0o700)
-    assert.equal((await stat(privateKey)).mode & 0o777, 0o600)
-    const config = {
-      host: '127.0.0.1', port: 5173, publicOrigin: new URL('http://127.0.0.1'),
-      password: env.CODEX_REMOTE_PASSWORD, sessionSecret: env.CODEX_REMOTE_SESSION_SECRET,
-      sessionTtlSeconds: 60, workspaceRoots: [files], fileRoots: ['/'], production: true,
-    }
-    const controller = { events: { publish() {} }, appServer: { state: 'ready' } }
-    server = createRemoteHttpServer(config, controller, files, null)
-    server.listen(0, '127.0.0.1'); await once(server, 'listening')
-    config.port = server.address().port
-    const address = `http://127.0.0.1:${server.address().port}/api/files/content?${new URLSearchParams({ path: privateKey })}`
-    const unauthenticated = await fetch(address)
-    assert.equal(unauthenticated.status, 401); await unauthenticated.body.cancel()
-    const session = createSession(config.sessionSecret, 60)
-    const response = await fetch(address, { headers: { Cookie: `codex_remote_session=${session.token}` } })
-    assert.equal(response.status, 200)
-    assert.equal(digest(Buffer.from(await response.arrayBuffer())), digest(await readFile(privateKey)))
-    // Output deliberately contains no key, token, file content or production secret.
-  } finally {
-    if (server) { server.closeAllConnections(); await new Promise(done => server.close(done)) }
-    await rm(root, { recursive: true, force: true })
+import { createServer, Agent, request } from 'node:http'
+import { connect } from 'node:net'
+import { APP, SOURCE, tree, fileHash, atomicBytes } from './common.mjs'
+import { processStart, provisionPlan } from './key-state.mjs'
+import { receiptBinding, servicePolicy } from './cutover-ops.mjs'
+import { destinationSnapshot } from './destinations.mjs'
+const run = promisify(execFile), reviewed = process.env.REVIEW_RELEASE
+const gatewayScript = new URL('./fixtures/key-gateway.mjs', import.meta.url), driverScript = new URL('./fixtures/key-driver.mjs', import.meta.url)
+async function fixture(t) {
+  assert(reviewed, 'REVIEW_RELEASE required; R5 acceptance must not silently skip')
+  const root = await mkdtemp(join(tmpdir(), 'r5-key-cutover-')), main = join(root, 'main'), release = join(root, 'release'), outside = release + '.activation'
+  const key = join(root, 'private/owner-key.json'), files = join(root, 'files'), vault = join(root, 'vault'), children = new Set(), sockets = new Set()
+  const agent = new Agent({ keepAlive: true })
+  t.after(async () => { agent.destroy(); for (const socket of sockets) socket.destroy(); for (const child of children) { if (child.exitCode === null && child.signalCode === null) { const done = once(child, 'exit'); child.kill('SIGKILL'); await done } } await rm(root, { recursive: true, force: true }) })
+  for (const path of [main, release, outside, files, vault, join(main, 'node_modules'), join(root, 'lock')]) await mkdir(path, { mode: 0o700 })
+  const portServer = createServer(); portServer.listen(0, '127.0.0.1'); await once(portServer, 'listening'); const port = portServer.address().port; await new Promise(resolve => portServer.close(resolve))
+  const env = { PATH: process.env.PATH, CODEX_REMOTE_PASSWORD: 'FAKE R5 password', CODEX_REMOTE_SESSION_SECRET: 'FAKE R5 session'.repeat(5), CODEX_REMOTE_PORT: String(port), CODEX_REMOTE_PUBLIC_ORIGIN: `http://127.0.0.1:${port}`, CODEX_REMOTE_WORKSPACE_ROOTS: files, CODEX_REMOTE_FILE_ROOTS: files, CODEX_REMOTE_CONTEXT_VAULT: vault, CODEX_REMOTE_SESSION_STATE: join(root, 'sessions.json'), CODEX_REMOTE_SECURE_API: 'required', CODEX_REMOTE_SECURE_KEY_FILE: key }
+  await writeFile(join(main, '.env'), Object.entries(env).map(([k,v]) => `${k}=${v}`).join('\n')+'\n', { mode: 0o600 })
+  await symlink('/root/WORKTREES/cr-secure-api-review-fixes/dist-server',join(main,'dist-server'))
+  await writeFile(join(main,'source-revision'), SOURCE)
+  await symlink(join(reviewed, 'operator'), join(release, 'operator'))
+  const meta = { app: APP, sourceTarget: SOURCE, main, keyFile: key, fileRoots: [files], requiredEncryption: true, activationEligible: true }
+  await writeFile(join(release, 'metadata.json'), JSON.stringify(meta))
+  await writeFile(join(release, 'seal.json'), JSON.stringify({ app: APP, files: tree(release) }))
+  const baseline = JSON.parse(await readFile(join(reviewed, 'baseline.json'), 'utf8'))
+  assert.equal(fileHash('/root/RUNNING-SERVICES/codex-remote/dist-server/http-app.js'), baseline.backend['http-app.js'].sha256)
+  const { createSession } = await import('/root/RUNNING-SERVICES/codex-remote/dist-server/auth.js')
+  const { assertKeyLocation } = await import(join(reviewed, 'operator/dist-server/secure-key.js'))
+  const session = createSession(env.CODEX_REMOTE_SESSION_SECRET, 60), cookie = `codex_remote_session=${session.token}`
+  const spawnGateway = async mode => {
+    const child = fork(gatewayScript, [mode, root], { stdio: ['ignore','ignore','ignore','ipc'] }); children.add(child)
+    await once(child, 'message', { signal: AbortSignal.timeout(15000) }); return child
   }
+  let old = await spawnGateway('old'), active = old
+  const oldIdentity = { pid: old.pid, start: processStart(old.pid), cgroup: '/fixture-owned-old' }
+  const policy = { Type: 'simple', KillMode: 'control-group', SendSIGKILL: 'yes', TriggeredBy: '' }
+  const state = extra => atomicBytes(join(root, 'service-state.json'), JSON.stringify({ ...policy, ActiveState: active ? 'active' : 'inactive', SubState: active ? 'running' : 'dead', MainPID: String(active?.pid ?? 0), ControlPID: '0', ControlGroup: oldIdentity.cgroup, fixtureCgroupEmpty: !active, ...extra }), 0o600)
+  state()
+  const now = new Date().toISOString(), evidence = { fixture: { at: now, files: [] } }
+  await writeFile(join(outside, 'evidence.json'), JSON.stringify(evidence)); await writeFile(join(outside, 'authorization.json'), JSON.stringify({ at: now }))
+  await writeFile(join(outside, 'attempt.json'), JSON.stringify({ status: 'running', phase: 'old-watcher-restart' }))
+  await writeFile(join(root, 'lock/owner.json'), JSON.stringify({ release, pid: process.pid }))
+  const permit = { app: APP, release, seal: fileHash(join(release, 'seal.json')), runner: { pid: process.pid, start: processStart(process.pid) }, old: oldIdentity, lock: join(root, 'lock'), port, servicePolicy: servicePolicy(policy), receipts: receiptBinding(outside, evidence), provision: provisionPlan(meta, assertKeyLocation), destinations: destinationSnapshot([join(main, '.env')]), backend: tree(join(main, 'dist-server')), dependencies: {}, stable: {} }
+  await writeFile(join(outside, 'key-cutover-permit.json'), JSON.stringify(permit))
+  const get = () => new Promise((resolve, reject) => {
+    const req = request({ host: '127.0.0.1', port, path: '/api/files/content?' + new URLSearchParams({ path: key }), agent, headers: { Cookie: cookie } }, res => { let bytes = 0; res.on('data', chunk => { bytes += chunk.length }); res.on('end', () => resolve({ status: res.statusCode, bytes })) }); req.on('error', reject); req.end()
+  })
+  const upgrade = async () => { const socket = connect({ host:'127.0.0.1',port }); sockets.add(socket); await once(socket, 'connect'); socket.write('GET /fixture-upgrade HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: fixture\r\n\r\n'); await once(socket,'data'); return socket }
+  async function stop() { const exited = once(active, 'exit'); active.kill('SIGTERM'); await exited; active = null; state() }
+  async function start() { active = await spawnGateway('new'); state() }
+  const drive = async hook => {
+    const child = fork(driverScript, [root], { stdio:['ignore','ignore','ignore','ipc'] }); children.add(child); const exited = once(child, 'exit'); let hookError
+    child.on('message', async message => {
+      try {
+        const outcome = await hook?.(message, child)
+        if (outcome === 'hold') return
+        if (message.action === 'stop') await stop()
+        if (message.action === 'start') await start()
+        if (child.connected) child.send({ id: message.id })
+      } catch(error) { if (error.fixtureFault) { if(child.connected) child.send({ id: message.id, error: error.message }) } else { hookError=error; child.kill('SIGKILL') } }
+    })
+    const result = await Promise.race([exited, new Promise((_,reject)=>{const timer=setTimeout(()=>reject(Error('owned-driver-timeout')),30000); timer.unref()})])
+    if (hookError) throw hookError
+    return result
+  }
+  const cli = (name,args=[]) => run(process.execPath,[join(reviewed,'operator/scripts',name),...args],{cwd:root,env,timeout:15000})
+  return { root,main,release,outside,key,oldIdentity,state,get,upgrade,drive,stop,start,cli,env, alive: () => processStart(oldIdentity.pid) === oldIdentity.start }
+}
+const fault = message => Object.assign(Error(message), { fixtureFault: true })
+test('R5: actual legacy Files sees no key during wait; stop closes keepalive/upgraded connections before key init; required CLI succeeds', async t => {
+  const f = await fixture(t)
+  for (let n=0;n<3;n++) { assert.equal((await f.get()).status,404); assert(!existsSync(f.key)) }
+  const socket = await f.upgrade(); let upgradedClosed=false; socket.once('close',()=>{upgradedClosed=true})
+  const [code] = await f.drive(async message => {
+    if (message.phase === 'pre-stop' || message.phase === 'stopping-old') { assert(!existsSync(f.key)); assert.equal((await f.get()).status,404) }
+    if (message.phase === 'generate-owner-key') { assert(!f.alive()); assert(!existsSync(f.key)); await assert.rejects(f.get()) }
+    if (message.phase === 'bind-owner-key') { assert(!f.alive()); assert(existsSync(f.key)); await assert.rejects(f.get()) }
+  })
+  assert.equal(code,0); assert(upgradedClosed)
+  const before=fileHash(f.key), receipt=JSON.parse(await readFile(join(f.outside,'key-binding.json'),'utf8')); assert.equal(receipt.oldGone,true); assert(receipt.key.digest)
+  const denied=await f.get(); assert([401,403].includes(denied.status))
+  const note=join(f.root,'note.md'); await writeFile(note,'FAKE CUTOVER KNOWLEDGE')
+  const written=JSON.parse((await f.cli('knowledge.mjs',['write','--path','References/R5.md','--file',note,'--revision','','--actor','fixture'])).stdout)
+  assert.equal(JSON.parse((await f.cli('knowledge.mjs',['read','--path','References/R5.md'])).stdout).revision,written.revision)
+  assert(Array.isArray(JSON.parse((await f.cli('services.mjs',['list'])).stdout).services))
+  await f.stop(); await f.start(); assert.equal(fileHash(f.key),before)
+  assert(Array.isArray(JSON.parse((await f.cli('services.mjs',['list'])).stdout).services))
+  assert.equal((await f.drive())[0],1,'one-use cutover cannot repeat or rotate key'); assert.equal(fileHash(f.key),before)
+})
+for (const phase of ['pre-stop','generate-owner-key','bind-owner-key','before-start']) test('R5: owned SIGKILL at '+phase+' cannot expose a reusable key through old HTTP',async t=>{
+  const f=await fixture(t)
+  const [,signal]=await f.drive((message,child)=>{if(message.phase===phase){child.kill('SIGKILL');return 'hold'}})
+  assert.equal(signal,'SIGKILL')
+  const state=JSON.parse(await readFile(join(f.outside,'key-cutover-state.json'),'utf8')); assert.equal(state.phase,phase)
+  if(f.alive()){assert(!existsSync(f.key));assert.equal((await f.get()).status,404)}else await assert.rejects(f.get())
+  if(existsSync(f.key)){assert(!f.alive());const before=fileHash(f.key);assert.equal((await f.drive())[0],1);assert.equal(fileHash(f.key),before)}
+})
+for(const failure of ['stop-fails','cgroup-survives','required-config-drift','key-tampered','expired-after-stop','start-fails','key-rotated','key-removed','after-await-config-drift','after-await-start-drift']) test('R5: '+failure+' fails closed and retains phase',async t=>{
+  const f=await fixture(t)
+  const [code]=await f.drive(async message=>{
+    if(message.status==='failed')return
+    if(failure==='after-await-config-drift'&&message.probe==='listener'&&message.phase==='generate-owner-key')await writeFile(join(f.main,'.env'),'CODEX_REMOTE_SECURE_API=off\n')
+    if(failure==='after-await-start-drift'&&message.probe==='listener'&&message.phase==='start-required')await writeFile(join(f.main,'.env'),'CODEX_REMOTE_SECURE_API=off\n')
+    if(failure==='stop-fails'&&message.action==='stop')throw fault('fixture-stop-failed')
+    if(failure==='start-fails'&&message.action==='start')throw fault('fixture-start-failed')
+    if(failure==='cgroup-survives'&&message.phase==='prove-old-gone')f.state({fixtureCgroupEmpty:false})
+    if(failure==='required-config-drift'&&message.phase==='pre-provision')await writeFile(join(f.main,'.env'),'CODEX_REMOTE_SECURE_API=off\n')
+    if(failure==='key-tampered'&&message.phase==='before-start')await chmod(f.key,0o644)
+    if(failure==='key-rotated'&&message.phase==='before-start')await f.cli('secure-key.mjs',['rotate',f.key])
+    if(failure==='key-removed'&&message.phase==='before-start')await unlink(f.key)
+    if(failure==='expired-after-stop'&&message.phase==='pre-provision')await writeFile(join(f.outside,'authorization.json'),JSON.stringify({at:'2020-01-01T00:00:00Z'}))
+  })
+  assert.equal(code,1);assert.equal(JSON.parse(await readFile(join(f.outside,'key-cutover-state.json'),'utf8')).status,'failed')
+  if(f.alive()){assert(!existsSync(f.key));assert.equal((await f.get()).status,404)}else await assert.rejects(f.get())
+  if(!['key-tampered','start-fails','key-rotated','after-await-start-drift'].includes(failure))assert(!existsSync(f.key))
 })
 
-test('P1 inverse control: runner requires key in preflight before gate-public-ingress', async () => {
-  const source = resolve(import.meta.dirname, 'production.mjs')
-  const text = await readFile(source, 'utf8')
-  assert.match(text, /key = await candidateConfig\(\)/)
-  assert.match(text, /async preflight\(\) \{ const result = await gates\(true, true\)/)
-  const { execute } = await import('./runner.mjs')
-  const phases = []
-  const ops = {
-    acquire: async () => {}, release: async () => {}, state: async () => {},
-    preflight: async () => { phases.push('requires-existing-key'); throw Error('fake-key-unavailable') },
-    gateIngress: async () => { phases.push('gate-public-ingress') },
-  }
-  await assert.rejects(execute(ops), /fake-key-unavailable/)
-  assert.deepEqual(phases, ['requires-existing-key'])
+test('R5: graceful termination at generated-key boundary retains phase and never revives old gateway', async t => {
+  const f=await fixture(t)
+  const [,signal]=await f.drive((message,child)=>{if(message.phase==='before-start'){child.kill('SIGTERM');return 'hold'}})
+  assert.equal(signal,'SIGTERM');assert(!f.alive());assert(existsSync(f.key));await assert.rejects(f.get())
+  assert.equal(JSON.parse(await readFile(join(f.outside,'key-cutover-state.json'),'utf8')).phase,'before-start')
+})
+
+test('R5: unexpected existing key destination blocks before stop; never silently adopts/deletes/rotates it',async t=>{
+  const f=await fixture(t);await mkdir(join(f.root,'private'),{mode:0o700});await writeFile(f.key,'non-secret-invalid-existing-placeholder',{mode:0o600})
+  const before=fileHash(f.key);assert.equal((await f.drive())[0],1);assert(f.alive());assert.equal(fileHash(f.key),before)
+  assert.equal(JSON.parse(await readFile(join(f.outside,'key-cutover-state.json'),'utf8')).phase,'pre-stop')
 })
