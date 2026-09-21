@@ -6,13 +6,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer as httpServer } from 'node:http'
 import { once } from 'node:events'
-import { createServer as viteServer } from 'vite'
+import { createServer as viteServer, build } from 'vite'
+import { randomBytes } from 'node:crypto'
 import { createRemoteHttpServer } from '../dist-server/http-app.js'
 import { RemoteController } from '../dist-server/controller.js'
 import { CodexAppServer } from '../dist-server/codex-app-server.js'
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
 const root = await mkdtemp(join(tmpdir(), 'preview-cache-browser-'))
+const secureRoot = await mkdtemp(join(tmpdir(), 'preview-cache-key-'))
+const encrypted = process.env.SECURE_FIXTURE === '1'
+const material = { version: 1, app: randomBytes(24).toString('base64url'), generation: randomBytes(24).toString('base64url'), key: randomBytes(32).toString('base64url') }
 const events = []
 let vite, browser, secondApp, gateway
 
@@ -36,6 +40,11 @@ if (import.meta.hot) import.meta.hot.accept('./dep.js', m => { document.body.dat
   const origin = 'http://admin.localhost:' + gatewayPort
   const config = { host: '127.0.0.1', port: gatewayPort, publicOrigin: new URL(origin), password: 'fixture password only', sessionSecret: 'fixture-only-secret'.repeat(3), sessionTtlSeconds: 600, workspaceRoots: [root], fileRoots: [root], production: true, previewOriginTemplate: 'http://p{port}.localhost:' + gatewayPort, sessionStateFile: join(root, '.state', 'sessions.json') }
   const shell = join(root, 'control'); await mkdir(shell)
+  if (encrypted) {
+    await writeFile(join(secureRoot, 'owner.json'), JSON.stringify(material), { mode: 0o600 })
+    Object.assign(config, { secureApiRequired: true, secureKeyFile: join(secureRoot, 'owner.json') })
+    await build({ configFile: false, logLevel: 'error', build: { outDir: shell, emptyOutDir: false, lib: { entry: new URL('../server/secure-client.ts', import.meta.url).pathname, formats: ['es'], fileName: () => 'secure-fixture.js' } } })
+  }
   await writeFile(join(shell, 'index.html'), '<html><head></head><body>Control fixture</body></html>')
   gateway = createRemoteHttpServer(config, new RemoteController(config, new CodexAppServer('unused')), shell, null)
   gateway.prependListener('request', (req, res) => {
@@ -54,7 +63,11 @@ if (import.meta.hot) import.meta.hot.accept('./dep.js', m => { document.body.dat
     const res = await fetch('/api/session/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) })
     return res.json()
   }, config.password)
-  const launch = async port => admin.evaluate(async ({ port, csrf }) => (await fetch('/api/localhost-preview', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: JSON.stringify({ port }) })).json(), { port, csrf: login.csrf })
+  await admin.evaluate(async ({ encrypted, key }) => {
+    if (encrypted) { const { SecureTransport } = await import('/secure-fixture.js'); window.channel = new SecureTransport(); await window.channel.unlock(key) }
+    window.privateFetch = async (path, init) => window.channel ? (await window.channel.request(path, init)).response : fetch(path, init)
+  }, { encrypted, key: material.key })
+  const launch = async port => admin.evaluate(async ({ port, csrf }) => (await window.privateFetch('/api/localhost-preview', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: JSON.stringify({ port }) })).json(), { port, csrf: login.csrf })
   const page = await context.newPage()
   page.setDefaultTimeout(15000)
   const pageErrors = []
@@ -104,22 +117,23 @@ if (import.meta.hot) import.meta.hot.accept('./dep.js', m => { document.body.dat
   const activeSocket = sockets.at(-1)
   const socketClosed = activeSocket.waitForEvent('close', { timeout: 10000 })
   const oldCookies = await context.cookies()
-  const logout = await admin.evaluate(async csrf => (await fetch('/api/session/logout', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: '{}' })).status, login.csrf)
+  const logout = await admin.evaluate(async csrf => { const r = await window.privateFetch('/api/session/logout', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: '{}' }); await r.arrayBuffer(); return r.status }, login.csrf)
   assert.equal(logout, 200)
   await socketClosed
   assert.equal((await page.reload()).status(), 401)
   await context.addCookies(oldCookies)
   assert.equal((await page.reload()).status(), 401)
-  assert.equal(await admin.evaluate(async () => (await fetch('/api/session')).status), 401)
+  assert.equal(await admin.evaluate(async encrypted => (await fetch(encrypted ? '/api/secure/challenge' : '/api/session', encrypted ? { method: 'POST' } : {})).status, encrypted), 401)
   assert.deepEqual(pageErrors, [])
   console.log(JSON.stringify({ initialBytes: bytes(initial), reloadBytes: bytes(reload),
     reductionPercent: Number((100 * (1 - bytes(reload) / bytes(initial))).toFixed(2)),
     revalidatedRequests: reload.filter(event => event.status === 304).length,
-    mode: 'isolated-real-registry', hmr: true, websocketClosedOnLogout: true, changedContent: true, logout: true, replayedAdminAndGrant401: true, apiNoStore: true, twoPorts: true, pageErrors }))
+    mode: encrypted ? 'isolated-encrypted-api-real-registry' : 'isolated-real-registry', hmr: true, websocketClosedOnLogout: true, changedContent: true, logout: true, replayedAdminAndGrant401: true, apiNoStore: true, twoPorts: true, pageErrors }))
 } finally {
   await browser?.close()
   if (gateway) { gateway.closeAllConnections(); await new Promise(resolve => gateway.close(resolve)) }
   if (secondApp) { secondApp.closeAllConnections(); await new Promise(resolve => secondApp.close(resolve)) }
   await vite?.close()
   await rm(root, { recursive: true, force: true })
+  await rm(secureRoot, { recursive: true, force: true })
 }
