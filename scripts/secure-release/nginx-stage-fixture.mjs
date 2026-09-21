@@ -31,13 +31,19 @@ try {
       .replace(/include \/etc\/nginx\/snippets\/codex-cloudflare-real-ip.conf;/g, cf).replaceAll('127.0.0.1:5173', '127.0.0.1:' + upstreamPort)
     fixture = await startNginxFixture(content)
     const get = path => new Promise((resolve, reject) => {
-      const req = request({ host: '127.0.0.1', port: tls, servername: 'codex.danhkhai.io.vn', ca, path, headers: { Host: 'codex.danhkhai.io.vn' }, timeout: 2000 }, res => { res.resume(); res.once('end', () => resolve(res.statusCode)) })
+      const req = request({ host: '127.0.0.1', port: tls, servername: 'codex.danhkhai.io.vn', ca, path, headers: { Host: 'codex.danhkhai.io.vn' }, timeout: 2000 }, res => { res.resume(); res.once('end', () => resolve({ status: res.statusCode, location: res.headers.location })) })
       req.on('error', reject); req.on('timeout', () => req.destroy()); req.end()
     })
     let status
     for (let n = 0; n < 50; n++) { try { status = await get('/api/healthz'); break } catch { await new Promise(resolve => setTimeout(resolve, 20)) } }
-    await fixture.assertIdentity(); assert.equal(status, expected)
-    if (admin === 'admin-active.conf') assert.equal(await get('/api/secure/request'), 200)
+    await fixture.assertIdentity(); assert.equal(status.status, expected)
+    if (admin === 'admin-active.conf') {
+      assert.equal((await get('/api/secure/request')).status, 200)
+      for (const path of ['/workboard', '/workboard/', '/workboard/api/session']) {
+        const redirect = await get(path)
+        assert.equal(redirect.status, 303); assert.equal(new URL(redirect.location, 'https://codex.danhkhai.io.vn').pathname, '/services')
+      }
+    }
     await fixture.close(); fixture = undefined
   }
   console.log(JSON.stringify({ stagedNginxMerges: 3, exactTunnel36m: true, fakeCertificateOnly: true, nonRootRestricted: true, hostMetadataAndIdentityUnchanged: true }))

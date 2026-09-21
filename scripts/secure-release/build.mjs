@@ -83,7 +83,12 @@ export function prepare(output, inventoryPath) {
   for (const name of infraNames) copy(join(INFRA, name), 'infra/' + name)
   const admin = readFileSync(join(output, 'infra/admin-active.conf'), 'utf8')
   const secureLocation = readFileSync(join(source, 'deploy/nginx/secure-api-location.conf'), 'utf8')
-  writeFileSync(join(output, 'infra/admin-active.conf'), admin.replace('    location = /workboard', secureLocation + '\n    location = /workboard'))
+  // The pre-encryption infra draft used GET /preview/... to mint a ticket. Required
+  // mode deliberately rejects that route: send legacy bookmarks to the unlock-gated
+  // Services UI, which obtains a launch ticket through the encrypted API instead.
+  const secureAdmin = admin.replace('return 303 /preview/5180/workboard/;', 'return 303 /services;')
+    .replace('rewrite ^/workboard/(.*)$ /preview/5180/workboard/$1 redirect;', 'return 303 /services;')
+  writeFileSync(join(output, 'infra/admin-active.conf'), secureAdmin.replace('    location = /workboard', secureLocation + '\n    location = /workboard'))
   // During copy/restart block ALL public admin requests, while loopback readiness remains usable.
   const cutover = readFileSync(join(output, 'infra/admin-cutover-gated.conf'), 'utf8')
   writeFileSync(join(output, 'infra/admin-maintenance.conf'), cutover.replace('location / { proxy_pass http://127.0.0.1:5173; }', 'location / { add_header Cache-Control "no-store" always; return 503; }'))

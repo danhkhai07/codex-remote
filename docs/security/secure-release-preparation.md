@@ -215,3 +215,13 @@ live `event-hub.js.map` hash differs from the freshly compiled candidate debug m
 while `event-hub.js` is identical. `excluded-coherence.json` records both hashes;
 the runner preserves the live map exactly and does not expand the 46-file scope.
 A mismatch in an excluded executable module blocks preparation.
+
+Integration correction: the pre-encryption infra draft redirected old `/workboard`
+bookmarks to a plaintext GET `/preview/5180/...` ticket route, which required mode
+correctly rejects. The merged active admin config now redirects those bookmarks
+to `/services`. Login/unlock there, then open the registered Workboard service;
+the client obtains its isolated-origin launch ticket through the encrypted API.
+No same-origin Workboard content or legacy plaintext ticket exception is restored.
+The staged TLS fixture checks all three legacy bookmark variants. Older preparation
+seal `a054569a2042652e8e75399d810d2b684fabd60956652e5479e7c9d7503d1eb3`
+is superseded and must not be armed; it remains immutable for review history.
