@@ -1,5 +1,10 @@
 # Combined encrypted API / migration / Hours candidate
 
+Historical integration evidence for 3c5a7e7. The current fix candidate and
+re-review handoff are in [encrypted-api-review-fixes.md](encrypted-api-review-fixes.md).
+Leader confirmed Hours LIVE on 2026-09-21 at 16:53 (PID1758426, b763a0f7…16702e93);
+this supersedes the recovery-pending status below. No deployment is performed here.
+
 Branch `integration/secure-api-foundation-hours`, worktree
 `/root/WORKTREES/cr-secure-api-foundation-hours`. Candidate only: no main merge,
 production key, live configuration change, DNS creation, release arming or restart.
@@ -20,8 +25,8 @@ the tunnel does not weaken inner authorization, CSRF, file rules or Plan control
   Pause/resume, paused state, continuous baseline, generator/template and bridge
   commands remain intact. JS build SHA equals the new approved Hours hash:
   `b763a0f7b74c0341684e196855e85b3f5e3b123915a373b27463c17916702e93`.
-  This supersedes the old a9a74ac pin. Source equality does not finalize the separate
-  Hours recovery or authorize editing its runner/seal/runtime.
+  This supersedes the old a9a74ac pin. Leader later confirmed Hours recovery complete (16:53). Source equality never
+  authorizes editing its runner/seal/runtime.
 - `0780238` updates only the Vitest dependency family 4.1.10 -> 4.1.11, retaining
   unrelated package pins. Verified against the [maintainer's advisory](https://github.com/vitest-dev/vitest/security/advisories/GHSA-82fw-gwwq-j7x9).
   Initial npm 10.9.8 install hit an Arborist optional-peer graph error. Lock update
@@ -130,10 +135,10 @@ Do not apply this location to preview apps. The isolated preview TLS/vhost and
 Workboard configuration remain separately reviewed leader artifacts; sample
 configs must not overwrite deployed vhosts blindly.
 
-**Fresh runtime baseline pending:** the leader/recovery owner must finalize Hours
-recovery and capture a NEW baseline (runtime/client/config/generator/template and
-fresh PID/state evidence), then seal all matching artifacts after independent
-protocol review. Existing release2fd0cff/resolution/Hours seals are not edited or
+**NEW release baseline pending:** Hours recovery has been verified by the leader.
+Capture a NEW release inventory (runtime/client/config/generator/template and fresh
+PID/state evidence), then seal matching artifacts after independent re-review.
+Existing release2fd0cff/resolution/Hours seals are not edited or
 armed by this task. Leader gates also include DNS/TLS/Nginx/Workboard and a new
 browser profile before new credentials/key, followed by ALL-idle activation and
 live verification. No plaintext fallback is an acceptable recovery mechanism.

@@ -38,9 +38,10 @@ const groups = {
 }
 const manifest = {
   version: 1, status: 'candidate-inventory-not-a-release', commit: git('rev-parse', 'HEAD'), branch: git('branch', '--show-current'), worktree: process.cwd(), dirty: Boolean(git('status', '--porcelain')),
-  sourceBases: { encryption: 'd88b163dc9c39412307031e037f655576e2ee311', foundation: '1706f3ba9b844885ccffea8069015e13894052c7', main },
-  freshRuntimeBaseline: 'PENDING recovery-owner verification and leader inventory; no runtime read or snapshot in this task',
-  gates: ['independent protocol review', 'Hours recovery verification and fresh baseline', 'DNS/TLS/Nginx/Workboard', 'new browser profile', 'new seal and ALL-idle activation'],
+  sourceBases: { fixesBase: '3c5a7e7e2e2bd950ef33f31db932e3affd5396d3', independentReview: 'a3db35100963f20ad2676cb365e53c12ae4438b6', encryption: 'd88b163dc9c39412307031e037f655576e2ee311', foundation: '1706f3ba9b844885ccffea8069015e13894052c7', main },
+  hoursLiveBaseline: { verifiedByLeader: '2026-09-21 16:53 Asia/Ho_Chi_Minh', pid: 1758426, sha256: preserved },
+  freshRuntimeBaseline: 'PENDING new release inventory by leader; Hours recovery already verified, no runtime read or snapshot in this task',
+  gates: ['independent protocol review', 'fresh release baseline preserving verified pause-aware Hours', 'DNS/TLS/Nginx/Workboard', 'new browser profile', 'new seal and ALL-idle activation'],
   noProductionKeyOrStateIncluded: true, adminSecureRequestBodyLimit: '36m', node: '22.23.2', npm: '10.9.8', groups,
 }
 await writeFile(resolve(target), JSON.stringify(manifest, null, 2) + '\n', { flag: 'wx', mode: 0o600 })

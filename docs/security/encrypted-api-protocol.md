@@ -148,3 +148,41 @@ Primary references checked 2026-09-21:
 - Old administrative /preview links are rejected in required mode; issue preview
   tickets through the encrypted API. Workboard redirect integration must open the
   authenticated client launch flow, not rely on a cookie-only /preview shortcut.
+
+## Review hardening: asynchronous authorization and bounded framing
+
+The browser captures a lifetime before migration/setup/proof/cache, before business
+requests, and before file pickers or multi-step actions. Lock/logout/unmount aborts
+that lifetime. Every continuation must validate it before new dispatch and before
+publishing decrypted data. A fresh unlock cannot inherit old intent. A stale proof
+completion cannot clear a newer channel. Cache corruption fallback is GET-only;
+cancellation never enters that fallback.
+
+The synthetic inner HTTP request carries an explicit liveness guard (request,
+channel, current owner generation, session, response connection). The HTTP router
+checks after body/precondition awaits; controller mutations check immediately
+before each new native effect, including after CodexAppServer startup/reconnect
+and immediately before its synchronous stdio write. This is independent of leader role guards. It is
+not inherited by scheduled/background agent jobs. A valid effect already dispatched
+is not rolled back, and an uncertain outcome must not be automatically retried.
+Logout may complete its own minimal acknowledgement and necessary cleanup after
+revoking itself. Socket closure alone never cancels JavaScript continuations.
+
+Requests are independently capped at 25 MiB plaintext, 1,024 nonempty body frames,
+and 36 MiB wire bytes (plus the existing 100,000-byte line limit). Standard clients
+coalesce source chunks into 64 KiB frames; I/O chunk boundaries do not consume extra
+frame quota. Zero-body requests use head/end only. SSE responses are intentionally
+not subject to a total request frame cap. Compression and unknown protected headers
+are rejected before decryption; jose6.2.12 also gets maxDecompressedLength=0.
+See the maintainer's [versioned decrypt options](https://github.com/panva/jose/blob/v6.2.12/src/types.d.ts)
+and [implementation](https://github.com/panva/jose/blob/v6.2.12/src/lib/jwe_decrypt.ts).
+
+IDB accounting validates finite/nonnegative timestamps, positive safe-integer bytes,
+and exact encoded meta+body length. Pruning uses a cursor retaining at most 1,024
+small metadata records, never getAll ciphertext. Pending cache work is capped at
+16 operations and 64 MiB retained input bodies; persistent ciphertext remains
+64 MiB total/8 MiB per entry/seven-day TTL. More than 4,096 scanned rows signals
+corrupt state and resets this owned ciphertext store only (not salt, drafts, preview
+cache or unrelated storage). Namespace purge uses opaque primary-key ranges.
+These limits do not promise a 64 MiB renderer heap, and optional cache failure still
+falls back to a fresh authorized network read.

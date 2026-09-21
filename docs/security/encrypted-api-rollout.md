@@ -1,11 +1,12 @@
 # Encrypted API candidate: review and rollout
 
-Current integration: branch `integration/secure-api-foundation-hours`, worktree
-`/root/WORKTREES/cr-secure-api-foundation-hours`, from exact d88b163dc9c39412307031e037f655576e2ee311,
-merged foundation 1706f3ba9b844885ccffea8069015e13894052c7 and main
-783b1e3ae0efd683458c9fa0b3518b2e476b06a9. See
-[combined candidate evidence and manifest](secure-api-foundation-hours.md).
-This is a candidate, not a deployed feature or completed security audit.
+Current fix candidate: branch `fix/secure-api-review-findings`, worktree
+`/root/WORKTREES/cr-secure-api-review-fixes`, based on exact
+`3c5a7e7e2e2bd950ef33f31db932e3affd5396d3`. This includes encryption d88b163,
+foundation 1706f3b and main783b1e3. See the [review response and current evidence](encrypted-api-review-fixes.md),
+[original integration](secure-api-foundation-hours.md) and
+[independent findings](encrypted-api-independent-review.md).
+This candidate requires independent re-review; nothing here is deployed or audit-approved.
 See [the protocol and threat model](encrypted-api-protocol.md).
 
 ## Behavior and limits
@@ -155,13 +156,13 @@ those for rollout validation. Public status/health needs no private metadata.
 ## Artifact manifest and deployment sequence
 
 Do not arm/edit old releases, copy this worktree over live files, or restart from
-this task. Leader prepares a NEW seal after independent review and verified Hours recovery/fresh baseline.
+this task. Leader prepares a NEW seal after independent re-review and a fresh release baseline preserving the verified Hours runtime.
 
 | Group | Artifacts to include in the new seal |
 | --- | --- |
 | Runtime dependency | package.json, package-lock.json, exact jose 6.2.12 installed via npm ci; existing pinned Node/npm |
-| New backend | dist-server/secure-wire.js, secure-key.js, secure-client.js, secure-api.js, secure-response.js, secure-viewer.js and matching maps |
-| Changed backend | dist-server/config.js, http-app.js, push.js and matching maps; union with base security/cache and CR2 manifests |
+| New backend | dist-server/secure-wire.js, secure-key.js, secure-client.js, secure-api.js, secure-response.js, secure-viewer.js, request-lifetime.js and matching maps |
+| Changed backend | dist-server/config.js, http-app.js, push.js, codex-app-server.js, controller.js, orchestration.js and matching maps; union with base security/cache and CR2 manifests |
 | Client | complete matching dist/ tree including hashed JS/CSS and lazy assets; cache/public shell files from the same seal |
 | Operator tools | scripts/secure-key.mjs, secure-maintenance.mjs, knowledge.mjs, services.mjs, restart-when-idle.mjs; retain restart-readiness/session-cookie helpers |
 | Configuration/private state | reviewed required mode/key path; operator-provisioned key directory (not a release artifact); preserve session registry/history/attachments/other runtime data |
@@ -171,9 +172,9 @@ this task. Leader prepares a NEW seal after independent review and verified Hour
 The integration build emits the approved pause-aware work-hours.js hash exactly.
 Preserve that JS/map and the matching working-hours/update.py and template from
 783b1e3. The old a9a74ac pin is superseded by user authorization. Do not touch the
-active Hours recovery runner/marker or old release seals. Fresh runtime baseline
-is pending the recovery owner's verification; source hash equality alone does
-not finalize that deployment. Do not replace all dist-server files indiscriminately.
+verified Hours runtime or old release seals. Leader confirmed Hours LIVE on
+2026-09-21 at 16:53, PID1758426, with the hash above. Recovery is complete;
+a NEW release baseline/inventory is still required. Do not replace all dist-server files indiscriminately.
 
 Review and seal client/server/dependency/CLI together. Provision the key privately
 only after approval, prepare config and backups, and await the reviewed idle watcher
