@@ -59,10 +59,26 @@ it('keeps leader changes and team controls behind session, CSRF and group checks
   expect((await call('/api/threads/worker/orchestration')).data).toMatchObject({ leaderId: 'leader', members: ['leader', 'worker', 'second'] })
   expect((await call('/api/threads/worker/orchestration', { action: 'spawn' })).status).toBe(400)
   expect((await call('/api/threads/worker/orchestration', { action: 'release' }, true, 'wrong')).status).toBe(403)
+  const orchestra = f.controller.orchestration!
+  const cap = orchestra.context('leader', { fullAccess: false }, true).match(/--capability ([\w-]+)/)![1]
+  const delegated = await orchestra.command(cap, { action: 'delegate', threadId: 'worker', requestId: 'recover', title: 'Recover task', text: 'Fixture only' }) as { task: { id: string } }
+  await orchestra.cancel(delegated.task.id)
+  const recovery = { action: 'resolve', taskId: delegated.task.id, summary: 'Recovery verified', evidence: 'Fixture deployment', leaderEpoch: f.vault.groupFor('leader')!.leaderEpoch }
+  const teamPath = '/api/threads/leader/orchestration'
+  expect((await call(teamPath, recovery, false)).status).toBe(401)
+  expect((await call(teamPath, recovery, true, 'wrong')).status).toBe(403)
+  expect((await call('/api/threads/worker/orchestration', recovery)).status).toBe(403)
+  expect((await call(teamPath, { ...recovery, leaderEpoch: -1 })).status).toBe(409)
+  expect((await call(teamPath, { ...recovery, evidence: '' })).status).toBe(400)
+  expect((await call(teamPath, recovery)).data.tasks).toMatchObject([{ status: 'cancelled', resolution: { summary: recovery.summary } }])
+  expect((await call(teamPath, recovery)).status).toBe(200)
+  expect((await call(teamPath, { ...recovery, summary: 'Different recovery' })).status).toBe(409)
+  expect((await call(teamPath, { ...recovery, leaderEpoch: String(recovery.leaderEpoch) })).status).toBe(409)
+  expect((await call(teamPath)).data.tasks).toMatchObject([{ status: 'cancelled', resolution: { resolvedBy: 'leader' } }])
   expect((await call(path, { threadId: 'second' })).status).toBe(200)
   expect(f.vault.snapshot().groups[0].leaderThreadId).toBe('second')
   expect((await call(path, { threadId: null })).status).toBe(200)
-  expect(await call('/api/threads/worker/orchestration')).toMatchObject(withoutLeader)
+  expect((await call('/api/threads/worker/orchestration')).data.leaderId).toBeNull()
 })
 
 it('injects private leader commands on existing threads, enforces worker roles and serializes actual turn starts', async () => {

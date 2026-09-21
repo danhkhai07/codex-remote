@@ -33,6 +33,10 @@ try {
       assignments: { 'plan-fixture': 'group', worker: 'group' } })
     const tasks = Array.from({ length: 30 }, (_, i) => ({ id: `task-${i}`, threadId: 'worker', groupId: 'group', title: `Task ${i}: ${'Long title '.repeat(10)}`,
       status: i === 29 ? 'running' : 'completed', result: 'Long result without overflowing the page. '.repeat(100) }))
+    tasks[28].status = 'failed'
+    tasks[28].result = 'Original usageLimitExceeded report'
+    tasks[28].resolution = { summary: 'Leader completed the recovery', evidence: 'Deployment verified ' + 'reference'.repeat(60),
+      resolvedBy: 'plan-fixture', resolvedAt: '2026-09-21T02:50:40Z', leaderEpoch: 1 }
     await page.route('**/api/conversation-groups', route => route.fulfill({ json: groups() }))
     await page.route('**/api/conversation-groups/group/leader', route => {
       if (failLeader) return route.fulfill({ status: 503, json: { error: 'Fixture leader update failed' } })
@@ -131,6 +135,18 @@ try {
     await team.locator('.team-tasks > li').first().waitFor()
     await layout()
     assert.equal(await composer.inputValue(), 'Draft stays while reviewing work')
+    const recovered = team.locator('.team-tasks > li').filter({ hasText: 'Task 28:' })
+    assert.equal(await recovered.locator('.team-task-status').textContent(), 'Đã xử lý')
+    assert.equal(await recovered.getByRole('button', { name: 'Dừng việc' }).count(), 0)
+    await recovered.getByText('Kết quả tiếp quản', { exact: true }).click()
+    assert.equal(await recovered.getByText('Leader completed the recovery', { exact: true }).isVisible(), true)
+    await recovered.getByText('Lượt trước: Có lỗi', { exact: true }).click()
+    assert.equal(await recovered.getByText('Original usageLimitExceeded report', { exact: true }).isVisible(), true)
+    await layout()
+    if (shots) await recovered.screenshot({ path: resolve(shots, `resolved-${viewport.width}x${viewport.height}.png`) })
+    await recovered.locator('summary').first().click()
+    await recovered.locator('summary').last().click()
+    await team.evaluate(el => { el.scrollTop = 0 })
     await team.locator('.team-task-result > summary').first().click()
     assert.equal(await team.evaluate(el => el.scrollHeight > el.clientHeight), true)
     await team.evaluate(el => { el.scrollTop = 500 })

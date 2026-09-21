@@ -62,12 +62,16 @@ export function ConversationTeam({ threadId, group, threads, csrf, enabled, revi
         {team.unconfirmedResults > 0 && <p role="status">Có {team.unconfirmedResults} thông báo chưa xác nhận đã gửi. Xem kết quả từng việc và lịch sử leader trước khi yêu cầu gửi lại.</p>}
         {team.tasks.length === 0 && <p className="muted">Chưa có công việc được giao.</p>}
         <ul className="team-tasks">{[...team.tasks].reverse().map(task => <li key={task.id}>
-          <div className="team-task-heading"><strong>{task.title}</strong><span className={`team-task-status is-${task.status}`}>{statuses[task.status]}</span></div>
+          <div className="team-task-heading"><strong>{task.title}</strong><span className={`team-task-status is-${task.resolution ? 'resolved' : task.status}`}>{task.resolution ? 'Đã xử lý' : statuses[task.status]}</span></div>
           <div className="team-task-actions">
             {task.threadId && <button type="button" className="quiet-button" onClick={() => onOpen(task.threadId)}>{title(task.threadId)} ↗</button>}
             {unfinished(task.status) && <button type="button" className="quiet-button team-task-stop" aria-label="Dừng việc" title="Dừng việc" disabled={!enabled || saving} onClick={() => void action({ action: 'cancel', taskId: task.id })}>[x]</button>}
           </div>
-          {task.result && <details className="team-task-result"><summary>Kết quả</summary><p>{task.result}</p></details>}
+          {task.resolution && <details className="team-task-result"><summary>Kết quả tiếp quản</summary>
+            <p>{task.resolution.summary}</p><p>{task.resolution.evidence}</p>
+            <p className="muted">Xác nhận bởi {title(task.resolution.resolvedBy)} · {new Date(task.resolution.resolvedAt).toLocaleString('vi-VN')}</p>
+          </details>}
+          {task.result && <details className="team-task-result"><summary>{task.resolution ? `Lượt trước: ${statuses[task.status]}` : 'Kết quả'}</summary><p>{task.result}</p></details>}
         </li>)}</ul>
       </>}
     </div>

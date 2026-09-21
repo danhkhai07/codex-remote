@@ -502,6 +502,9 @@ export function createRemoteHttpServer(
         if (method === 'POST') {
           const body = await readJson(req)
           if (body.action === 'release') controller.orchestration.release(teamThreadId)
+          else if (body.action === 'resolve') {
+            controller.orchestration.resolveTask(teamThreadId, body.leaderEpoch, body.taskId, body.summary, body.evidence)
+          }
           else if (body.action === 'cancel' && typeof body.taskId === 'string') {
             const task = controller.orchestration.snapshot(teamThreadId).tasks.find(task => task.id === body.taskId)
             if (!task) throw new HttpError(404, 'Task not found in this folder')

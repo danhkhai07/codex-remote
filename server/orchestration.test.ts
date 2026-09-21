@@ -385,3 +385,67 @@ it('accepts rename/archive through the same private CLI transport and returns na
   await expect(command(archive)).resolves.toMatchObject({ archived: true, duplicate: true })
   expect(f.driver.archive).toHaveBeenCalledTimes(1)
 })
+
+it.each(['failed', 'interrupted'])('records recovery of a %s attempt without replacing history or dispatching work', async status => {
+  const f = setup(), cap = f.token()
+  f.threads.get('leader')!.status = { type: 'active' }
+  const { task } = await f.delegate(cap)
+  await f.orchestra.start(); await f.orchestra.pump()
+  f.finish('worker', task.turnId!, 'Original error report', status)
+  await f.orchestra.pump()
+  const calls = vi.mocked(f.driver.start).mock.calls.length
+  const before = f.orchestra.snapshot('leader')
+  const command = { action: 'resolve', taskId: task.id, summary: 'Leader finished the deployment', evidence: 'Release marker complete; health verified' }
+  await expect(f.orchestra.command(cap, command)).resolves.toMatchObject({ duplicate: false, task: {
+    status, result: 'Original error report', resolution: { resolvedBy: 'leader', summary: command.summary, evidence: command.evidence },
+  } })
+  const resolved = f.orchestra.snapshot('leader').tasks[0]
+  await expect(f.orchestra.command(cap, command)).resolves.toMatchObject({ duplicate: true })
+  await expect(f.orchestra.command(cap, { ...command, evidence: 'different' })).rejects.toMatchObject({ status: 409 })
+  expect(f.orchestra.snapshot('leader').tasks[0]).toEqual(resolved)
+  expect(new ConversationOrchestrator(f.vault, f.driver).snapshot('leader').tasks[0]).toEqual(resolved)
+  f.orchestra.completed('worker', task.turnId!, 'completed', 'Late duplicate notification')
+  expect(f.orchestra.snapshot('leader').tasks[0]).toEqual(resolved)
+  expect(f.orchestra.snapshot('leader').pendingResults).toBe(before.pendingResults)
+  expect(f.driver.start).toHaveBeenCalledTimes(calls)
+})
+
+it('requires a current Code leader, a same-folder task and bounded recovery evidence', async () => {
+  const f = setup(), cap = f.token(), { task } = await f.delegate(cap)
+  const command = { action: 'resolve', taskId: task.id, summary: 'Recovered', evidence: 'Verified reference' }
+  await expect(f.orchestra.command(cap, command)).rejects.toMatchObject({ status: 409 })
+  f.orchestra.userTurn('worker', 'Direct user control')
+  for (const patch of [{ summary: '' }, { evidence: ' ' }, { summary: 'x'.repeat(4001) }, { evidence: 'x'.repeat(2001) }]) {
+    await expect(f.orchestra.command(cap, { ...command, ...patch })).rejects.toMatchObject({ status: 400 })
+  }
+  const planCap = f.token('leader', { ...settings, mode: 'plan' })
+  await expect(f.orchestra.command(planCap, command)).rejects.toMatchObject({ status: 403 })
+  await expect(f.orchestra.command(cap, command)).rejects.toMatchObject({ status: 403 })
+  const other = f.vault.createGroup('Other').groups.find(group => group.name === 'Other')!
+  f.vault.assignThread('second', other.id); f.vault.setLeader(other.id, 'second')
+  await expect(f.orchestra.command(f.token('second'), command)).rejects.toMatchObject({ status: 404 })
+  await expect(f.orchestra.command(f.token(), command, 'worker')).rejects.toMatchObject({ status: 403 })
+  await expect(f.orchestra.command(f.token(), command)).resolves.toMatchObject({ task: { status: 'cancelled', resolution: { resolvedBy: 'leader' } } })
+  expect(f.orchestra.snapshot('leader').paused).toContain('worker')
+  expect(f.driver.interrupt).not.toHaveBeenCalled()
+})
+
+it('allows the replacement leader to resolve an old attempt but rejects stale leader epochs', async () => {
+  const f = setup(), cap = f.token(), { task } = await f.delegate(cap)
+  await f.orchestra.cancel(task.id)
+  const epoch = f.vault.groupFor('leader')!.leaderEpoch
+  const command = { action: 'resolve', taskId: task.id, summary: 'Taken over', evidence: 'Tests and deploy verified' }
+  f.vault.setLeader(f.group.id, 'second')
+  await expect(f.orchestra.command(cap, command)).rejects.toMatchObject({ status: 403 })
+  expect(() => f.orchestra.resolveTask('leader', epoch, task.id, command.summary, command.evidence)).toThrow(/current folder leader/)
+  expect(() => f.orchestra.resolveTask('second', epoch, task.id, command.summary, command.evidence)).toThrow(/Leader changed/)
+  await expect(f.orchestra.command(f.token('second'), command)).resolves.toMatchObject({ task: { leaderId: 'leader', resolution: { resolvedBy: 'second' } } })
+})
+
+it('rejects resolution of a successful attempt', async () => {
+  const f = setup(), cap = f.token(), { task } = await f.delegate(cap)
+  f.threads.get('leader')!.status = { type: 'active' }
+  await f.orchestra.start(); await f.orchestra.pump()
+  f.finish('worker', task.turnId!)
+  await expect(f.orchestra.command(cap, { action: 'resolve', taskId: task.id, summary: 'Done', evidence: 'Verified' })).rejects.toMatchObject({ status: 409 })
+})

@@ -82,6 +82,7 @@ command capability:
 ```json
 {"action":"rename","threadId":"worker-id","name":"A clear conversation name"}
 {"action":"archive","threadId":"worker-id","requestId":"archive-worker-once"}
+{"action":"resolve","taskId":"failed-task-id","summary":"Leader completed and verified the recovery","evidence":"Commit/deployment/verification reference"}
 ```
 
 Rename accepts the same trimmed, single-line 1–200-character names as the UI and
@@ -98,6 +99,16 @@ Neither command overrides a worker under
 manual user control. Archive cannot target the current leader, a busy/starting
 conversation, unfinished work, or undelivered/unconfirmed results. It never
 interrupts work to make it archivable. Plan mode rejects both mutations.
+
+After taking over and verifying a failed, interrupted or cancelled task, the
+current leader must use `resolve` in Code mode with a concrete summary and evidence.
+The card then shows “Đã xử lý”, with the recovery result, confirming leader and date.
+The original attempt status/result remain available for audit. Reassignment alone
+is not completion. Resolution is durable, emits no model turn and is idempotent
+for the same task/summary/evidence; a conflicting record is rejected. It does not
+release manual control, acknowledge pending reports or change worker conversations.
+The authenticated team API also accepts `resolve` with the current `leaderEpoch`,
+behind the existing session and CSRF checks.
 
 Use the same `requestId` to retry an archive. `status` includes archive receipts:
 100 recent completions are retained; the total is capped at 200 including uncertain
