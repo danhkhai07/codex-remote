@@ -5,6 +5,11 @@ Standalone phone client and local Codex App Server bridge.
 Requirements: Node 22.23.2, the Codex CLI installed on the host, and a working
 Codex login on that host. Codex Remote starts `codex app-server` itself.
 
+On the shared VPS, run build/test/render workloads with
+`codex-heavy --label task-check -- <command>`. The runner serializes jobs and
+places them in separate systemd services with memory, CPU and time limits;
+see [bounded workloads](docs/bounded-workloads.md) for installation and diagnostics.
+
 ```sh
 cd /path/to/codex-remote
 cp .env.example .env
