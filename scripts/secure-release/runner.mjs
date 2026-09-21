@@ -4,9 +4,10 @@ import { assert, isIdle } from './common.mjs'
 /** No rollback/resume: a failed attempt requires phase-specific operator review and a NEW seal. */
 export async function execute(ops) {
   let phase = 'preflight', acquired = false
-  let verifiedEvidence, unsubscribe
+  let verifiedEvidence, publication, unsubscribe
   const installed = []
-  const step = async (name, action) => { phase = name; await ops.state({ status: 'running', phase, installed: [...installed] }); return action() }
+  const details = () => ({ ...(verifiedEvidence ? { evidence: verifiedEvidence } : {}), ...(publication ? { publication } : {}) })
+  const step = async (name, action) => { phase = name; await ops.state({ status: 'running', phase, installed: [...installed], ...details() }); return action() }
   try {
     await ops.acquire(); acquired = true
     unsubscribe = ops.onTerminate?.(async () => {
@@ -24,12 +25,14 @@ export async function execute(ops) {
       await ops.sleep(10000)
     }
     // Public ingress closes before the final old-auth check. No new browser turns during copy.
+    await step('refresh-readiness', () => ops.validateReadiness())
     await step('private-backup', () => ops.backup())
     await step('gate-public-ingress', () => ops.gateIngress())
     await step('final-precopy-check', async () => {
-      await ops.preCopy()
       assert(isIdle(await ops.oldReadiness()), 'became-busy-before-copy')
+      await ops.preCopy() // Refresh after the final HTTP await, not before it.
     })
+    await step('source-transition', () => ops.sourceTransition())
     await step('stage-client-assets', () => ops.assets()) // Retains old hashes; index unchanged.
     await step('install-backend', async () => {
       for (const path of ops.modules) {
@@ -48,9 +51,10 @@ export async function execute(ops) {
     await step('activate-ingress', () => ops.openIngress())
     const evidence = await step('postverify', () => ops.verify())
     verifiedEvidence = evidence
-    await ops.state({ status: 'running', phase: 'postverify-complete', installed: [...installed], evidence })
+    publication = await step('persist-postverify', () => ops.persistProof(evidence))
+    await ops.state({ status: 'running', phase: 'postverify-complete', installed: [...installed], ...details() })
     await step('bookkeeping', () => ops.bookkeeping(evidence))
-    await ops.state({ status: 'complete', phase: 'complete', installed, evidence })
+    await ops.state({ status: 'complete', phase: 'complete', installed, ...details() })
     return evidence
   } catch (error) {
     // No rollback, no automatic repeat of mutations, no clearing original evidence.
@@ -59,7 +63,7 @@ export async function execute(ops) {
   } finally { unsubscribe?.(); if (acquired) await ops.release() }
 }
 export async function main(args) {
-  assert(args.length === 1 && ['--check', '--apply'].includes(args[0]), 'usage: --check | --apply (separate signed-off activation record required)')
+  assert(args.length === 1 && ['--check', '--apply'].includes(args[0]), 'usage: --check | --apply (record existing user authorization and current readiness)')
   const { productionOps } = await import('./production.mjs')
   const ops = productionOps(resolve(dirname(fileURLToPath(import.meta.url)), '..'))
   if (args[0] === '--check') {

@@ -14,8 +14,9 @@ function fixture(fail, idle = [{ ready: true, busy: 0, pending: 0, incomplete: f
     sleep: async ms => { time += ms }, state: async s => { states.push(structuredClone(s)) },
     oldReadiness: async () => { trace.push('oldReadiness'); return idle[Math.min(n++, idle.length - 1)] },
   }
-  for (const name of ['acquire', 'release', 'preflight', 'drift', 'backup', 'gateIngress', 'preCopy', 'assets', 'assertInstalled', 'activateDependenciesConfig', 'oldWatcherRestart', 'newBackend', 'workboard', 'index', 'openIngress', 'verify', 'bookkeeping']) ops[name] = async () => {
+  for (const name of ['acquire', 'release', 'preflight', 'drift', 'validateReadiness', 'sourceTransition', 'persistProof', 'backup', 'gateIngress', 'preCopy', 'assets', 'assertInstalled', 'activateDependenciesConfig', 'oldWatcherRestart', 'newBackend', 'workboard', 'index', 'openIngress', 'verify', 'bookkeeping']) ops[name] = async () => {
     trace.push(name); if (fail === name) throw Error('fixture:' + name)
+    if (name === 'persistProof') return { path: '/fake/postverify.json', sha256: 'fake-seal' }
     if (name === 'verify') return { freshPid: 42, encryptedProof: true }
   }
   ops.install = async path => { trace.push('install:' + path); if (fail === path) throw Error('fixture:' + path); files[path] = 'new' }
@@ -26,13 +27,13 @@ test('old adapter dual checks + third check; old watcher alone restarts, encrypt
   const at = name => f.trace.indexOf(name)
   assert.equal(f.trace.filter(name => name === 'oldReadiness').length, 3)
   assert(at('backup') < at('gateIngress')); assert(at('gateIngress') < at('preCopy'))
-  assert(at('assets') < at('install:auth.js')); assert(at('assertInstalled') < at('oldWatcherRestart'))
+  assert(at('preCopy') < at('sourceTransition')); assert(at('sourceTransition') < at('assets')); assert(at('assets') < at('install:auth.js')); assert(at('assertInstalled') < at('oldWatcherRestart'))
   assert(at('activateDependenciesConfig') < at('oldWatcherRestart')); assert(at('oldWatcherRestart') < at('newBackend'))
   assert(at('newBackend') < at('index')); assert(at('index') < at('openIngress')); assert(at('verify') < at('bookkeeping'))
   assert.equal(f.states.at(-1).status, 'complete'); assert.equal(f.trace.at(-1), 'release')
   assert.deepEqual(Object.fromEntries(Object.entries(f.files).filter(([key]) => !key.endsWith('.js'))), { hours: 'preserved', history: 'preserved', session: 'preserved', oldAsset: 'preserved' })
 })
-for (const failure of ['preflight', 'drift', 'backup', 'gateIngress', 'preCopy', 'assets', 'auth.js', 'http-app.js', 'assertInstalled', 'activateDependenciesConfig', 'oldWatcherRestart', 'newBackend', 'workboard', 'index', 'openIngress', 'verify', 'bookkeeping']) test('fail closed / retain exact phase at ' + failure, async () => {
+for (const failure of ['preflight', 'drift', 'validateReadiness', 'sourceTransition', 'persistProof', 'backup', 'gateIngress', 'preCopy', 'assets', 'auth.js', 'http-app.js', 'assertInstalled', 'activateDependenciesConfig', 'oldWatcherRestart', 'newBackend', 'workboard', 'index', 'openIngress', 'verify', 'bookkeeping']) test('fail closed / retain exact phase at ' + failure, async () => {
   const f = fixture(failure); await assert.rejects(execute(f.ops), /fixture:/)
   assert.equal(f.states.at(-1).status, 'failed'); assert.equal(f.trace.at(-1), 'release')
   assert.equal(f.trace.filter(value => value === failure || value === 'install:' + failure).length, 1)

@@ -1,10 +1,13 @@
-import { readFileSync, mkdirSync, rmdirSync, existsSync, renameSync, symlinkSync, realpathSync, lstatSync } from 'node:fs'
+import { readFileSync, mkdirSync, existsSync, realpathSync, lstatSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseEnv } from 'node:util'
 import { spawn } from 'node:child_process'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { APP, BASE, HOURS, HOSTS, MAIN, assert, json, fileHash, hash, record, tree, command, same, inside, atomicBytes, serviceIdentity } from './common.mjs'
+import { APP, BASE, SOURCE, HOURS, HOSTS, MAIN, assert, json, fileHash, hash, record, tree, command, same, inside, atomicBytes, serviceIdentity } from './common.mjs'
+import { Destinations } from './destinations.mjs'
+import { Publication } from './publication.mjs'
+import { DeploymentLock } from './lock.mjs'
 const publicOrigin = 'https://codex.danhkhai.io.vn'
 const sites = { admin: '/etc/nginx/sites-available/codex.danhkhai.io.vn', preview: '/etc/nginx/sites-available/codex-preview-ports', ip: '/etc/nginx/snippets/codex-cloudflare-real-ip.conf' }
 export const requiredEvidence = ['protocol', 'infrastructure', 'migration', 'workboard', 'fixtures']
@@ -26,9 +29,14 @@ export function evidenceErrors(release, seal, evidence, now = Date.now()) {
 export function productionOps(release) {
   const meta = json(join(release, 'metadata.json')), baseline = json(join(release, 'baseline.json')), inventory = json(join(release, 'inventory.json'))
   assert(meta.app === APP && meta.main === MAIN && meta.release === release && meta.hours === HOURS && meta.requiredEncryption === true, 'wrong-release')
-  const outside = release + '.activation', marker = outside + '/attempt.json', lock = outside + '/lock'
-  let acquired = false, gated = false, copied = false, activated = false, clientPublished = false, newClient, config, appliedEnvHash, ownedWatcher
-  const appliedConfigs = new Map()
+  const outside = release + '.activation', marker = outside + '/attempt.json', lock = '/root/.local/state/codex-remote/deployment.lock'
+  let sourceIntegrated = false, copied = false, clientPublished = false, newClient, config, ownedWatcher, boundReadiness, ownerReader, workboardInstalled = false
+  assert(meta.sourceTarget === SOURCE, 'source-target-not-reviewed')
+  const destinations = new Destinations(baseline.destinations.entries, baseline.destinations.parents)
+  const expectedNginx = structuredClone(baseline.nginxFiles)
+  const expectedWorkboardDropins = structuredClone(baseline.workboardDropins)
+  const deploymentLock = new DeploymentLock(lock, { release, pid: process.pid })
+  const publication = new Publication(outside, { app: APP, source: SOURCE, seal: fileHash(join(release, 'seal.json')), modules: Object.fromEntries(inventory.groups.backend.map(item => [item.path, item.sha256])) })
   const envBase = () => parseEnv(readFileSync(join(MAIN, '.env'), 'utf8'))
   const envPatch = { CODEX_REMOTE_SECURE_API: 'required', CODEX_REMOTE_SECURE_KEY_FILE: meta.keyFile,
     CODEX_REMOTE_PREVIEW_ORIGIN_TEMPLATE: 'https://p{port}.danhkhai.io.vn', CODEX_REMOTE_FILE_ROOTS: meta.fileRoots.join(','),
@@ -40,32 +48,36 @@ export function productionOps(release) {
     assert(seal.app === APP && json(join(release, 'dependencies/node_modules/jose/package.json')).version === '6.2.12', 'dependency-version')
     return fileHash(join(release, 'seal.json'))
   }
-  function sourceCheck(applying = false) {
-    const head = command('git', ['rev-parse', 'HEAD']), wanted = applying ? APP : BASE
-    assert(head === wanted, applying ? 'main-must-be-exact-reviewed-app-before-activation' : 'main-baseline-drift')
-    assert(command('git', ['status', '--porcelain']) === '', 'dirty-main')
-    // BASE check is exact source+metadata; approved APP switch checks every tracked blob against Git.
-    if (!applying) for (const [path, value] of Object.entries(baseline.source)) same(record(join(MAIN, path)), value, 'source-baseline-drift:' + path)
+  function sourceCheck() {
+    const wanted = sourceIntegrated ? SOURCE : BASE
+    assert(command('git', ['symbolic-ref', '--short', 'HEAD']) === 'main', 'production-branch-drift')
+    assert(command('git', ['rev-parse', 'HEAD']) === wanted, 'source-head-drift')
+    assert(command('git', ['status', '--porcelain', '--untracked-files=all']) === '', 'dirty-main')
+    for (const kind of ['fetch', 'push']) assert(hash(command('git', ['remote', 'get-url', ...(kind === 'push' ? ['--push'] : []), 'origin'])) === baseline.remote[kind], 'remote-url-drift')
+    assert(command('git', ['ls-remote', 'origin', 'refs/heads/main']).split(/\s+/)[0] === wanted, 'remote-main-drift')
+    if (!sourceIntegrated) for (const [path, value] of Object.entries(baseline.source)) same(record(join(MAIN, path)), value, 'source-baseline-drift:' + path)
   }
-  function stableCheck({ applying = false, after = false } = {}) {
-    sourceCheck(applying)
+  function workboardConfigCheck() {
+    same(record('/etc/systemd/system/workboard.service.d').absent ? {} : tree('/etc/systemd/system/workboard.service.d'), expectedWorkboardDropins, 'workboard-dropins-drift')
+    const unit = '/etc/systemd/system/workboard.service'
+    if (baseline.stable[unit]) same(record(unit), baseline.stable[unit], 'workboard-unit-drift')
+    if (!workboardInstalled && baseline.unitHashes['workboard.service']) assert(hash(command('systemctl', ['cat', 'workboard.service'])) === baseline.unitHashes['workboard.service'], 'workboard-effective-unit-drift')
+  }
+  function stableCheck({ after = false } = {}) {
+    sourceCheck()
+    destinations.all()
     for (const [path, value] of Object.entries(baseline.nginxTempDirectories)) same({ ...record(path), ino: lstatSync(path).ino }, value, 'nginx-temp-metadata-drift')
     for (const [path, value] of Object.entries(baseline.stable)) {
-      if (activated && path === join(MAIN, '.env')) { assert(fileHash(path) === appliedEnvHash, 'activated-environment-drift'); continue }
-      if (after && path === '/root/GITHUB/Workboard/server.py') continue
+      if (Object.hasOwn(destinations.entries, path)) continue // Exact updated owned preimage checked above.
       same(record(path), value, 'config-baseline-drift:' + path)
     }
-    for (const [path, expected] of appliedConfigs) assert(fileHash(path) === expected, 'applied-config-drift')
-    if (!gated) same(tree('/etc/nginx'), baseline.nginxFiles, 'nginx-baseline-drift')
-    else for (const [path, value] of Object.entries(baseline.nginxFiles)) {
-      if (['sites-available/codex.danhkhai.io.vn', 'sites-available/codex-preview-ports', 'snippets/codex-cloudflare-real-ip.conf'].includes(path)) continue
-      same(record(join('/etc/nginx', path)), value, 'excluded-nginx-drift:' + path)
-    }
+    same(tree('/etc/nginx'), expectedNginx, 'nginx-tree-drift')
     for (const [unit, digest] of Object.entries(baseline.unitHashes)) {
       if (after && unit === 'workboard.service') continue
       assert(hash(command('systemctl', ['cat', unit])) === digest, 'service-unit-drift:' + unit)
     }
-    if (!after) { same(record('/etc/systemd/system/workboard.service.d').absent ? {} : tree('/etc/systemd/system/workboard.service.d'), baseline.workboardDropins, 'workboard-dropins-drift'); assert(serviceIdentity('workboard.service') === baseline.workboard, 'workboard-process-drift') }
+    workboardConfigCheck()
+    if (!after) assert(serviceIdentity('workboard.service') === baseline.workboard, 'workboard-process-drift')
     if (!after) assert(serviceIdentity('codex-remote.service') === baseline.service, 'gateway-process-drift')
     assert(fileHash(join(MAIN, 'dist-server/work-hours.js')) === HOURS, 'hours-drift')
     const expected = { ...baseline.backend }
@@ -79,28 +91,60 @@ export function productionOps(release) {
     config = loadConfig({ ...envBase(), ...envPatch, NODE_ENV: 'production' })
     assert(config.secureApiRequired && config.publicOrigin.origin === publicOrigin && config.host === '127.0.0.1' && config.port === 5173, 'required-config-contract')
     const { readOwnerKey } = await import(pathToFileURL(join(release, 'operator/dist-server/secure-key.js')).href)
-    assert((lstatSync(dirname(meta.keyFile)).mode & 0o077) === 0 && lstatSync(dirname(meta.keyFile)).uid === 0, 'key-directory-permissions')
-    readOwnerKey(meta.keyFile, meta.fileRoots) // No returned value is logged/persisted.
+    ownerReader = readOwnerKey
+    return keyIdentity()
   }
-  async function gates(applying = false) {
-    const blockers = []; let seal
+  function keyIdentity() {
+    assert((lstatSync(dirname(meta.keyFile)).mode & 0o077) === 0 && lstatSync(dirname(meta.keyFile)).uid === 0, 'key-directory-permissions')
+    const value = ownerReader(meta.keyFile, meta.fileRoots)
+    return { app: value.app, generation: value.generation, digest: hash(JSON.stringify(value)), metadata: record(meta.keyFile), directory: record(dirname(meta.keyFile)) } // Hash/identity only; no key material.
+  }
+  function receiptBinding(evidence) {
+    return { evidence: record(join(outside, 'evidence.json')), authority: record(join(outside, 'authorization.json')),
+      files: Object.fromEntries(Object.values(evidence).flatMap(value => (value?.files ?? []).map(item => {
+        const path = inside(outside, item.path); return [path, record(path)]
+      }))) }
+  }
+  async function gates(applying = false, bind = false) {
+    const blockers = meta.activationEligible === true ? [] : ['review-release-not-activation-eligible']; let seal, key, evidence = {}, receipts
     try { seal = sealCheck() } catch (error) { blockers.push(error.message) }
-    try { stableCheck({ applying }) } catch (error) { blockers.push(error.message) }
+    try { stableCheck() } catch (error) { blockers.push(error.message) }
     try { same(tree(join(MAIN, 'node_modules')), baseline.dependencies, 'dependency-baseline-drift') } catch (error) { blockers.push(error.message) }
-    let evidence = {}
-    try { evidence = json(join(outside, 'evidence.json')) } catch { /* Missing receipt is a blocker, never a bypass. */ }
+    try { evidence = json(join(outside, 'evidence.json')); receipts = receiptBinding(evidence) } catch { /* Missing receipts block, never bypass. */ }
     blockers.push(...evidenceErrors(outside, seal, evidence))
-    if (!blockers.length) { try { await verifyInfrastructure(evidence.infrastructure) } catch (error) { blockers.push(error.message) } }
-    try { await candidateConfig() } catch { blockers.push('private-owner-key-or-required-config-not-ready') }
+    // Infrastructure has no dependency on owner-key availability. Check real DNS/TLS
+    // whenever its own receipt is valid, even if migration/key readiness is pending.
+    const infraErrors = evidenceErrors(outside, seal, evidence).filter(error => error.includes('infrastructure') || error.includes('dns-tls'))
+    if (!infraErrors.length) { try { await verifyInfrastructure(evidence.infrastructure) } catch (error) { blockers.push(error.message) } }
+    try { key = await candidateConfig() } catch { blockers.push('private-owner-key-or-required-config-not-ready') }
     if (applying) {
       try {
         const authority = json(join(outside, 'authorization.json'))
-        assert(authority.app === APP && authority.seal === seal && authority.runner === fileHash(join(release, 'runner/production.mjs')) && authority.evidence === fileHash(join(outside, 'evidence.json')) && authority.action === 'publish-reviewed-release' && typeof authority.operator === 'string' && authority.operator.length > 0, 'activation-not-authorized')
-        assert(Date.now() - Date.parse(authority.at) < 60 * 60_000 && Date.parse(authority.at) <= Date.now(), 'activation-authority-expired')
-        assert(command('git', ['ls-remote', 'origin', 'refs/heads/main']).split(/\s+/)[0] === APP, 'remote-main-not-exact-app')
+        assert(authority.app === APP && authority.source === SOURCE && authority.seal === seal && authority.runner === fileHash(join(release, 'runner/production.mjs')) && authority.evidence === fileHash(join(outside, 'evidence.json')) && authority.action === 'publish-reviewed-release' && typeof authority.operator === 'string' && authority.operator.length > 0 && typeof authority.existingUserAuthorization === 'string' && authority.existingUserAuthorization.length > 0, 'readiness-record-invalid')
+        assert(Date.now() - Date.parse(authority.at) < 60 * 60_000 && Date.parse(authority.at) <= Date.now(), 'execution-readiness-expired')
+        same(receiptBinding(json(join(outside, 'evidence.json'))), receipts, 'receipts-changed-during-validation')
+        blockers.push(...evidenceErrors(outside, seal, json(join(outside, 'evidence.json'))))
+        sourceCheck() // DNS/TLS/key awaits must not hide a concurrent Git transition.
       } catch (error) { blockers.push(error.message) }
+      const current = { receipts, key }
+      if (boundReadiness) { try { same(current, boundReadiness, 'armed-readiness-changed') } catch (error) { blockers.push(error.message) } }
+      if (bind && !blockers.length) boundReadiness = structuredClone(current)
     }
-    return { status: blockers.length ? 'preparationblocked' : 'prepared-not-armed', app: APP, seal, blockers: [...new Set(blockers)], productionChanged: false }
+    return { status: blockers.length ? 'preparationblocked' : 'activation-candidate-not-armed', app: APP, source: SOURCE, seal, blockers: [...new Set(blockers)], productionChanged: false }
+  }
+  async function validateReadiness() {
+    assert(boundReadiness, 'readiness-not-bound')
+    const result = await gates(true)
+    assert(!result.blockers.length, 'current-readiness:' + result.blockers.join(','))
+    stableCheck() // Last await finished; actual write also checks its own preimage.
+    boundNow()
+  }
+  function boundNow() {
+    assert(boundReadiness, 'readiness-not-bound')
+    const evidence = json(join(outside, 'evidence.json')), authority = json(join(outside, 'authorization.json'))
+    assert(Date.now() >= Date.parse(authority.at) && Date.now() - Date.parse(authority.at) < 60 * 60_000, 'execution-readiness-expired')
+    assert(!evidenceErrors(outside, fileHash(join(release, 'seal.json')), evidence).length, 'execution-evidence-expired-or-invalid')
+    same({ receipts: receiptBinding(evidence), key: keyIdentity() }, boundReadiness, 'armed-readiness-changed')
   }
   const runOld = (args, wait = false) => {
     const script = join(release, 'old/scripts/restart-when-idle.mjs')
@@ -109,15 +153,20 @@ export function productionOps(release) {
       // Do not inherit CODEX_REMOTE_* overrides; the sealed old config must use original env values.
       const child = spawn(process.execPath, ['--env-file=' + join(outside, 'backup/original.env'), script], { cwd: MAIN, stdio: 'ignore', env: { PATH: process.env.PATH, HOME: '/root' } })
       ownedWatcher = child
-      const timer = setInterval(() => { try { sealCheck(); stableCheck({ applying: true, after: serviceIdentity('codex-remote.service') !== baseline.service }) } catch { child.kill('SIGTERM') } }, 5000)
+      const timer = setInterval(() => { try { sealCheck(); boundNow(); stableCheck({ after: serviceIdentity('codex-remote.service') !== baseline.service }) } catch { child.kill('SIGTERM') } }, 5000)
       const timeout = setTimeout(() => child.kill('SIGTERM'), 12 * 60 * 60_000)
       child.once('error', () => { clearInterval(timer); clearTimeout(timeout); reject(Error('old-watcher-start-failed')) })
       child.once('exit', code => { ownedWatcher = undefined; clearInterval(timer); clearTimeout(timeout); if (code === 0) resolve(); else reject(Error('old-watcher-failed')) })
     })
   }
   const jsonOutput = value => { try { return JSON.parse(value) } catch { throw Error('old-readiness-invalid') } }
-  function installConfig(source, destination) { assert(!record(destination).link, 'refuse-config-symlink'); atomicBytes(destination, readFileSync(join(release, 'infra', source)), record(destination).mode ?? 0o644); appliedConfigs.set(destination, fileHash(destination)) }
-  function nginxReload() { command('/usr/sbin/nginx', ['-t']); command('systemctl', ['reload', 'nginx.service']) } // Only apply, NEVER preparation/fixture.
+  function installConfig(source, destination) {
+    destinations.all(); same(tree('/etc/nginx'), expectedNginx, 'nginx-tree-drift')
+    boundNow()
+    destinations.write(destination, readFileSync(join(release, 'infra', source)), destinations.entries[destination].mode ?? 0o644)
+    if (destination.startsWith('/etc/nginx/')) expectedNginx[destination.slice('/etc/nginx/'.length)] = record(destination)
+  }
+  function nginxReload() { destinations.all(); same(tree('/etc/nginx'), expectedNginx, 'nginx-before-test-drift'); boundNow(); command('/usr/sbin/nginx', ['-t']); destinations.all(); same(tree('/etc/nginx'), expectedNginx, 'nginx-before-reload-drift'); boundNow(); command('systemctl', ['reload', 'nginx.service']) } // Only apply, NEVER preparation/fixture.
   const ops = {
     modules: inventory.groups.backend.map(item => item.path), sleep, now: Date.now,
     onTerminate(save) {
@@ -127,23 +176,49 @@ export function productionOps(release) {
       })
       return () => { for (const [signal, handler] of handlers) process.removeListener(signal, handler) }
     },
-    check: () => gates(false),
+    check: () => gates(true),
     async acquire() {
       assert(existsSync(outside) && lstatSync(outside).uid === 0 && (lstatSync(outside).mode & 0o077) === 0, 'private-activation-directory-required')
       assert(!existsSync(marker), 'previous-attempt-requires-new-release')
-      mkdirSync(lock, { mode: 0o700 }); acquired = true
+      deploymentLock.acquire()
     },
-    async release() { newClient?.close(); if (acquired) rmdirSync(lock) },
-    async state(value) { atomicBytes(marker, JSON.stringify({ ...value, app: APP, at: new Date().toISOString() }) + '\n', 0o600) },
-    async preflight() { const result = await gates(true); assert(!result.blockers.length, 'activation-gates:' + result.blockers.join(',')); same(tree(join(MAIN, 'dist')), baseline.client, 'client-baseline-drift') },
-    async drift() { stableCheck({ applying: true }); sealCheck() },
+    async release() { newClient?.close(); deploymentLock.release() },
+    async state(value) { atomicBytes(marker, JSON.stringify({ ...value, ...publication.references(), app: APP, source: SOURCE, at: new Date().toISOString() }) + '\n', 0o600) },
+    async preflight() { const result = await gates(true, true); assert(!result.blockers.length, 'activation-gates:' + result.blockers.join(',')); same(tree(join(MAIN, 'dist')), baseline.client, 'client-baseline-drift') },
+    async drift() { await validateReadiness() },
+    validateReadiness,
     async oldReadiness() { return runOld(['--check']) },
     async gateIngress() {
+      await validateReadiness()
       // Ensure authorized SAN parked config exists before touching ingress.
       assert(existsSync('/etc/letsencrypt/live/codex-preview-ports/fullchain.pem'), 'preview-certificate-missing')
-      installConfig('admin-maintenance.conf', sites.admin); installConfig('preview-parked.conf', sites.preview); nginxReload(); gated = true
+      installConfig('admin-maintenance.conf', sites.admin); installConfig('preview-parked.conf', sites.preview); nginxReload()
     },
-    async preCopy() { stableCheck({ applying: true }); sealCheck(); same(tree(join(MAIN, 'node_modules')), baseline.dependencies, 'dependency-baseline-drift') },
+    async preCopy() { await validateReadiness() },
+    async sourceTransition() {
+      sourceCheck(); destinations.all()
+      let latest
+      const progress = state => { latest = state; atomicBytes(join(outside, 'source-transition.json'), JSON.stringify({ app: APP, source: SOURCE, ...state, at: new Date().toISOString() }) + '\n', 0o600) }
+      try {
+        command('git', ['merge-base', '--is-ancestor', BASE, SOURCE])
+        progress({ local: 'outcome-unknown', remote: BASE, step: 'local-fast-forward-dispatching' })
+        sourceCheck(); boundNow()
+        command('git', ['-c', 'core.hooksPath=/dev/null', 'merge', '--ff-only', '--no-edit', SOURCE])
+        progress({ local: command('git', ['rev-parse', 'HEAD']), remote: BASE, step: 'local-fast-forwarded' })
+        assert(command('git', ['symbolic-ref', '--short', 'HEAD']) === 'main' && command('git', ['rev-parse', 'HEAD']) === SOURCE && command('git', ['status', '--porcelain', '--untracked-files=all']) === '', 'source-drift-before-push')
+        assert(command('git', ['ls-remote', 'origin', 'refs/heads/main']).split(/\s+/)[0] === BASE, 'remote-drift-before-push')
+        for (const kind of ['fetch', 'push']) assert(hash(command('git', ['remote', 'get-url', ...(kind === 'push' ? ['--push'] : []), 'origin'])) === baseline.remote[kind], 'remote-url-drift')
+        boundNow()
+        progress({ local: SOURCE, remote: 'outcome-unknown', step: 'push-dispatching' })
+        command('git', ['-c', 'core.hooksPath=/dev/null', 'push', '--porcelain', 'origin', SOURCE + ':refs/heads/main'])
+        sourceIntegrated = true; sourceCheck()
+        progress({ local: SOURCE, remote: SOURCE, step: 'confirmed' })
+      } catch (error) {
+        const observe = args => { try { return command('git', args).split(/\s+/)[0] } catch { return 'outcome-unknown' } }
+        progress({ ...latest, status: 'failed', observed: { local: observe(['rev-parse', 'HEAD']), remote: observe(['ls-remote', 'origin', 'refs/heads/main']) }, reason: error.message })
+        throw error
+      }
+    },
     async backup() {
       const directory = join(outside, 'backup'); mkdirSync(directory, { mode: 0o700 })
       // Secret material only in this private backup, never immutable/public artifacts.
@@ -155,51 +230,55 @@ export function productionOps(release) {
       atomicBytes(join(directory, 'workboard-server.py'), readFileSync('/root/GITHUB/Workboard/server.py'), 0o600)
     },
     async assets() {
+      sourceCheck(); boundNow()
       for (const item of inventory.groups.client.filter(item => item.path !== 'dist/index.html')) {
         const target = join(MAIN, item.path), previous = baseline.client[item.path.slice(5)]
         same(record(target), previous ?? { absent: true }, 'client-target-drift:' + item.path)
-        atomicBytes(target, readFileSync(join(release, 'payload', item.path)))
+        boundNow(); destinations.write(target, readFileSync(join(release, 'payload', item.path)))
       }
     },
     async install(path) {
+      boundNow()
       const item = inventory.groups.backend.find(item => item.path === path); assert(item, 'module-not-allowlisted')
       same(record(join(MAIN, path)), baseline.backend[path.slice(12)] ?? { absent: true }, 'precopy-module-drift:' + path)
-      atomicBytes(join(MAIN, path), readFileSync(join(release, 'payload', path)), baseline.backend[path.slice(12)]?.mode ?? 0o644)
+      destinations.write(join(MAIN, path), readFileSync(join(release, 'payload', path)), baseline.backend[path.slice(12)]?.mode ?? 0o644)
     },
-    async assertInstalled() { copied = true; stableCheck({ applying: true }) },
+    async assertInstalled() { copied = true; stableCheck() },
     async activateDependenciesConfig() {
       // Rename/symlink only after ALL-idle checks. No npm install in live directory.
-      assert(!record(join(MAIN, 'node_modules')).link, 'unexpected-live-dependency-link')
-      renameSync(join(MAIN, 'node_modules'), join(outside, 'backup/node_modules'))
-      symlinkSync(join(release, 'dependencies/node_modules'), join(MAIN, 'node_modules'))
+      destinations.all(); sourceCheck(); boundNow()
+      destinations.dependencySwap(join(MAIN, 'node_modules'), join(outside, 'backup/node_modules'), join(release, 'dependencies/node_modules'), () => same(tree(join(MAIN, 'node_modules')), baseline.dependencies, 'dependency-at-swap-drift'))
       const existing = readFileSync(join(MAIN, '.env'), 'utf8')
       const names = new Set(Object.keys(envPatch))
       const kept = existing.split('\n').filter(line => !names.has(line.match(/^\s*(?:export\s+)?([A-Z0-9_]+)\s*=/)?.[1])).join('\n')
-      atomicBytes(join(MAIN, '.env'), kept + '\n' + Object.entries(envPatch).map(([name, value]) => `${name}=${value}`).join('\n') + '\n', baseline.stable[join(MAIN, '.env')].mode)
-      appliedEnvHash = fileHash(join(MAIN, '.env')); activated = true
+      boundNow(); destinations.all()
+      destinations.write(join(MAIN, '.env'), kept + '\n' + Object.entries(envPatch).map(([name, value]) => `${name}=${value}`).join('\n') + '\n', baseline.stable[join(MAIN, '.env')].mode)
     },
-    async oldWatcherRestart() { await runOld([], true) },
+    async oldWatcherRestart() { destinations.all(); sourceCheck(); boundNow(); await runOld([], true) },
     async newBackend() {
       const identity = serviceIdentity('codex-remote.service')
       assert(identity.match(/MainPID=(\d+)/)?.[1] !== baseline.service.match(/MainPID=(\d+)/)?.[1] && /MainPID=[1-9]\d*/.test(identity) && identity.includes('ActiveState=active') && BigInt(identity.match(/ExecMainStartTimestampMonotonic=(\d+)/)?.[1] ?? 0) > BigInt(baseline.service.match(/ExecMainStartTimestampMonotonic=(\d+)/)?.[1] ?? 0), 'no-fresh-gateway-process')
-      stableCheck({ applying: true, after: true })
+      stableCheck({ after: true })
       assert(realpathSync('/proc/' + identity.match(/MainPID=(\d+)/)[1] + '/cwd') === MAIN, 'new-gateway-cwd-drift')
       assert(hash(readFileSync('/proc/' + identity.match(/MainPID=(\d+)/)[1] + '/cmdline')) === baseline.processCommand, 'new-entry-command-drift')
       const { maintenanceClient } = await import(pathToFileURL(join(release, 'operator/scripts/secure-maintenance.mjs')).href)
-      await candidateConfig(); newClient = await maintenanceClient(config)
+      await candidateConfig(); boundNow(); newClient = await maintenanceClient(config)
       const response = await newClient.fetch('/api/session', { signal: AbortSignal.timeout(10000) }); assert(response.ok, 'encrypted-proof-failed'); await response.arrayBuffer()
     },
     async workboard() {
       assert(fileHash('/root/GITHUB/Workboard/server.py') === baseline.stable['/root/GITHUB/Workboard/server.py'].sha256, 'workboard-source-drift')
-      atomicBytes('/root/GITHUB/Workboard/server.py', readFileSync(join(release, 'infra/workboard-server.py')), baseline.stable['/root/GITHUB/Workboard/server.py'].mode)
-      atomicBytes('/etc/systemd/system/workboard.service.d/isolated-preview.conf', readFileSync(join(release, 'infra/workboard-isolated.conf')))
-      appliedConfigs.set('/root/GITHUB/Workboard/server.py', fileHash('/root/GITHUB/Workboard/server.py'))
-      appliedConfigs.set('/etc/systemd/system/workboard.service.d/isolated-preview.conf', fileHash('/etc/systemd/system/workboard.service.d/isolated-preview.conf'))
-      command('systemctl', ['daemon-reload']); command('systemctl', ['restart', 'workboard.service'])
+      destinations.all(); sourceCheck(); workboardConfigCheck(); boundNow()
+      destinations.write('/root/GITHUB/Workboard/server.py', readFileSync(join(release, 'infra/workboard-server.py')), baseline.stable['/root/GITHUB/Workboard/server.py'].mode)
+      destinations.all(); workboardConfigCheck(); boundNow()
+      destinations.write('/etc/systemd/system/workboard.service.d/isolated-preview.conf', readFileSync(join(release, 'infra/workboard-isolated.conf')))
+      expectedWorkboardDropins['isolated-preview.conf'] = record('/etc/systemd/system/workboard.service.d/isolated-preview.conf'); workboardInstalled = true
+      destinations.all(); workboardConfigCheck(); boundNow(); command('systemctl', ['daemon-reload'])
+      destinations.all(); workboardConfigCheck(); boundNow(); command('systemctl', ['restart', 'workboard.service'])
     },
     async index() {
+      destinations.all(); sourceCheck(); boundNow()
       same(record(join(MAIN, 'dist/index.html')), baseline.client['index.html'], 'index-drift')
-      atomicBytes(join(MAIN, 'dist/index.html'), readFileSync(join(release, 'payload/dist/index.html'))); clientPublished = true
+      destinations.write(join(MAIN, 'dist/index.html'), readFileSync(join(release, 'payload/dist/index.html'))); clientPublished = true
     },
     async openIngress() {
       assert(clientPublished, 'index-not-published'); installConfig('cloudflare-real-ip.conf', sites.ip)
@@ -208,12 +287,16 @@ export function productionOps(release) {
     async verify() {
       const { postverify } = await import('./verify.mjs')
       const evidence = await postverify({ release, meta, baseline, inventory, client: newClient, config })
-      stableCheck({ applying: true, after: true }); return evidence
+      stableCheck({ after: true }); return evidence
     },
+    async persistProof(evidence) { return publication.persist(evidence) },
     async bookkeeping(evidence) {
+      boundNow(); publication.status('services', 'dispatching-outcome-unknown')
       // Bookkeeping follows actual publication proof, never preparation. No leader handoff write.
       const service = await newClient.fetch('/api/services', { method: 'PUT', body: JSON.stringify({ port: null, path: '/', name: 'Codex Remote', branch: 'main', directory: MAIN, kind: 'app', prUrl: '', prLabel: 'No PR · Security ' + APP.slice(0, 7), summary: 'Required encrypted API and ciphertext browser cache; isolated HTTPS previews; root/fullAccess retained. Published and verified ' + APP.slice(0, 7) + '.' }), signal: AbortSignal.timeout(15000) })
       assert(service.ok && (await service.json()).service?.path === '/', 'published-services-update-failed')
+      publication.status('services', 'confirmed')
+      publication.status('vault', 'preparing')
       const notePath = 'References/Codex-Remote-Secure-Release-Publication-' + APP.slice(0, 7) + '.md'
       let updated = false
       for (let attempt = 0; attempt < 3; attempt++) {
@@ -221,11 +304,16 @@ export function productionOps(release) {
         assert(prior.ok || prior.status === 404, 'publication-note-read-failed')
         const note = prior.ok ? await prior.json() : { revision: '', content: '' }
         const content = (note.content || '---\ntype: reference\nstatus: confirmed\nscope: Codex Remote publication\n---\n') + '\nPublication verified: ' + APP + '.\nRelease seal: ' + fileHash(join(release, 'seal.json')) + '.\nAt: ' + evidence.verifiedAt + '. Hours: ' + HOURS + '. No model/pause mutation used for verification. Root/fullAccess retained.\n'
+        boundNow(); publication.status('vault', 'dispatching-outcome-unknown', { attempt, expectedRevision: note.revision })
         const written = await newClient.fetch('/api/knowledge/note', { method: 'PUT', body: JSON.stringify({ path: notePath, content, revision: note.revision, actor: '01a0c024-a380-7312-a73c-a4949cd6d89b' }), signal: AbortSignal.timeout(15000) })
-        if (written.status === 409) { await written.body?.cancel(); continue }
-        assert(written.ok, 'publication-note-write-failed'); await written.body?.cancel(); updated = true; break
+        if (written.status === 409) { await written.arrayBuffer(); publication.status('vault', 'conflict-not-applied', { attempt }); continue }
+        assert(written.ok, 'publication-note-write-failed')
+        const saved = await written.json() // Consume/authenticate the complete response before confirming the mutation.
+        assert(saved.path === notePath && saved.revision === hash(content), 'publication-note-response-mismatch')
+        updated = true; break
       }
       assert(updated, 'publication-note-conflict')
+      publication.status('vault', 'confirmed', { notePath })
       atomicBytes(join(outside, 'publication-receipt.json'), JSON.stringify({ app: APP, ...evidence, status: 'verified-publication', servicesUpdated: true, checkedVaultNote: notePath }) + '\n', 0o600)
     },
   }

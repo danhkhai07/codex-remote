@@ -3,7 +3,8 @@ import { readFileSync, writeFileSync, mkdirSync, copyFileSync, lstatSync, realpa
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseEnv } from 'node:util'
-import { APP, BASE, HOURS, MAIN, INFRA, assert, hash, json, fileHash, record, tree, command, inside, writeJson, serviceIdentity } from './common.mjs'
+import { APP, BASE, SOURCE, HOURS, MAIN, INFRA, assert, hash, json, fileHash, record, tree, command, inside, writeJson, serviceIdentity } from './common.mjs'
+import { destinationSnapshot } from './destinations.mjs'
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 export function verifyClient(source, inventory) {
   const files = new Set(inventory.map(item => item.path)), html = readFileSync(join(source, 'dist/index.html'), 'utf8')
@@ -39,11 +40,14 @@ function snapshotSource(root) {
   const names = command('git', ['ls-files', '-z'], root).split('\0').filter(Boolean).sort()
   return Object.fromEntries(names.map(path => [path, record(join(root, path))]))
 }
-export function prepare(output, inventoryPath) {
+export function prepare(output, inventoryPath, kind = 'review-only') {
+  assert(['review-only', 'activation-candidate'].includes(kind), 'release-kind')
   const inventory = json(inventoryPath), source = inventory.worktree
   assert(inventory.commit === APP && !inventory.dirty, 'wrong-candidate')
   assert(command('git', ['rev-parse', 'HEAD'], source) === APP && command('git', ['status', '--porcelain'], source) === '', 'candidate-source-drift')
   assert(command('git', ['rev-parse', 'HEAD'], MAIN) === BASE && command('git', ['status', '--porcelain'], MAIN) === '', 'main-source-drift')
+  assert(command('git', ['ls-remote', 'origin', 'refs/heads/main'], MAIN).split(/\s+/)[0] === BASE, 'remote-main-drift')
+  assert(command('git', ['diff', '--name-only', APP, SOURCE], MAIN) === 'docs/security/encrypted-api-rereview-80843c0.md\nserver/secure-independent-review.test.ts', 'source-target-changes-app-bytes')
   assert(inventory.groups.backend.length === 46 && inventory.groups.client.length === 33, 'wrong-inventory-scope')
   for (const entries of Object.values(inventory.groups)) for (const item of entries) assert(fileHash(inside(source, item.path)) === item.sha256, 'candidate-artifact-drift:' + item.path)
   const replacements = new Set(inventory.groups.backend.map(item => item.path.slice(12)))
@@ -78,7 +82,7 @@ export function prepare(output, inventoryPath) {
     for (const match of text.matchAll(/(?:from\s*|import\s*)['"](\.[^'"]+)['"]/g)) pending.push(join(dirname(local), match[1]))
   }
   writeFileSync(join(output, 'old/package.json'), '{"type":"module"}\n')
-  for (const name of ['common.mjs', 'runner.mjs', 'production.mjs', 'verify.mjs']) copy(join(checkout, 'scripts/secure-release', name), 'runner/' + name)
+  for (const name of ['common.mjs', 'runner.mjs', 'production.mjs', 'verify.mjs', 'destinations.mjs', 'publication.mjs', 'lock.mjs']) copy(join(checkout, 'scripts/secure-release', name), 'runner/' + name)
   const infraNames = ['admin-active.conf', 'admin-cutover-gated.conf', 'preview-active.conf', 'preview-parked.conf', 'cloudflare-real-ip.conf', 'workboard-isolated.conf', 'workboard-embedding.patch', 'workboard-review.bundle', 'workboard-delivery.json']
   for (const name of infraNames) copy(join(INFRA, name), 'infra/' + name)
   const admin = readFileSync(join(output, 'infra/admin-active.conf'), 'utf8')
@@ -100,6 +104,8 @@ export function prepare(output, inventoryPath) {
   const observed = Object.fromEntries(Object.entries(env).filter(([name, value]) => /(?:STATE|PRESENCE_FILE|HOURS_FILE|SERVICES_FILE|READ_STATE_FILE)$/.test(name) && value.startsWith('/')).map(([, path]) => [path, record(path)]))
   for (const path of ['/root/.local/state/codex-remote/services.json', '/root/.local/state/codex-remote/sessions.json', join(MAIN, '.remote-push.json')]) observed[path] = record(path)
   const baseline = { capturedAt: new Date().toISOString(), main: BASE, service: serviceIdentity('codex-remote.service'), workboard: serviceIdentity('workboard.service'), nginx: serviceIdentity('nginx.service'),
+    remote: Object.fromEntries(['fetch', 'push'].map(kind => [kind, hash(command('git', ['remote', 'get-url', ...(kind === 'push' ? ['--push'] : []), 'origin'], MAIN))])),
+    destinations: destinationSnapshot([...inventory.groups.backend, ...inventory.groups.client].map(item => join(MAIN, item.path)).concat([join(MAIN, '.env'), join(MAIN, 'node_modules'), '/etc/nginx/sites-available/codex.danhkhai.io.vn', '/etc/nginx/sites-available/codex-preview-ports', '/etc/nginx/snippets/codex-cloudflare-real-ip.conf', '/root/GITHUB/Workboard/server.py', '/etc/systemd/system/workboard.service.d/isolated-preview.conf'])),
     processCommand: fileHash('/proc/1758426/cmdline'), processCwd: realpathSync('/proc/1758426/cwd'), backend: tree(join(MAIN, 'dist-server')), client: tree(join(MAIN, 'dist')), source: snapshotSource(MAIN), stable,
     nginxFiles: tree('/etc/nginx'), workboardDropins: record('/etc/systemd/system/workboard.service.d').absent ? {} : tree('/etc/systemd/system/workboard.service.d'), dependencies: tree(join(MAIN, 'node_modules')), observedMutableState: observed,
     nginxTempDirectories: Object.fromEntries(['body', 'proxy', 'fastcgi', 'uwsgi', 'scgi'].map(name => { const path = '/var/lib/nginx/' + name; return [path, { ...record(path), ino: lstatSync(path).ino }] })),
@@ -115,9 +121,9 @@ export function prepare(output, inventoryPath) {
   }
   copy(join(MAIN, 'dist/index.html'), 'backup-baseline/dist/index.html')
   for (const path of ['/etc/nginx/sites-available/codex.danhkhai.io.vn', '/root/GITHUB/Workboard/server.py']) copy(path, 'backup-baseline' + path)
-  writeJson(join(output, 'metadata.json'), { version: 1, status: 'prepared-not-armed', app: APP, base: BASE, release: output, main: MAIN, runnerSource: command('git', ['rev-parse', 'HEAD'], checkout), hours: HOURS, nginxBodyLimit: '36m', requiredEncryption: true,
+  writeJson(join(output, 'metadata.json'), { version: 2, kind, activationEligible: kind === 'activation-candidate', status: 'not-armed', app: APP, sourceTarget: SOURCE, base: BASE, release: output, main: MAIN, runnerSource: command('git', ['rev-parse', 'HEAD'], checkout), hours: HOURS, nginxBodyLimit: '36m', requiredEncryption: true,
     oldWatcherFiles: [...old].sort(), fileRoots: ['/root/RUNNING-SERVICES', '/root/WORKTREES', '/root/GITHUB', '/root/VAULTS'], keyFile: '/root/.local/state/codex-remote/secure-owner/owner-key.json',
-    operatorFiles: [...operatorFiles].sort(), baselinePolicy: 'Stable files gate; mutable state is observation only, never restored or overwritten', activationAuthority: 'absent; no arm command in this preparation' })
+    operatorFiles: [...operatorFiles].sort(), baselinePolicy: 'Review baseline only; final seal after actual infrastructure readiness. Mutable state is observation only, never restored or overwritten', activationAuthority: 'Existing user authorization; leader must record actual current readiness, no arm command in this preparation' })
   console.log(JSON.stringify({ status: 'prepared-not-sealed', output, app: APP, backend: 46, client: 33, graphFiles: graph.graph.length }))
 }
-if (process.argv[1] === fileURLToPath(import.meta.url)) prepare(resolve(process.argv[2]), resolve(process.argv[3]))
+if (process.argv[1] === fileURLToPath(import.meta.url)) prepare(resolve(process.argv[2]), resolve(process.argv[3]), process.argv[4])
