@@ -7,6 +7,12 @@ const env = {
   CODEX_REMOTE_PUBLIC_ORIGIN: 'https://remote.example.test',
   CODEX_REMOTE_WORKSPACE_ROOTS: '/tmp',
 }
+it('requires encrypted API in production and never silently ignores an invalid mode', () => {
+  expect(loadConfig({ ...env, NODE_ENV: 'production' }).secureApiRequired).toBe(true)
+  expect(loadConfig({ ...env, NODE_ENV: 'production', CODEX_REMOTE_SECURE_API: 'off' }).secureApiRequired).toBe(false)
+  expect(loadConfig({ ...env, NODE_ENV: 'development', CODEX_REMOTE_SECURE_API: 'required' }).secureApiRequired).toBe(true)
+  expect(() => loadConfig({ ...env, CODEX_REMOTE_SECURE_API: 'invalid' })).toThrow('required or off')
+})
 it('defaults file access to explicit workspaces and rejects unsafe root grants', () => {
   expect(loadConfig(env).fileRoots).toEqual(['/tmp'])
   for (const root of ['/', '/root', '/etc', '/proc', '/dev']) expect(() => loadConfig({ ...env, CODEX_REMOTE_FILE_ROOTS: root })).toThrow(/explicit project/)

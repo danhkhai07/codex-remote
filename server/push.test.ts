@@ -41,7 +41,7 @@ describe('Web Push delivery without an SSE client', () => {
     expect(statSync(first.path).mode & 0o777).toBe(0o600)
     next.service.completed('private-thread', 'private-turn', '**Finished successfully.**\nMore detail.')
     await vi.waitFor(() => expect(next.send).toHaveBeenCalledTimes(1))
-    expect(JSON.parse(next.send.mock.calls[0][1])).toEqual({ tag: expect.any(String), body: 'Finished successfully.' })
+    expect(JSON.parse(next.send.mock.calls[0][1])).toEqual({ tag: expect.any(String), body: 'Your Codex turn is complete.' })
     expect(next.send.mock.calls[0][1]).not.toContain('private')
     expect(next.send.mock.calls[0][2]).toMatchObject({ TTL: expect.any(Number), urgency: 'high', timeout: 10000 })
     next.service.completed('private-thread', 'private-turn')
@@ -52,11 +52,11 @@ describe('Web Push delivery without an SSE client', () => {
     expect(restarted.send).not.toHaveBeenCalled()
   })
 
-  it('builds a short plain-text body from the first non-empty answer line', () => {
-    expect(notificationBody('\n## Completed **cleanly**\nInternal detail')).toBe('Completed cleanly')
+  it('uses generic notification text without including an answer excerpt', () => {
+    expect(notificationBody('\n## Completed **cleanly**\nInternal detail')).toBe('Your Codex turn is complete.')
     expect(notificationBody('')).toBe('Your Codex turn is complete.')
-    expect(notificationBody('x'.repeat(220))).toHaveLength(180)
-    expect(notificationBody('x'.repeat(220))).toMatch(/…$/)
+    expect(notificationBody('x'.repeat(220))).toBe('Your Codex turn is complete.')
+    expect(notificationBody('PRIVATE CANARY')).not.toContain('PRIVATE CANARY')
   })
 
   it('suppresses delivery while that subscribed device reports a visible app', async () => {
@@ -70,7 +70,7 @@ describe('Web Push delivery without an SSE client', () => {
     expect(service.visibility(subscription.endpoint, false, session)).toBe(true)
     service.completed('thread', 'hidden-turn', 'Hidden response')
     await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1))
-    expect(JSON.parse(send.mock.calls[0][1])).toMatchObject({ body: 'Hidden response' })
+    expect(JSON.parse(send.mock.calls[0][1])).toMatchObject({ body: 'Your Codex turn is complete.' })
   })
 
   it('retries transient failure from persisted state after a restart', async () => {

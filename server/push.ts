@@ -10,20 +10,7 @@ const hash = (text: string) => createHash('sha256').update(text).digest('base64u
 const DEFAULT_BODY = 'Your Codex turn is complete.'
 const FOREGROUND_TTL_MS = 40_000
 
-export function notificationBody(answer: unknown): string {
-  if (typeof answer !== 'string') return DEFAULT_BODY
-  const firstLine = answer.split(/\r?\n/).find(line => line.trim())?.trim()
-  if (!firstLine) return DEFAULT_BODY
-  const plain = firstLine
-    .replace(/^#{1,6}\s+/, '')
-    .replace(/^[-*+]\s+/, '')
-    .replace(/[*_`~]/g, '')
-    .replace(/\p{Cc}/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-  if (!plain) return DEFAULT_BODY
-  return plain.length > 180 ? `${plain.slice(0, 179).trimEnd()}…` : plain
-}
+export function notificationBody(_answer: unknown): string { return DEFAULT_BODY }
 
 export function validateSubscription(value: unknown): PushSubscription {
   const input = value as PushSubscription | undefined

@@ -1,6 +1,5 @@
 import { parseArgs } from 'node:util'
-import { createSession } from '../dist-server/auth.js'
-import { maintenanceCookie } from './session-cookie.mjs'
+import { maintenanceClient } from './secure-maintenance.mjs'
 import { loadConfig } from '../dist-server/config.js'
 
 const { values, positionals } = parseArgs({ allowPositionals: true, options: Object.fromEntries(
@@ -9,8 +8,8 @@ const { values, positionals } = parseArgs({ allowPositionals: true, options: Obj
 const command = positionals[0] ?? 'list'
 if (!['list', 'register', 'remove'].includes(command)) throw Error('Use list, register or remove')
 const config = loadConfig()
-const session = createSession(config.sessionSecret, 300, config.password)
-const headers = { Cookie: maintenanceCookie(session.token, config.publicOrigin.protocol === 'https:'), Origin: config.publicOrigin.origin, 'X-CSRF-Token': session.payload.csrf, 'Content-Type': 'application/json' }
+const client = await maintenanceClient(config)
+const headers = { 'Content-Type': 'application/json' }
 let method = 'GET', path = '/api/services', body
 if (command === 'register') {
   method = 'PUT'
@@ -23,7 +22,8 @@ if (command === 'remove') {
   if (!values.key) throw Error('Provide --key port:5183 or --key path:/example')
   method = 'DELETE'; path += `?${new URLSearchParams({ key: values.key })}`
 }
-const response = await fetch(`http://${config.host}:${config.port}${path}`, { method, headers, ...(body ? { body } : {}), signal: AbortSignal.timeout(10_000) })
+const response = await client.fetch(path, { method, headers, ...(body ? { body } : {}), signal: AbortSignal.timeout(10_000) })
 const result = await response.json()
+client.close()
 if (!response.ok) throw Error(result.error ?? `HTTP ${response.status}`)
 console.log(JSON.stringify(result, null, 2))

@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { maintenanceCookie } from './session-cookie.mjs'
+import { maintenanceClient } from './secure-maintenance.mjs'
 import { loadConfig } from '../dist-server/config.js'
 import { restartReadiness } from './restart-readiness.mjs'
 
@@ -22,15 +22,14 @@ const state = (status, details = {}) => writeFileSync(join(stateDirectory, 'rest
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
 
 async function readiness() {
-  const session = createSession(config.sessionSecret, 300, config.password)
-  return restartReadiness(async path => {
-    const response = await fetch(`${base}${path}`, {
-      headers: { Cookie: maintenanceCookie(session.token, config.publicOrigin.protocol === 'https:') },
+  const client = await maintenanceClient(config, createSession)
+  try { return await restartReadiness(async path => {
+    const response = await client.fetch(path, {
       signal: AbortSignal.timeout(10_000),
     })
     if (!response.ok) throw Error(`Idle status returned HTTP ${response.status}`)
     return response.json()
-  })
+  }) } finally { client.close() }
 }
 
 if (process.argv.includes('--check')) {

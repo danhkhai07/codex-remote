@@ -15,6 +15,8 @@ export type RemoteConfig = {
   codexBin: string
   workspaceRoots: string[]
   fileRoots?: string[]
+  secureApiRequired?: boolean
+  secureKeyFile?: string
   sessionStateFile?: string
   trustedProxies?: string[]
   previewOriginTemplate?: string
@@ -80,7 +82,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RemoteConfig {
   if (fileRoots.some(root => !validFileRoot(root))) throw Error('File roots must be explicit project/data directories, not home/filesystem/system roots')
   const trustedProxies = (env.CODEX_REMOTE_TRUSTED_PROXIES ?? '').split(',').map(value => value.trim()).filter(Boolean)
   if (trustedProxies.some(value => !isIP(value))) throw Error('Trusted proxies must be exact IP addresses')
+  if (env.CODEX_REMOTE_SECURE_API && !['required', 'off'].includes(env.CODEX_REMOTE_SECURE_API)) throw Error('CODEX_REMOTE_SECURE_API must be required or off')
   return {
+    secureApiRequired: env.CODEX_REMOTE_SECURE_API === 'required' || (env.NODE_ENV === 'production' && env.CODEX_REMOTE_SECURE_API !== 'off'),
+    secureKeyFile: resolve(env.CODEX_REMOTE_SECURE_KEY_FILE?.trim() || resolve(homedir(), '.local/state/codex-remote/owner-key.json')),
     previewOriginTemplate: env.CODEX_REMOTE_PREVIEW_ORIGIN_TEMPLATE?.trim() ? validatePreviewOriginTemplate(env.CODEX_REMOTE_PREVIEW_ORIGIN_TEMPLATE.trim()) : undefined,
     contextVaultPath: resolve(contextVaultPath),
     sessionStateFile: resolve(env.CODEX_REMOTE_SESSION_STATE?.trim() || resolve(homedir(), '.local/state/codex-remote/sessions.json')),

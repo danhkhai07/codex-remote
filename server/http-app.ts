@@ -1,3 +1,5 @@
+import { SECURE_VIEWER_CSP, SECURE_VIEWER_HTML } from './secure-viewer.js'
+import { SecureApi } from './secure-api.js'
 import { requestIp } from './request-ip.js'
 import { SessionRegistry } from './session-registry.js'
 import { LocalhostPreview, LocalhostPreviewError } from './localhost-preview.js'
@@ -210,7 +212,8 @@ export function createRemoteHttpServer(
   if (preview?.matchesHost(config.publicOrigin.host)) throw new Error('Preview apps must use a separate origin from Codex Remote')
   if (secureCookie && config.previewOriginTemplate?.startsWith('http:')) throw new Error('HTTPS Codex Remote requires HTTPS preview origins')
 
-  const server = createServer(async (req, res) => {
+  const secure = config.secureApiRequired ? new SecureApi(config, sessions, fileRoots) : undefined
+  const dispatch = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     // Preview apps own their isolated origin. Never apply the Codex app CSP or routing there.
     if (preview?.matchesHost(req.headers.host)) { preview.handle(req, res); return }
     for (const [name, value] of Object.entries(headers)) res.setHeader(name, value)
@@ -233,7 +236,7 @@ export function createRemoteHttpServer(
       if (url.pathname === '/api/healthz' && method === 'GET') {
         json(res, controller.appServer.state === 'ready' ? 200 : 503, {
           status: controller.appServer.state === 'ready' ? 'ok' : 'unavailable',
-          codex: controller.appServer.state,
+          ...(secure ? {} : { codex: controller.appServer.state }),
         })
         return
       }
@@ -255,7 +258,7 @@ export function createRemoteHttpServer(
         json(res, 200, {
           csrf: session.payload.csrf,
           expiresAt: session.payload.expiresAt,
-          workspaces: controller.workspaces,
+          ...(secure ? {} : { workspaces: controller.workspaces }),
         })
         return
       }
@@ -645,7 +648,25 @@ export function createRemoteHttpServer(
         console.error(`Codex Remote request failed: ${message}`)
       }
     }
+  }
+  const server = createServer(async (req, res) => {
+    if (preview.matchesHost(req.headers.host)) { preview.handle(req, res); return }
+    for (const [name, value] of Object.entries(headers)) res.setHeader(name, value)
+    if (secureCookie) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+    if (!isAllowedHost(req, config)) { json(res, 400, { error: 'Unrecognized host' }); return }
+    const path = new URL(req.url ?? '/', config.publicOrigin).pathname
+    if (req.method === 'GET' && ['/secure-viewer', '/secure-docx-frame'].includes(path)) {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': path === '/secure-viewer' ? SECURE_VIEWER_CSP : DOCX_FRAME_CSP, 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'SAMEORIGIN' })
+      res.end(path === '/secure-viewer' ? SECURE_VIEWER_HTML : DOCX_FRAME_HTML); return
+    }
+    if (secure && path.startsWith('/api/secure/')) { await secure.handle(req, res, dispatch); return }
+    if (path === '/api/secure/setup' && req.method === 'GET') { json(res, 200, { required: false, version: 1 }); return }
+    if (secure && ((path.startsWith('/api/') && !['/api/healthz', '/api/session/login'].includes(path)) || path.startsWith('/preview/'))) {
+      json(res, 403, { error: 'Unlock the encrypted API first' }); return
+    }
+    await dispatch(req, res)
   })
+  server.on('close', () => secure?.close())
   if (preview) {
     server.on('upgrade', (req, socket, head) => {
       if (preview.matchesHost(req.headers.host)) preview.handleUpgrade(req, socket, head)

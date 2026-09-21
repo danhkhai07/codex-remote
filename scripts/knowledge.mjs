@@ -1,7 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { parseArgs } from 'node:util'
-import { createSession } from '../dist-server/auth.js'
-import { maintenanceCookie } from './session-cookie.mjs'
+import { maintenanceClient } from './secure-maintenance.mjs'
 import { loadConfig } from '../dist-server/config.js'
 
 const { values, positionals } = parseArgs({ allowPositionals: true, options: Object.fromEntries(
@@ -27,11 +26,12 @@ if (command === 'preview') {
   if (!values.thread || values.text === undefined) throw Error('preview requires --thread and --text')
   method = 'POST'; body = { threadId: values.thread, text: values.text }
 }
-const config = loadConfig(), session = createSession(config.sessionSecret, 300, config.password)
-const response = await fetch(`http://${config.host}:${config.port}/api/knowledge${routes[command]}?${query}`, {
-  method, headers: { Cookie: maintenanceCookie(session.token, config.publicOrigin.protocol === 'https:'), Origin: config.publicOrigin.origin, 'X-CSRF-Token': session.payload.csrf, 'Content-Type': 'application/json' },
+const config = loadConfig(), client = await maintenanceClient(config)
+const response = await client.fetch(`/api/knowledge${routes[command]}?${query}`, {
+  method, headers: { 'Content-Type': 'application/json' },
   ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(15_000),
 })
 const result = await response.json()
+client.close()
 if (!response.ok) throw Error(`HTTP ${response.status}: ${result.error ?? 'Knowledge request failed'}`)
 console.log(JSON.stringify(result, null, 2))
