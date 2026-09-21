@@ -16,7 +16,7 @@ try {
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
   config.publicOrigin = new URL(`http://127.0.0.1:${server.address().port}`)
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, serviceWorkers: 'block' })
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, serviceWorkers: 'allow' })
   const page = await context.newPage(), errors = [], mutations = []
   page.on('pageerror', error => errors.push(error.message))
   const thread = id => ({ id, name: id === 'a' ? 'First fixture' : 'Second fixture', cwd: '/tmp', createdAt: 1, updatedAt: 1, status: { type: 'idle' }, turns: [] })

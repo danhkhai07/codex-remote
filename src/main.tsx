@@ -1,5 +1,5 @@
 import { SecureGate } from './SecureGate'
-import { unregisterLegacyPreviewWorkers } from './legacyPreviewWorkers'
+import { PreviewMigrationGate } from './PreviewMigrationGate'
 import { WorkingHoursPage, isWorkingHoursPath } from './WorkingHoursPage'
 import { ServicesPage, isServicesPath } from './ServicesPage'
 import { lazy, StrictMode, Suspense } from 'react'
@@ -18,12 +18,11 @@ if (import.meta.hot) import.meta.hot.dispose(removeZoomLock)
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <AppRecovery><SecureGate>{isKnowledgePath(window.location.pathname) ? <Suspense fallback={<main className="login-shell"><p role="status">Đang mở Knowledge…</p></main>}><KnowledgePage /></Suspense> : isServicesPath(window.location.pathname) ? <ServicesPage /> : isWorkingHoursPath(window.location.pathname) ? <WorkingHoursPage /> : <App />}</SecureGate></AppRecovery>
+    <AppRecovery><PreviewMigrationGate><SecureGate>{isKnowledgePath(window.location.pathname) ? <Suspense fallback={<main className="login-shell"><p role="status">Đang mở Knowledge…</p></main>}><KnowledgePage /></Suspense> : isServicesPath(window.location.pathname) ? <ServicesPage /> : isWorkingHoursPath(window.location.pathname) ? <WorkingHoursPage /> : <App />}</SecureGate></PreviewMigrationGate></AppRecovery>
   </StrictMode>,
 )
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
-  void unregisterLegacyPreviewWorkers(navigator.serviceWorker, location.origin).catch(() => undefined)
   window.addEventListener('load', () => {
     navigator.serviceWorker.register(`/sw.js?v=${encodeURIComponent(__CODEX_REMOTE_BUILD_ID__)}`, { updateViaCache: 'none' }).then((registration) => {
       const announceUpdate = (worker: ServiceWorker | null) => {

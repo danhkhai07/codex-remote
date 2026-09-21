@@ -1,3 +1,5 @@
+import { LoginRateLimiter } from './login-rate-limit.js'
+import { requestIp } from './request-ip.js'
 import type { SecureKey } from './secure-wire.js'
 import { createHash } from 'node:crypto'
 import { Readable } from 'node:stream'
@@ -29,6 +31,8 @@ export class SecureApi {
   #pending = new Map<string, Pending>()
   #channels = new Map<string, Channel>()
   #handshakes = new Set<string>()
+  // Separate from password login: a successful password must not reset key failures.
+  #proofLimiter = new LoginRateLimiter()
   #active = 0
   #bytes = 0
   #timer: NodeJS.Timeout
@@ -78,7 +82,13 @@ export class SecureApi {
       }
       if (url.pathname === '/api/secure/handshake') {
         if (this.#handshakes.size >= 8 || this.#handshakes.has(session.nonce)) { minimal(res, 429); return }
+        const admission = this.#proofLimiter.beginAttempt(requestIp(req, this.config.trustedProxies))
+        if (!admission.allowed) {
+          res.setHeader('Retry-After', String(admission.retryAfterSeconds))
+          minimal(res, admission.reason === 'capacity' ? 503 : 429); return
+        }
         this.#handshakes.add(session.nonce)
+        let accepted = false
         try {
         const data = await smallJson(req), entry = typeof data.id === 'string' ? this.#pending.get(data.id) : undefined
         if (!entry || entry.session.nonce !== session.nonce || typeof data.proof !== 'string') { minimal(res, 401); return }
@@ -100,8 +110,9 @@ export class SecureApi {
         const proof = await seal(channel.response, context(challenge.channel, 'response', challenge.id, 0, 'ready'), jsonBytes({ ready: true, expiresAt: channel.expires }))
         this.#refresh()
         if (this.#channels.get(challenge.channel) !== channel || !this.sessions.valid(session) || channel.expires <= Date.now()) throw Error()
+        accepted = true
         minimal(res, 200, { channel: challenge.channel, proof }); return
-        } finally { this.#handshakes.delete(session.nonce) }
+        } finally { admission.finish(accepted); this.#handshakes.delete(session.nonce) }
       }
       if (url.pathname !== '/api/secure/request') { minimal(res, 404); return }
       const channelId = req.headers['x-secure-channel'], requestId = req.headers['x-secure-request']

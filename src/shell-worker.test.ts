@@ -45,7 +45,7 @@ describe('recoverable application shell', () => {
 it('leaves authenticated preview requests out of the app shell and offline cache', () => {
   const { listeners, fetch } = harness()
   const onFetch = listeners.mock.calls.find(([name]) => name === 'fetch')![1]
-  for (const path of ['/preview/3000/', '/preview/3000/assets/app.js', '/preview/5174/api/data']) {
+  for (const path of ['/preview/3000/', '/preview/3000/assets/app.js', '/preview/5174/api/data', '/workboard', '/workboard/', '/workboard/app.js']) {
     const respondWith = vi.fn()
     onFetch({ request: { method: 'GET', url: 'https://remote.test' + path, mode: 'navigate' }, respondWith })
     expect(respondWith).not.toHaveBeenCalled()

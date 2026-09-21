@@ -1,3 +1,4 @@
+import { ensurePreviewMigrationReady } from './legacyPreviewWorkers'
 import { SecureTransport, SecureTransportError } from '../server/secure-client'
 import type { SecureMetadata } from '../server/secure-wire'
 import { CipherCache } from './secureCache'
@@ -7,12 +8,13 @@ let metadata: SecureMetadata | undefined
 let cache: CipherCache | undefined
 let setupPromise: Promise<SecureMetadata> | undefined
 let epoch = 0
-let migrationReady: () => Promise<void> = async () => {}
+let migrationReady: () => Promise<void>
 const urls = new Set<string>()
 const locks = new Set<() => void>()
 const broadcast = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('codex-remote-secure-lock-v1') : undefined
-/** CR2 merge hook: must reject until migration is safe; invoked before restore/login/unlock. */
+/** Await a fresh known-residue check before setup/restore/login/unlock. */
 export function installMigrationReady(hook: () => Promise<void>) { migrationReady = hook }
+installMigrationReady(() => ensurePreviewMigrationReady(true))
 export function awaitMigrationReady() { return migrationReady() }
 export async function secureSetup() {
   await awaitMigrationReady()

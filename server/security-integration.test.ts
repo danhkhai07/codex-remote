@@ -3,7 +3,7 @@ import { createServer, request, type Server } from 'node:http'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { AddressInfo } from 'node:net'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { createSession } from './auth.js'
 import { createRemoteHttpServer } from './http-app.js'
 import { RemoteController } from './controller.js'
@@ -126,4 +126,59 @@ it('rejects old browser tokens after password-only restart, including renamed co
   const fresh = await fetch(config.publicOrigin + 'api/session/login', { method: 'POST', headers: { Origin: config.publicOrigin.origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ password: config.password }) })
   expect(fresh.status).toBe(200)
   expect((await fetch(config.publicOrigin + 'api/session', { headers: { Cookie: fresh.headers.get('set-cookie')!.split(';')[0] } })).status).toBe(200)
+})
+
+
+it('bounds HTTP admission for many distinct proxy clients without losing blocked identities, then expires globally', async () => {
+  const f = await fixture(['127.0.0.1'])
+  const base = Date.now()
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(base)
+  try {
+    const hot = { 'X-Real-IP': '192.0.2.10' }
+    for (let n = 0; n < 8; n++) expect((await f.login(hot, 'wrong')).response.status).toBe(401)
+    for (let start = 0; start < 4095; start += 32) {
+      const results = await Promise.all(Array.from({ length: Math.min(32, 4095 - start) }, (_, offset) => {
+        const n = start + offset
+        return f.login({ 'X-Real-IP': `198.18.${Math.floor(n / 256)}.${n % 256}` }, 'wrong')
+      }))
+      expect(results.every(result => result.response.status === 401)).toBe(true)
+    }
+    const overflow = await f.login({ 'X-Real-IP': '203.0.113.1' })
+    expect(overflow.response.status).toBe(503)
+    expect(overflow.response.headers.get('retry-after')).toBe('1')
+    const blocked = await f.login(hot)
+    expect(blocked.response.status).toBe(429)
+    expect(blocked.response.headers.get('retry-after')).toBe('900')
+    // A known admitted client can still authenticate while unknown admission is full.
+    expect((await f.login({ 'X-Real-IP': '198.18.0.0' })).response.status).toBe(200)
+    clock.mockReturnValue(base + 900_001)
+    expect((await f.login({ 'X-Real-IP': '203.0.113.1' })).response.status).toBe(200)
+    expect((await f.login(hot)).response.status).toBe(200)
+  } finally { clock.mockRestore() }
+}, 30_000)
+
+it('reserves HTTP login slots before slow request bodies and releases aborted attempts', async () => {
+  const f = await fixture(['127.0.0.1'])
+  let arrived = 0
+  let headersReady!: () => void
+  const allHeaders = new Promise<void>(resolve => { headersReady = resolve })
+  f.server.on('request', req => { if (req.headers['x-real-ip'] === '192.0.2.60' && ++arrived === 8) headersReady() })
+  const pending = Array.from({ length: 8 }, () => {
+    const req = request({ hostname: '127.0.0.1', port: f.port, path: '/api/session/login', method: 'POST', headers: { Origin: f.config.publicOrigin.origin, 'Content-Type': 'application/json', 'Content-Length': '100', 'X-Real-IP': '192.0.2.60' } })
+    req.on('error', () => undefined)
+    req.flushHeaders()
+    return req
+  })
+  try {
+    await allHeaders
+    const ninth = await f.login({ 'X-Real-IP': '192.0.2.60' })
+    expect(ninth.response.status).toBe(429)
+    expect(ninth.response.headers.get('retry-after')).toBe('1')
+    expect((await f.login({ 'X-Real-IP': '192.0.2.61' })).response.status).toBe(200)
+  } finally { for (const req of pending) req.destroy() }
+  await vi.waitFor(async () => {
+    const blocked = await f.login({ 'X-Real-IP': '192.0.2.60' })
+    expect(blocked.response.status).toBe(429)
+    expect(Number(blocked.response.headers.get('retry-after'))).toBeGreaterThan(1)
+  })
 })

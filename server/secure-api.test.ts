@@ -257,3 +257,19 @@ it('bounds incomplete authenticated requests and releases buffers on disconnect 
   await expect.poll(() => f.secure!.stats.active).toBe(0)
   expect(f.secure!.stats.bufferedBytes).toBe(0)
 })
+
+it('admits bounded proof attempts before body and ignores spoofed IP churn', async () => {
+  const f = await fixture(true)
+  for (let i = 0; i < 8; i++) {
+    expect((await f.call('/api/secure/handshake', { method: 'POST', body: '{}', headers: { 'X-Real-IP': `192.0.2.${i}`, 'X-Forwarded-For': `192.0.2.${i}` } })).status).toBe(401)
+  }
+  // An unfinished body must not delay rejection once admission is exhausted.
+  const abort = new AbortController()
+  const response = await f.call('/api/secure/handshake', { method: 'POST', signal: abort.signal, body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('{')) } }), duplex: 'half' } as RequestInit)
+  expect(response.status).toBe(429); expect(Number(response.headers.get('retry-after'))).toBeGreaterThan(0); abort.abort()
+  const later = Date.now() + 16 * 60_000
+  vi.spyOn(Date, 'now').mockReturnValue(later)
+  // Use a new session: expired sessions never reach proof admission.
+  const issued = createSession(f.config.sessionSecret, 600, f.config.password)
+  expect((await f.call('/api/secure/handshake', { method: 'POST', body: '{}', headers: { Cookie: 'codex_remote_session=' + issued.token } })).status).toBe(401)
+})
