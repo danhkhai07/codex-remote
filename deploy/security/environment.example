@@ -1,6 +1,6 @@
 # Nonsecret deployment changes only. Never copy over the existing .env file.
 CODEX_REMOTE_PREVIEW_ORIGIN_TEMPLATE=https://p{port}.danhkhai.io.vn
-CODEX_REMOTE_FILE_ROOTS=/root/RUNNING-SERVICES,/root/WORKTREES,/root/VAULTS
+CODEX_REMOTE_FILE_ROOTS=/root/RUNNING-SERVICES,/root/WORKTREES,/root/GITHUB,/root/VAULTS
 CODEX_REMOTE_TRUSTED_PROXIES=127.0.0.1,::1
 CODEX_REMOTE_SESSION_STATE=/root/.local/state/codex-remote/sessions.json
 # Keep existing workspace roots, password, signing key and full-access behavior.
