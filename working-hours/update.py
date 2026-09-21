@@ -59,7 +59,7 @@ def read_activity(now, idle_minutes=DEFAULT_IDLE_MINUTES):
                     continue
     # One timeline across sessions: switching conversations is still continuous work.
     intervals = activity_intervals(stamps, idle_minutes)
-    return daily_seconds(intervals), observed, len(files)
+    return merge(intervals), observed, len(files)
 
 def atomic_write(path, content):
     temp = path.with_suffix(path.suffix + '.tmp')
@@ -90,13 +90,13 @@ def main():
             if not math.isfinite(hours) or not 0 <= hours <= 24 or day > now.date():
                 raise ValueError('Confirmed hours must be 0–24 and dates cannot be in the future')
             confirmed[day.isoformat()] = hours
+    shared = {}
     shared_path = ROOT / 'working-hours-state.json'
     if shared_path.exists():
         if args.set:
             parser.error('Shared tracking is enabled; update daily totals through the dashboard to avoid concurrent writes.')
         shared = json.loads(shared_path.read_text())
         confirmed = shared['totals']
-        atomic_write(manual_path, 'date,hours\n' + ''.join(f'{d},{h}\n' for d,h in sorted(confirmed.items())))
     revision_path = ROOT / 'confirmed-revisions.json'
     revisions = json.loads(revision_path.read_text()) if revision_path.exists() else {}
     if args.set:
@@ -107,7 +107,16 @@ def main():
         revisions[day.isoformat()] = now.isoformat()
         atomic_write(revision_path, json.dumps(revisions, indent=2) + '\n')
         atomic_write(manual_path, 'date,hours\n' + ''.join(f'{d},{h}\n' for d,h in sorted(confirmed.items())))
-    seconds, observed, count = read_activity(now, idle_minutes)
+    intervals, observed, count = read_activity(now, idle_minutes)
+    # Re-read after scanning: the API is the sole writer and may have paused or
+    # resumed during the scan. Raw intervals also let the API reject stale epochs.
+    if shared_path.exists():
+        shared = json.loads(shared_path.read_text())
+        confirmed = shared['totals']
+        atomic_write(manual_path, 'date,hours\n' + ''.join(f'{d},{h}\n' for d,h in sorted(confirmed.items())))
+    since = datetime.fromtimestamp(shared['estimateSince'] / 1000, TZ) if 'estimateSince' in shared else None
+    eligible = [] if shared.get('autoPaused', False) else [(max(a, since) if since else a, b) for a, b in intervals if not since or b > since]
+    seconds = daily_seconds(eligible)
     known = observed | {date.fromisoformat(d) for d in confirmed}
     days = []
     if known:
@@ -118,15 +127,15 @@ def main():
             hours = confirmed.get(key, seconds.get(key, 0) / 3600) if source != 'unknown' else None
             if key in confirmed:
                 baseline = shared.get('estimateBaselines', {}).get(key, seconds.get(key, 0) / 3600) if shared_path.exists() else seconds.get(key, 0) / 3600
-                hours = max(0, min(24, hours + max(0, seconds.get(key, 0) / 3600 - baseline)))
+                hours = max(0, min(24, hours + (0 if shared.get('autoPaused', False) else max(0, seconds.get(key, 0) / 3600 - baseline))))
             days.append({'date': key, 'hours': hours, 'source': source, 'estimatedHours': seconds.get(key, 0) / 3600 if cursor in observed else None})
             cursor += timedelta(days=1)
-    data = {'generated': now.isoformat(), 'today': now.date().isoformat(), 'timezone': str(TZ), 'sourceFiles': count, 'gapMinutes': idle_minutes, 'trackingMethod': 'automatic-reading-allowance', 'days': days, 'confirmedRevisions': {d: f'{revisions.get(d, "csv")}:{h}' for d, h in confirmed.items()}}
+    data = {'autoPaused': shared.get('autoPaused', False), 'activityIntervals': [[round(a.timestamp() * 1000), round(b.timestamp() * 1000)] for a, b in intervals], 'generated': now.isoformat(), 'today': now.date().isoformat(), 'timezone': str(TZ), 'sourceFiles': count, 'gapMinutes': idle_minutes, 'trackingMethod': 'automatic-reading-allowance', 'days': days, 'confirmedRevisions': {d: f'{revisions.get(d, "csv")}:{h}' for d, h in confirmed.items()}}
     atomic_write(ROOT / 'data.json', json.dumps(data, indent=2) + '\n')
     atomic_write(ROOT / 'daily-hours.csv', 'date,hours\n' + ''.join(f"{d['date']},{'' if d['hours'] is None else format(d['hours'], '.4f')}\n" for d in days))
     template = (ROOT / 'dashboard.template.html').read_text()
     atomic_write(ROOT / 'index.html', template.replace('__WORK_DATA__', json.dumps(data).replace('<', '\\u003c')))
-    notes = ['# Daily working hours', '', f'Automatic estimates include gaps of up to {idle_minutes} minutes between activities across all sessions, allowing time for reading. Longer gaps and time after the latest event are excluded. Daily edits adjust the total; subsequent automatic activity continues adding time.', '', '| Date (Vietnam) | Hours |', '| --- | ---: |']
+    notes = ['# Daily working hours', '', f'Automatic estimates include gaps of up to {idle_minutes} minutes between activities across all sessions, allowing time for reading. Longer gaps and time after the latest event are excluded. Daily edits adjust the total; subsequent automatic activity continues adding time unless explicitly paused. Resume only counts activity from the resume time.', '', '| Date (Vietnam) | Hours |', '| --- | ---: |']
     for d in reversed(days):
         value = 'Unknown' if d['hours'] is None else f"{d['hours']:.2f}"
         notes.append(f"| {d['date']} | {value} |")
