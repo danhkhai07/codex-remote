@@ -27,7 +27,7 @@ export function productionOps(release) {
   const meta = json(join(release, 'metadata.json')), baseline = json(join(release, 'baseline.json')), inventory = json(join(release, 'inventory.json'))
   assert(meta.app === APP && meta.main === MAIN && meta.release === release && meta.hours === HOURS && meta.requiredEncryption === true, 'wrong-release')
   const outside = release + '.activation', marker = outside + '/attempt.json', lock = outside + '/lock'
-  let acquired = false, gated = false, copied = false, activated = false, clientPublished = false, newClient, config, appliedEnvHash
+  let acquired = false, gated = false, copied = false, activated = false, clientPublished = false, newClient, config, appliedEnvHash, ownedWatcher
   const appliedConfigs = new Map()
   const envBase = () => parseEnv(readFileSync(join(MAIN, '.env'), 'utf8'))
   const envPatch = { CODEX_REMOTE_SECURE_API: 'required', CODEX_REMOTE_SECURE_KEY_FILE: meta.keyFile,
@@ -108,10 +108,11 @@ export function productionOps(release) {
     return new Promise((resolve, reject) => {
       // Do not inherit CODEX_REMOTE_* overrides; the sealed old config must use original env values.
       const child = spawn(process.execPath, ['--env-file=' + join(outside, 'backup/original.env'), script], { cwd: MAIN, stdio: 'ignore', env: { PATH: process.env.PATH, HOME: '/root' } })
+      ownedWatcher = child
       const timer = setInterval(() => { try { sealCheck(); stableCheck({ applying: true, after: serviceIdentity('codex-remote.service') !== baseline.service }) } catch { child.kill('SIGTERM') } }, 5000)
       const timeout = setTimeout(() => child.kill('SIGTERM'), 12 * 60 * 60_000)
       child.once('error', () => { clearInterval(timer); clearTimeout(timeout); reject(Error('old-watcher-start-failed')) })
-      child.once('exit', code => { clearInterval(timer); clearTimeout(timeout); if (code === 0) resolve(); else reject(Error('old-watcher-failed')) })
+      child.once('exit', code => { ownedWatcher = undefined; clearInterval(timer); clearTimeout(timeout); if (code === 0) resolve(); else reject(Error('old-watcher-failed')) })
     })
   }
   const jsonOutput = value => { try { return JSON.parse(value) } catch { throw Error('old-readiness-invalid') } }
@@ -119,6 +120,13 @@ export function productionOps(release) {
   function nginxReload() { command('/usr/sbin/nginx', ['-t']); command('systemctl', ['reload', 'nginx.service']) } // Only apply, NEVER preparation/fixture.
   const ops = {
     modules: inventory.groups.backend.map(item => item.path), sleep, now: Date.now,
+    onTerminate(save) {
+      const handlers = ['SIGTERM', 'SIGINT'].map(signal => {
+        const handler = async () => { ownedWatcher?.kill('SIGTERM'); try { await save() } finally { process.exit(signal === 'SIGTERM' ? 143 : 130) } }
+        process.once(signal, handler); return [signal, handler]
+      })
+      return () => { for (const [signal, handler] of handlers) process.removeListener(signal, handler) }
+    },
     check: () => gates(false),
     async acquire() {
       assert(existsSync(outside) && lstatSync(outside).uid === 0 && (lstatSync(outside).mode & 0o077) === 0, 'private-activation-directory-required')
@@ -179,7 +187,7 @@ export function productionOps(release) {
       assert(hash(readFileSync('/proc/' + identity.match(/MainPID=(\d+)/)[1] + '/cmdline')) === baseline.processCommand, 'new-entry-command-drift')
       const { maintenanceClient } = await import(pathToFileURL(join(release, 'operator/scripts/secure-maintenance.mjs')).href)
       await candidateConfig(); newClient = await maintenanceClient(config)
-      const response = await newClient.fetch('/api/session', { signal: AbortSignal.timeout(10000) }); assert(response.ok, 'encrypted-proof-failed')
+      const response = await newClient.fetch('/api/session', { signal: AbortSignal.timeout(10000) }); assert(response.ok, 'encrypted-proof-failed'); await response.arrayBuffer()
     },
     async workboard() {
       assert(fileHash('/root/GITHUB/Workboard/server.py') === baseline.stable['/root/GITHUB/Workboard/server.py'].sha256, 'workboard-source-drift')

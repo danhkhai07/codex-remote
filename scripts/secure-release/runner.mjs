@@ -4,10 +4,14 @@ import { assert, isIdle } from './common.mjs'
 /** No rollback/resume: a failed attempt requires phase-specific operator review and a NEW seal. */
 export async function execute(ops) {
   let phase = 'preflight', acquired = false
+  let verifiedEvidence, unsubscribe
   const installed = []
   const step = async (name, action) => { phase = name; await ops.state({ status: 'running', phase, installed: [...installed] }); return action() }
   try {
     await ops.acquire(); acquired = true
+    unsubscribe = ops.onTerminate?.(async () => {
+      await ops.state({ status: 'failed', phase, installed: [...installed], reason: 'terminated', ...(verifiedEvidence ? { evidence: verifiedEvidence } : {}) })
+    })
     await step('preflight', () => ops.preflight())
     const deadline = ops.now() + 12 * 60 * 60_000
     while (true) {
@@ -43,14 +47,16 @@ export async function execute(ops) {
     await step('publish-index-last', () => ops.index())
     await step('activate-ingress', () => ops.openIngress())
     const evidence = await step('postverify', () => ops.verify())
+    verifiedEvidence = evidence
+    await ops.state({ status: 'running', phase: 'postverify-complete', installed: [...installed], evidence })
     await step('bookkeeping', () => ops.bookkeeping(evidence))
     await ops.state({ status: 'complete', phase: 'complete', installed, evidence })
     return evidence
   } catch (error) {
     // No rollback, no automatic repeat of mutations, no clearing original evidence.
-    if (acquired) await ops.state({ status: 'failed', phase, installed, reason: error.message })
+    if (acquired) await ops.state({ status: 'failed', phase, installed, reason: error.message, ...(verifiedEvidence ? { evidence: verifiedEvidence } : {}) })
     throw error
-  } finally { if (acquired) await ops.release() }
+  } finally { unsubscribe?.(); if (acquired) await ops.release() }
 }
 export async function main(args) {
   assert(args.length === 1 && ['--check', '--apply'].includes(args[0]), 'usage: --check | --apply (separate signed-off activation record required)')

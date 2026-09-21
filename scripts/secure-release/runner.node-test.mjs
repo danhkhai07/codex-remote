@@ -39,6 +39,15 @@ for (const failure of ['preflight', 'drift', 'backup', 'gateIngress', 'preCopy',
   assert(!f.trace.some(value => /rollback|restore/.test(value)))
   if (failure === 'http-app.js') { assert.equal(f.files['auth.js'], 'new'); assert.equal(f.files['http-app.js'], undefined); assert.deepEqual(f.states.at(-1).installed, ['auth.js']) }
   if (['preflight', 'drift', 'preCopy'].includes(failure)) assert(!f.trace.includes('install:auth.js'))
+  if (failure === 'bookkeeping') assert.deepEqual(f.states.at(-1).evidence, { freshPid: 42, encryptedProof: true })
+})
+test('termination retains the actual current phase and copied file list', async () => {
+  const f = fixture(); let signal, removed = false
+  f.ops.onTerminate = callback => { signal = callback; return () => { removed = true } }
+  f.ops.oldWatcherRestart = async () => { await signal(); throw Error('fixture-terminated') }
+  await assert.rejects(execute(f.ops), /fixture-terminated/)
+  const recorded = f.states.find(value => value.reason === 'terminated')
+  assert.equal(recorded.phase, 'old-watcher-restart'); assert.deepEqual(recorded.installed, ['auth.js', 'http-app.js']); assert(removed)
 })
 for (const status of [{ ready: true, busy: 1, pending: 0, incomplete: false }, { ready: true, busy: 0, pending: 1, incomplete: false }, { ready: true, busy: 0, pending: 0, incomplete: true }, {}, null]) test('ALL-idle fails closed: ' + JSON.stringify(status), async () => {
   assert.equal(isIdle(status), false)
