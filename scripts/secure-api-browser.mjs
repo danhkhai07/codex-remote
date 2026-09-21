@@ -126,6 +126,8 @@ try {
   await app.request('fixture/question', { id: 'secure-plan' })
   await page.locator('.plan-question').waitFor()
   await page.locator('.plan-question').getByRole('button', { name: 'Skip', exact: true }).click()
+  // A click only queues encryption/dispatch; await the authenticated acknowledgement.
+  await page.locator('.plan-question').waitFor({ state: 'detached' })
   assert.equal((await app.request('fixture/replies', {})).at(-1).id, 'secure-plan')
   const upload = await page.evaluate(async () => {
     const m = window.fixtureSecure, s = await (await m.secureFetch('/api/session')).json()
