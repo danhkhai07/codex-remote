@@ -1,0 +1,58 @@
+# Review template, NOT installed. Replace the matching Codex vhost, retain its
+# existing TLS settings. DNS/TLS gate: p{port}.danhkhai.io.vn (wildcard record
+# *.danhkhai.io.vn or explicit per-port records), edge AND origin certificate
+# covering *.danhkhai.io.vn. Use a reviewed cert path, never disable validation.
+map $http_upgrade $codex_preview_connection {
+    default upgrade;
+    '' close;
+}
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name codex.danhkhai.io.vn;
+    ssl_certificate /etc/letsencrypt/live/codex.danhkhai.io.vn/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/codex.danhkhai.io.vn/privkey.pem;
+    include /etc/nginx/snippets/codex-cloudflare-real-ip.conf;
+    client_max_body_size 26m;
+    # Workboard must no longer execute JS on the control-plane origin.
+    location = /workboard { return 303 /preview/5180/workboard/; }
+    location ^~ /workboard/ { rewrite ^/workboard/(.*)$ /preview/5180/workboard/$1 redirect; }
+    location / {
+        proxy_pass http://127.0.0.1:5173;
+        proxy_set_header Host $host;
+        # Overwrite, never append or accept the browser-supplied value.
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header Forwarded "";
+        proxy_set_header CF-Connecting-IP "";
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_read_timeout 1h;
+    }
+}
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name ~^p[1-9][0-9]{3,4}\.danhkhai\.io\.vn$;
+    # REQUIRED: replace with reviewed wildcard certificate paths.
+    ssl_certificate /etc/letsencrypt/live/PREVIEW-WILDCARD/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/PREVIEW-WILDCARD/privkey.pem;
+    include /etc/nginx/snippets/codex-cloudflare-real-ip.conf;
+    client_max_body_size 26m;
+    location / {
+        proxy_pass http://127.0.0.1:5173;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header Forwarded "";
+        proxy_set_header CF-Connecting-IP "";
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $codex_preview_connection;
+        proxy_buffering off;
+        proxy_read_timeout 1h;
+    }
+}
+# Keep existing HTTP->HTTPS redirect; do not expose preview content over HTTP.
+# This real-IP config is NOT a firewall or source-only-Cloudflare guarantee.

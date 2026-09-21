@@ -1,0 +1,14 @@
+--- a/server.py
++++ b/server.py
+@@ -122,8 +122,9 @@
+         self.send_header("Cache-Control", "no-store")
+         self.send_header("X-Content-Type-Options", "nosniff")
+         self.send_header("Referrer-Policy", "same-origin")
+-        self.send_header("X-Frame-Options", "SAMEORIGIN")
+-        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'")
++        if not os.environ.get("WORKBOARD_FRAME_ANCESTOR"):
++            self.send_header("X-Frame-Options", "SAMEORIGIN")
++        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self' " + os.environ.get("WORKBOARD_FRAME_ANCESTOR", "") + "; base-uri 'self'; form-action 'self'")
+         for key, value in (extra or {}).items():
+             self.send_header(key, value)
+         self.end_headers()
