@@ -209,3 +209,9 @@ Nginx fixtures use only `startNginxFixture`: all five absolute temp paths, PID,
 lock/logs in owned temp dirs, nonroot restricted filesystem and `-e stderr` for
 both syntax/start. They assert host temp metadata and Nginx process identity before/
 after. Do not run the old root `-p` fixture or old `check-nginx.py`.
+
+Observed inventory detail: excluded executable modules match the candidate. The
+live `event-hub.js.map` hash differs from the freshly compiled candidate debug map
+while `event-hub.js` is identical. `excluded-coherence.json` records both hashes;
+the runner preserves the live map exactly and does not expand the 46-file scope.
+A mismatch in an excluded executable module blocks preparation.

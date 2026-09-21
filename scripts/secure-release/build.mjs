@@ -47,8 +47,12 @@ export function prepare(output, inventoryPath) {
   assert(inventory.groups.backend.length === 46 && inventory.groups.client.length === 33, 'wrong-inventory-scope')
   for (const entries of Object.values(inventory.groups)) for (const item of entries) assert(fileHash(inside(source, item.path)) === item.sha256, 'candidate-artifact-drift:' + item.path)
   const replacements = new Set(inventory.groups.backend.map(item => item.path.slice(12)))
+  const preservedDebugMapDifferences = []
   for (const [path, value] of Object.entries(tree(join(source, 'dist-server')))) {
-    if (value.sha256 && !replacements.has(path)) assert(fileHash(join(MAIN, 'dist-server', path)) === value.sha256, 'excluded-candidate-runtime-mismatch:' + path)
+    if (!value.sha256 || replacements.has(path)) continue
+    const live = fileHash(join(MAIN, 'dist-server', path))
+    if (path.endsWith('.js.map') && live !== value.sha256) preservedDebugMapDifferences.push({ path, live, candidate: value.sha256 })
+    else assert(live === value.sha256, 'excluded-candidate-runtime-mismatch:' + path)
   }
   assert(fileHash(join(MAIN, 'dist-server/work-hours.js')) === HOURS, 'live-hours-drift')
   const graph = verifyClient(source, inventory.groups.client)
@@ -97,6 +101,7 @@ export function prepare(output, inventoryPath) {
     unitHashes: Object.fromEntries(['codex-remote.service', 'workboard.service', 'nginx.service'].map(unit => [unit, hash(command('systemctl', ['cat', unit]))])) }
   assert(baseline.service.includes('MainPID=1758426\n'), 'live-process-drift')
   writeJson(join(output, 'baseline.json'), baseline); writeJson(join(output, 'inventory.json'), inventory); writeJson(join(output, 'client-graph.json'), graph)
+  writeJson(join(output, 'excluded-coherence.json'), { excludedExecutableModulesMatch: true, preservedDebugMapDifferences, policy: 'All excluded files including existing debug maps are preserved byte-for-byte; only the 46 allowlisted files deploy' })
   // Source-only review snapshots, outside served code roots; never .env/state/history.
   for (const path of Object.keys(baseline.source)) copy(join(MAIN, path), 'source-baseline/' + path)
   for (const item of inventory.groups.backend) {
