@@ -218,6 +218,10 @@ export class LocalhostPreview {
     // Untrusted origins may not opt back into document.domain relaxation.
     headers['origin-agent-cluster'] = '?1'
     delete headers['clear-site-data']
+    // A local app must not issue reverse-proxy internal redirects or buffering/cache directives.
+    for (const name of Object.keys(headers)) {
+      if (name.startsWith('x-accel-') || name === 'x-sendfile') delete headers[name]
+    }
     return headers
   }
 
@@ -291,6 +295,7 @@ export class LocalhostPreview {
       timeout.unref()
       upstream.once('upgrade', (response, upstreamSocket, upstreamHead) => {
         clearTimeout(timeout)
+        if (socket.destroyed || !this.#sessions.valid(session)) { upstreamSocket.destroy(); socket.destroy(); return }
         const responseHeaders = this.#responseHeaders(response, port, origin)
         responseHeaders.connection = 'Upgrade'
         responseHeaders.upgrade = 'websocket'

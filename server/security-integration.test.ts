@@ -94,3 +94,36 @@ it('requires configured isolation and never proxies an untrusted app on the admi
   expect(requests).toBe(0)
   expect((await f.call('/api/localhost-preview', { method: 'POST', headers: auth.headers, body: JSON.stringify({ port: appPort }) })).status).toBe(503)
 })
+
+it('denies private vault mailboxes/state, including aliases and hidden listing', async () => {
+  const f = await fixture(), auth = await f.login()
+  const mailbox = join(f.root, 'Conversations', 'worker', '.orchestration')
+  await mkdir(mailbox, { recursive: true })
+  await writeFile(join(mailbox, 'request.json'), 'FAKE CAPABILITY CANARY')
+  await mkdir(join(f.root, '.state'))
+  await writeFile(join(f.root, '.state', 'state.json'), 'FAKE STATE CANARY')
+  await symlink(mailbox, join(f.root, 'alias'))
+  for (const path of [join(mailbox, 'request.json'), join(f.root, 'alias', 'request.json'), join(f.root, '.state', 'state.json')]) {
+    for (const route of ['info', 'content', 'html-preview', 'pptx-preview']) {
+      const res = await f.call('/api/files/' + route + '?path=' + encodeURIComponent(path), { headers: auth.headers })
+      expect(res.status).toBe(403); expect(await res.text()).not.toContain('CANARY')
+    }
+  }
+  const listing = await (await f.call('/api/files/list?hidden=1&path=' + encodeURIComponent(join(f.root, 'Conversations', 'worker')), { headers: auth.headers })).json()
+  expect(listing.entries).toEqual([])
+})
+
+it('rejects old browser tokens after password-only restart, including renamed cookies', async () => {
+  const f = await fixture(), auth = await f.login()
+  const config = { ...f.config, password: 'different fixture password' }
+  const next = createRemoteHttpServer(config, new RemoteController(config, new CodexAppServer('unused')), f.root, null)
+  const port = await listen(next)
+  config.port = port; config.publicOrigin = new URL('http://127.0.0.1:' + port)
+  for (const cookie of [auth.headers.Cookie, auth.headers.Cookie.replace('codex_remote_session=', '__Host-codex_remote_session=')]) {
+    const response = await fetch('http://127.0.0.1:' + port + '/api/session', { headers: { Cookie: cookie } })
+    expect(response.status).toBe(401)
+  }
+  const fresh = await fetch(config.publicOrigin + 'api/session/login', { method: 'POST', headers: { Origin: config.publicOrigin.origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ password: config.password }) })
+  expect(fresh.status).toBe(200)
+  expect((await fetch(config.publicOrigin + 'api/session', { headers: { Cookie: fresh.headers.get('set-cookie')!.split(';')[0] } })).status).toBe(200)
+})

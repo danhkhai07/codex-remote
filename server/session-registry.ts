@@ -42,11 +42,18 @@ export class SessionRegistry {
     if (!this.valid(session)) { close(); return () => {} }
     const id = digest(session.nonce), listeners = this.#listeners.get(id) ?? new Set()
     this.#listeners.set(id, listeners)
-    const end = () => { cleanup(); close() }
-    const timer = setTimeout(end, Math.min(2_147_483_647, session.expiresAt * 1000 - Date.now()))
-    timer.unref()
+    let timer: ReturnType<typeof setTimeout>
+    const arm = () => {
+      timer = setTimeout(end, Math.min(2_147_483_647, Math.max(1, session.expiresAt * 1000 - Date.now())))
+      timer.unref()
+    }
+    const end = () => {
+      if (this.valid(session)) { arm(); return }
+      cleanup(); close()
+    }
     const cleanup = () => { clearTimeout(timer); listeners.delete(end); if (!listeners.size) this.#listeners.delete(id) }
     listeners.add(end)
+    arm()
     return cleanup
   }
 }

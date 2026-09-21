@@ -2,7 +2,7 @@ import { isAbsolute, resolve, sep } from 'node:path'
 
 const systemRoots = ['/etc', '/proc', '/sys', '/dev', '/boot', '/run', '/var/lib', '/var/log', '/usr', '/bin', '/sbin', '/lib', '/lib64']
 const inside = (path: string, root: string) => path === root || path.startsWith(root + sep)
-const privateDirectories = new Set(['.ssh', '.gnupg', '.aws', '.azure', '.config', '.local', '.codex', '.docker', '.kube', '.state', '.git'])
+const privateDirectories = new Set(['.ssh', '.gnupg', '.aws', '.azure', '.config', '.local', '.codex', '.docker', '.kube', '.state', '.orchestration', '.git'])
 const privateNames = /^(?:\.env(?:\..*)?|\.npmrc|\.netrc|\.pypirc|auth\.json|credentials(?:\..*)?|secrets?(?:\..*)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:\..*)?|authorized_keys|known_hosts|shadow|gshadow)$/i
 export function deniedFilePath(input: string): boolean {
   const path = resolve(input)

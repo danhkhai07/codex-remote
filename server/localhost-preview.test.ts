@@ -139,7 +139,7 @@ describe('localhost previews', () => {
   it('preserves binary response content, removes hop headers and sanitizes upstream cookies', async () => {
     const body = Buffer.from([0, 255, 128, 17])
     const f = await fixture((_req, res) => {
-      res.writeHead(200, { 'content-type': 'application/octet-stream', connection: 'x-private-hop', 'x-private-hop': 'hidden', 'set-cookie': [
+      res.writeHead(200, { 'content-type': 'application/octet-stream', connection: 'x-private-hop', 'x-private-hop': 'hidden', 'x-accel-redirect': '/private', 'x-accel-expires': '3600', 'x-accel-buffering': 'yes', 'x-sendfile': '/private', 'set-cookie': [
         'theme=dark; Path=/; Domain=.preview.test; SameSite=Lax',
         '__Host-codex_preview_session=attacker; Path=/; Secure',
         'codex_remote_session=attacker; Domain=.test',
@@ -149,6 +149,7 @@ describe('localhost previews', () => {
     const { cookie } = await f.open(), result = await f.fetch('/assets/logo.bin', { headers: { cookie } })
     expect(result.body).toEqual(body)
     expect(result.headers['x-private-hop']).toBeUndefined()
+    for (const name of ['x-accel-redirect', 'x-accel-expires', 'x-accel-buffering', 'x-sendfile']) expect(result.headers[name]).toBeUndefined()
     expect(result.headers['set-cookie']).toEqual(['theme=dark; Path=/; SameSite=Lax'])
   })
 
@@ -235,4 +236,22 @@ it('fails closed without isolated preview configuration', async () => {
   expect(proxy.enabled).toBe(false)
   expect(() => proxy.createLaunch(3000, '/', Date.now() / 1000 + 60)).toThrow(/separate preview origin/)
   expect((await fetchLocal(port, 'remote.example.test', '/preview/3000/', { headers: { cookie: 'codex_remote_session=fake' } })).status).toBe(400)
+})
+
+it('rejects an upgrade if the session expires while upstream is preparing its handshake', async () => {
+  const f = await fixture(), { cookie } = await f.open()
+  f.upstream.on('upgrade', (_req, socket) => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 601000)
+    socket.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n')
+  })
+  const response = await new Promise<string>((resolve, reject) => {
+    const socket = connect(f.gatewayPort, '127.0.0.1')
+    let body = ''
+    socket.setTimeout(3000, () => socket.destroy(new Error('timed out')))
+    socket.on('error', reject)
+    socket.on('data', chunk => { body += chunk })
+    socket.on('close', () => resolve(body))
+    socket.on('connect', () => socket.write(`GET /hmr HTTP/1.1\r\nHost: ${f.host}\r\nCookie: ${cookie}\r\nOrigin: https://${f.host}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`))
+  })
+  expect(response).toBe('')
 })

@@ -34,3 +34,13 @@ it('closes every bound stream on revocation, and expires without another request
   vi.advanceTimersByTime(1001)
   expect(close).toHaveBeenCalledOnce(); expect(store.valid(expires)).toBe(false)
 })
+
+it('rearms long-lived stream timers until actual session expiry', () => {
+  vi.useFakeTimers()
+  const store = new SessionRegistry('test'), session = createSession('test', 30 * 86400).payload, close = vi.fn()
+  store.watch(session, close)
+  vi.advanceTimersByTime(2147483647)
+  expect(close).not.toHaveBeenCalled()
+  vi.advanceTimersByTime(30 * 86400000 - 2147483647 + 1)
+  expect(close).toHaveBeenCalledOnce()
+})
