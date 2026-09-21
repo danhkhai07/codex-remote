@@ -10,3 +10,14 @@ it('reads shared server data and uses authenticated versioned commands',async()=
 it('rejects other windows, origins, arbitrary storage writes and unsupported actions',async()=>{
  const f=fixture();await f.send({action:'get'},{} as Window);await f.send({action:'get'},f.child,'https://attacker.test');expect(api.workHours).not.toHaveBeenCalled();await f.send({action:'set',key:'secret',value:'x'});expect(api.changeWorkHours).not.toHaveBeenCalled();expect(f.child.postMessage).toHaveBeenCalledWith(expect.objectContaining({error:expect.any(String)}),'*')
 })
+it('bridges pause/resume with CSRF and revision and returns the confirmed shared status', async () => {
+ const f = fixture()
+ vi.mocked(api.session).mockResolvedValue({csrf: 'csrf'} as never)
+ vi.mocked(api.changeWorkHours).mockResolvedValue({revision: 5, autoPaused: true, totals: {}, timer: null, serverNow: 1000})
+ await f.send({action: 'command', command: 'pause', expectedRevision: 4})
+ expect(api.changeWorkHours).toHaveBeenCalledWith({action: 'pause', expectedRevision: 4}, 'csrf')
+ expect(f.child.postMessage).toHaveBeenLastCalledWith(expect.objectContaining({values: expect.objectContaining({'flint-software-working-hours-paused-v1': 'true'})}), '*')
+ vi.mocked(api.changeWorkHours).mockRejectedValue(new Error('409: changed on another device'))
+ await f.send({action: 'command', command: 'resume', expectedRevision: 4})
+ expect(f.child.postMessage).toHaveBeenLastCalledWith(expect.objectContaining({error: '409: changed on another device'}), '*')
+})

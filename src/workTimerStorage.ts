@@ -11,13 +11,14 @@ export function attachWorkTimerStorage(frame: () => Window | null) {
     try {
       let result
       if (input.action === 'get') result = await api.workHours()
-      else if (input.action === 'command' && ['start', 'stop', 'replace-totals'].includes(input.command)) {
+      else if (input.action === 'command' && ['start', 'stop', 'pause', 'resume', 'replace-totals'].includes(input.command)) {
         const session = await api.session()
         result = await api.changeWorkHours({ action: input.command, expectedRevision: input.expectedRevision, ...(input.command === 'replace-totals' ? { totals: input.totals } : {}) }, session.csrf)
       } else { reply({ error: 'Invalid working-hours request' }); return }
       reply({ shared: true, revision: result.revision, serverNow: result.serverNow, values: {
         'flint-software-working-hours-overrides-v1': JSON.stringify(result.totals),
         'flint-software-working-hours-timer-v1': JSON.stringify(result.timer),
+        'flint-software-working-hours-paused-v1': JSON.stringify(result.autoPaused ?? false),
       } })
     } catch (error) { reply({ error: error instanceof Error ? error.message : 'Không kết nối được dữ liệu chung. Hãy thử lại.' }) }
   }

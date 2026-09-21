@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Working hours · Flint Software</title>
+<style>
+:root{color-scheme:dark;--bg:#101714;--panel:#19231e;--line:#34443a;--ink:#eef3df;--muted:#abb9ac;--accent:#d3f488}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,sans-serif}main{max-width:1160px;margin:auto;padding:44px 26px}header{display:flex;justify-content:space-between;gap:24px;align-items:center}.eyebrow{color:var(--accent);letter-spacing:2px;font-size:12px;text-transform:uppercase}h1{font-size:clamp(32px,5vw,52px);letter-spacing:-2px;line-height:1.1;margin:12px 0}h2{font-size:22px;margin:0}p{color:var(--muted)}input{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;width:100%}.editor-grid{display:grid;grid-template-columns:2fr 1fr 1fr;gap:14px}.editor-grid label{font-size:13px;color:var(--muted)}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}.primary{background:var(--accent);color:var(--bg)}#edit-status{min-height:24px}button,select{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:10px 14px;cursor:pointer}button:disabled{opacity:.45;cursor:not-allowed}button:hover,select:focus{border-color:var(--accent)}.notice{border-left:3px solid var(--accent);padding:12px 18px;background:#202c23;font-size:14px;margin:28px 0}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.card,.panel{border:1px solid var(--line);border-radius:16px;background:var(--panel);padding:22px}.card label{font-size:13px;color:var(--muted)}.metric{font-size:34px;font-weight:650;letter-spacing:-1px;margin:12px 0 6px}.detail{font-size:12px;color:var(--muted)}.panel{margin-top:22px}.section-head{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:22px}.bars{height:235px;display:flex;align-items:stretch;gap:8px;overflow-x:auto}.bar-column{flex:1;min-width:22px;display:flex;flex-direction:column;align-items:center;justify-content:flex-end}.bar-track{height:190px;width:100%;display:flex;align-items:flex-end;border-bottom:1px solid var(--line)}.bar{width:100%;background:var(--accent);border-radius:5px 5px 0 0;min-height:2px}.bar.unknown{background:repeating-linear-gradient(45deg,transparent,transparent 4px,#536155 4px,#536155 5px);height:12px!important}.tick{font-size:10px;color:var(--muted);padding-top:10px;white-space:nowrap}.legend{font-size:12px;color:var(--muted);margin-top:16px}.dot{display:inline-block;width:8px;height:8px;background:var(--accent);border-radius:50%;margin-right:5px}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;text-align:left}th{font-size:12px;font-weight:500;color:var(--muted)}td,th{padding:13px 6px;border-bottom:1px solid var(--line)}td:nth-child(2){font-variant-numeric:tabular-nums}.badge{font-size:12px;background:#2b372c;border-radius:5px;padding:4px 8px;color:var(--accent)}.badge.unknown{color:var(--muted)}footer{font-size:12px;color:var(--muted);margin:26px 0}details{margin-top:20px;color:var(--muted);font-size:14px}summary{cursor:pointer;color:var(--ink)}code{overflow-wrap:anywhere}.empty{padding:40px;text-align:center;color:var(--muted)}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+main{padding-left:max(26px,env(safe-area-inset-left));padding-right:max(26px,env(safe-area-inset-right));padding-bottom:max(32px,env(safe-area-inset-bottom))}
+header>div,.card,.panel,.section-head>*,.editor-grid label{min-width:0}
+input,button,select{min-height:44px;font-size:16px;max-width:100%}
+input{min-width:0;min-inline-size:0;margin-top:6px}
+input[type=date]{display:block;-webkit-appearance:none;appearance:none}
+input::-webkit-date-and-time-value{text-align:left;min-height:1.5em}
+button{white-space:normal;overflow-wrap:anywhere;touch-action:manipulation}
+button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible,.bar-column:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.detail,#edit-status,footer{overflow-wrap:anywhere}
+.bars{max-width:100%;padding:4px 2px 8px;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch}
+.bar-column{min-width:44px;cursor:pointer}
+.table-wrap{max-width:100%}
+summary{min-height:44px;padding-block:10px}
+[hidden]{display:none!important}
+.period-totals{grid-template-columns:repeat(3,minmax(0,1fr))}.period-totals .metric{font-size:clamp(24px,3vw,34px);overflow-wrap:anywhere}
+@media(max-width:800px){
+ .cards{grid-template-columns:repeat(2,minmax(0,1fr))}
+ header{align-items:flex-start}
+ .section-head{flex-wrap:wrap}
+}
+@media(max-width:480px){
+ main{padding:24px max(16px,env(safe-area-inset-right)) max(24px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left))}
+ header,.section-head{flex-direction:column;align-items:stretch;gap:12px}
+ header{gap:8px}
+ h1{font-size:36px;letter-spacing:-1.5px}
+ h2{font-size:20px;line-height:1.3}
+ .eyebrow{font-size:11px;letter-spacing:1.3px}
+ .cards{gap:10px}
+ .period-totals{grid-template-columns:1fr}
+ .card{padding:14px}
+ .card label{font-size:12px}
+ .metric{font-size:27px;line-height:1.2;margin-top:10px}
+ .panel{padding:16px;margin-top:16px}
+ .notice{margin:20px 0;padding:12px 14px}
+ .section-head{margin-bottom:16px}
+ .editor-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+ .editor-grid label:first-child{grid-column:1/-1}
+ .editor-grid label{font-size:14px}
+ .actions{flex-direction:column;align-items:stretch}
+ .actions button,header>button,select{width:100%}
+ table{table-layout:fixed;font-size:13px}
+ th,td{padding:12px 3px;overflow-wrap:anywhere}
+ th:first-child,td:first-child{width:42%}
+ th:nth-child(2),td:nth-child(2){width:28%}
+ th:last-child,td:last-child{width:30%}
+ .badge{font-size:11px;padding:4px 5px}
+ .legend{line-height:1.8}
+}
+@media(max-width:359px){.cards{grid-template-columns:1fr}}
+@media print{body{background:white;color:black}.panel,.card{background:white}button,select,#editor{display:none}}
+</style></head>
+<body><main><header><div><div class="eyebrow">Flint Software / Personal time</div><h1>Your working rhythm.</h1><p>Daily hours, with a clear view of the bigger picture.</p></div><button id="export">↓ Export daily CSV</button></header>
+<div class="notice"><strong>Automatic tracking with reading time.</strong> Gaps of up to <span id="reading-allowance">60</span> minutes between activities count as work, including time spent reading. Longer breaks are excluded. Editing a total preserves your tracking setting; while active, later activity adds to your adjusted hours.</div>
+<section class="panel" id="auto-tracking"><div class="section-head"><div><h2>Ước tính tự động</h2><span id="auto-state" class="detail" role="status" aria-live="polite">Đang kết nối…</span></div><button id="auto-toggle" class="primary" disabled>Tạm dừng</button></div><p class="detail">Tạm dừng chốt tổng giờ và dừng cả bộ đếm đang chạy. Tiếp tục chỉ tính hoạt động mới, không cộng bù thời gian đã dừng.</p><p id="auto-status" role="status" aria-live="polite"></p></section>
+<div class="cards" id="cards"></div>
+<section class="panel"><div class="section-head"><h2>Tổng giờ làm việc</h2><span class="detail">Kỳ hiện tại · gồm hôm nay · giờ Việt Nam</span></div><div class="cards period-totals" id="period-totals"></div><p class="detail">Tuần tính từ thứ Hai; tháng và năm theo lịch. Tổng chỉ cộng ngày có dữ liệu, sau các điều chỉnh của bạn. Ngày thiếu dữ liệu không được coi là 0 giờ.</p></section>
+<section class="panel" id="work-timer"><div class="section-head"><h2>Bộ đếm thời gian</h2><span class="detail" id="timer-state">Chưa bắt đầu</span></div>
+<div class="metric" id="timer-elapsed" role="timer" aria-label="Thời gian của phiên đang tính">00:00:00</div>
+<div class="actions"><button class="primary" id="timer-start">Bắt đầu tính</button><button id="timer-stop" disabled>Dừng</button></div>
+<p id="timer-status" role="status" aria-live="polite"></p>
+<p class="detail">Đồng hồ chạy đến khi bạn bấm Dừng, kể cả khi đọc tài liệu, Codex xử lý, chuyển ứng dụng hoặc đóng trang. Khi dừng, thời gian phiên được cộng vào tổng đã có lúc bắt đầu để không cộng trùng; sau đó ước tính tự động tiếp tục cộng thời gian mới. Qua nửa đêm, giờ được chia theo từng ngày Việt Nam.</p>
+<p class="detail">Cả hai máy dùng chung một phiên và tổng giờ. Thay đổi được lưu vào file trên máy chủ và đồng bộ tối đa khoảng 5 giây. Không cần tải CSV để đồng bộ.</p></section>
+<section class="panel" id="editor"><div class="section-head"><h2>Adjust daily hours</h2><span class="detail">Daily edits preserve your tracking setting</span></div>
+<form id="hours-form"><div class="editor-grid"><label>Date<input id="edit-date" type="date" required></label><label>Hours<input id="edit-hours" type="number" inputmode="numeric" min="0" max="24" step="1" required value="0"></label><label>Minutes<input id="edit-minutes" type="number" inputmode="numeric" min="0" max="59" step="1" required value="0"></label></div><div class="actions"><button class="primary" type="submit">Save my time</button></div></form>
+<p id="edit-status" role="status" aria-live="polite"></p>
+<p class="detail">Giờ nhập tay được lưu trong file dữ liệu chung trên máy chủ. Cả hai máy đọc cùng một nguồn. CSV chỉ dùng để xuất hoặc nhập dữ liệu.</p>
+<div class="actions"><button id="download-hours">Download hours CSV</button><button id="import-hours">Import hours CSV</button><input id="import-file" type="file" accept=".csv,text/csv" hidden></div></section>
+
+<section class="panel"><div class="section-head"><h2>Daily activity</h2><select id="range" aria-label="Chart date range"><option value="7" selected>Last 7 complete days</option><option value="30">Last 30 complete days</option><option value="month">Previous calendar month</option><option value="all">All recorded history</option></select></div><div id="chart" class="bars" role="img" aria-label="Daily working hours chart; exact values in daily log below"></div><div class="legend"><span class="dot"></span>Working hours &nbsp; ▧ Unknown · Swipe the chart; tap a bar for hours.</div><p class="detail" id="chart-selection" role="status" aria-live="polite"></p><p class="detail" id="chart-summary"></p></section>
+<section class="panel"><div class="section-head"><h2>Last 5 complete days</h2><span class="detail">Today’s partial total is shown above</span></div><div class="table-wrap"><table><thead><tr><th>Date · Vietnam time</th><th>Working time</th></tr></thead><tbody id="recent"></tbody></table></div></section>
+<section class="panel"><div class="section-head"><h2>Full daily log</h2><span class="detail" id="coverage"></span></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Working time</th></tr></thead><tbody id="history"></tbody></table></div></section>
+<details><summary>How tracking and averages work</summary><p>Every day has one total. Editing it adds an adjustment while automatic tracking continues. Use Bắt đầu tính / Dừng to track a shared timed session. Activity timestamps from all local active and archived Codex sessions are combined into one timeline. Gaps up to <span id="method-allowance">60</span> minutes count as work, allowing for reading and switching conversations. Longer gaps are excluded in full. Time after the latest activity is counted only if another activity arrives within the allowance; simply leaving a session open does not keep adding hours. Each minute counts once, and intervals crossing midnight are split in Asia/Ho_Chi_Minh time. These are estimates: the system cannot distinguish reading from a short break or assistant execution. Days with no recorded evidence remain unknown; later activity continues adding to your adjusted total.</p><p>Averages divide recorded hours by days with recorded hours, including zero-hour days. Unknown dates are excluded. The 7-day and 30-day averages use complete days before today. “Last month” means the last 30 complete days; the chart also offers the previous calendar month. All-time means available local history and includes today’s partial total.</p><p>Connected dashboards synchronize the shared timer and daily totals every 5 seconds. Generated estimates and vault logs refresh every 15 minutes. A standalone downloaded HTML file is a read-only snapshot.</p><p>Use the daily-hours form to adjust your total, or enter 0 for a day off. All saves go to the shared server file. CSV files are exports; importing a CSV through this dashboard updates the common totals.</p></details>
+<footer id="footer"></footer></main>
+<script id="work-data" type="application/json">__WORK_DATA__</script>
+<script>
+(async()=>{
+async function openTimerStorage(){
+  if(window.parent===window)return {readonly:true,getItem:()=>null,setItem:async()=>{throw Error('Mở dashboard trong Codex để lưu vào dữ liệu chung.')}};
+  const channel='flint-work-timer-storage',pending=new Map();let serial=0,cache={},revision=-1,offset=0;
+  window.addEventListener('message',event=>{
+    if(event.source!==window.parent||event.data?.channel!==channel)return;
+    const request=pending.get(event.data.id);if(!request)return;
+    pending.delete(event.data.id);clearTimeout(request.timeout);
+    event.data.error?request.reject(Error(event.data.error)):request.resolve(event.data);
+  });
+  const request=(action,extra={})=>new Promise((resolve,reject)=>{
+    const id=String(++serial),timeout=setTimeout(()=>{pending.delete(id);reject(Error('Không kết nối được dữ liệu chung. Tải lại Codex rồi mở lại dashboard.'))},15000);
+    pending.set(id,{resolve,reject,timeout});window.parent.postMessage({channel,id,action,...extra},'*');
+  });
+  function accept(result){if(!result.shared)throw Error('Tải lại Codex để dùng dữ liệu chung thay cho bộ nhớ riêng của máy.');if(result.revision>=revision){cache=result.values;revision=result.revision;offset=result.serverNow-Date.now()}}
+  const refresh=async()=>accept(await request('get'));
+  const command=async(command,extra={})=>accept(await request('command',{command,expectedRevision:revision,...extra}));
+  await refresh();return {remote:true,shared:true,refresh,command,now:()=>Date.now()+offset,getItem:key=>cache[key]??null,
+    setItem:async(key,value)=>{if(key!=='flint-software-working-hours-overrides-v1')throw Error('Use timer start/stop');await command('replace-totals',{totals:JSON.parse(value)})}};
+}
+let workingStorage;
+document.getElementById('timer-start').disabled=true;
+document.getElementById('timer-status').textContent='Đang kết nối bộ nhớ…';
+try{workingStorage=await openTimerStorage()}catch(error){document.getElementById('timer-status').textContent=error.message;return}
+document.getElementById('timer-status').textContent='';
+const clockNow=()=>workingStorage.now?workingStorage.now():Date.now();
+const baseData=JSON.parse(document.getElementById('work-data').textContent); let data=JSON.parse(JSON.stringify(baseData)), byDate=new Map(data.days.map(d=>[d.date,d]));
+const el=id=>document.getElementById(id), iso=d=>d.toISOString().slice(0,10), today=new Date(data.today+'T00:00:00Z');
+function vietnamDay(ms){return iso(new Date(ms+7*60*60*1000))}
+function syncToday(){data.today=vietnamDay(clockNow());today.setTime(Date.parse(data.today+'T00:00:00Z'));el('edit-date').max=data.today}
+syncToday();
+function dayBefore(n){const d=new Date(today);d.setUTCDate(d.getUTCDate()-n);return iso(d)}
+function row(date){return byDate.get(date)||{date,hours:null,source:'unknown'}}
+function last(n){return Array.from({length:n},(_,i)=>row(dayBefore(n-i)))}
+function duration(h){if(h===null)return 'Unknown';const m=Math.round(h*60);return `${Math.floor(m/60)}h ${String(m%60).padStart(2,'0')}m`}
+function stats(rows){const known=rows.filter(d=>d.hours!==null);return {n:known.length,total:known.reduce((s,d)=>s+d.hours,0),days:rows.length}}
+function card(label,rows){const s=stats(rows);return `<div class="card"><label>${label}</label><div class="metric">${s.n?duration(s.total/s.n):'No data'}</div><div class="detail">${duration(s.total)} recorded · ${s.n}/${s.days} days with data</div></div>`}
+function periodRows(period){
+ const start=new Date(today);
+ if(period==='week')start.setUTCDate(start.getUTCDate()-(start.getUTCDay()+6)%7);
+ else if(period==='month')start.setUTCDate(1);
+ else if(period==='year'){start.setUTCMonth(0,1)}
+ const rows=[];for(let d=new Date(start);d<=today;d.setUTCDate(d.getUTCDate()+1))rows.push(row(iso(d)));
+ return rows;
+}
+function totalCard(label,period){const rows=periodRows(period),s=stats(rows);return `<div class="card"><label>${label}</label><div class="metric">${s.n?duration(s.total):'Chưa có dữ liệu'}</div><div class="detail">${rows[0].date} → ${data.today}<br>${s.n}/${s.days} ngày có dữ liệu</div></div>`}
+function render(){
+el('period-totals').innerHTML=totalCard('Tuần này · tổng giờ','week')+totalCard('Tháng này · tổng giờ','month')+totalCard('Năm nay · tổng giờ','year');
+el('cards').innerHTML=`<div class="card"><label>Today · ${data.today} · partial</label><div class="metric">${duration(row(data.today).hours)}</div><div class="detail">Asia/Ho_Chi_Minh</div></div>`+card('All-time daily average',data.days)+card('Last 7 days · daily average',last(7))+card('Last month (30 days) · daily average',last(30));
+function table(rows){return rows.map(d=>`<tr><td>${d.date}${d.date===data.today?' · in progress':''}</td><td>${duration(d.hours)}</td></tr>`).join('')}
+el('recent').innerHTML=table(last(5).reverse());el('history').innerHTML=table([...data.days].reverse());el('coverage').textContent=data.days.length?`Available since ${data.days[0].date}`:'No history available';
+draw();}
+function draw(){let rows;const range=el('range').value;if(range==='all')rows=data.days;else if(range==='month'){const first=new Date(today);first.setUTCDate(1);const start=new Date(first);start.setUTCMonth(start.getUTCMonth()-1);rows=[];for(let d=new Date(start);d<first;d.setUTCDate(d.getUTCDate()+1))rows.push(row(iso(d)))}else rows=last(Number(range));const max=Math.max(1,...rows.map(d=>d.hours||0));el('chart').innerHTML=rows.map(d=>`<div class="bar-column" tabindex="0" aria-label="${d.date}: ${duration(d.hours)}" title="${d.date}: ${duration(d.hours)}"><div class="bar-track"><div class="bar ${d.source}" style="height:${100*(d.hours||0)/max}%"></div></div><div class="tick">${d.date.slice(5)}</div></div>`).join('');const s=stats(rows);el('chart-summary').textContent=`${rows.length?rows[0].date+' – '+rows[rows.length-1].date:'No history'} · ${duration(s.total)} recorded · ${s.n}/${s.days} days with data · Daily average: ${s.n?duration(s.total/s.n):'unknown'}.`}
+el('range').addEventListener('change',()=>{el('chart-selection').textContent='';draw()});
+function selectBar(event){const bar=event.target.closest('.bar-column');if(bar)el('chart-selection').textContent=bar.getAttribute('aria-label')}
+el('chart').addEventListener('click',selectBar);
+el('chart').addEventListener('focusin',selectBar);
+el('footer').textContent=`Updated ${new Date(data.generated).toLocaleString('en-GB',{timeZone:data.timezone})} Vietnam time · ${data.sourceFiles} local session files · Private, offline dashboard`;
+el('export').onclick=()=>{const csv='date,hours\n'+data.days.map(d=>`${d.date},${d.hours===null?'':d.hours.toFixed(4)}`).join('\n');const url=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));const a=document.createElement('a');a.href=url;a.download='daily-hours.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
+
+el('reading-allowance').textContent=data.gapMinutes;el('method-allowance').textContent=data.gapMinutes;
+const storageKey='flint-software-working-hours-overrides-v1';let overrides={};
+function status(message){el('edit-status').textContent=message}
+function validEntry(d,h){return /^\d{4}-\d{2}-\d{2}$/.test(d)&&!Number.isNaN(Date.parse(d+'T00:00:00Z'))&&iso(new Date(d+'T00:00:00Z'))===d&&d<=data.today&&typeof h==='number'&&Number.isFinite(h)&&h>=0&&h<=24}
+try{const stored=JSON.parse(workingStorage.getItem(storageKey)||workingStorage.getItem(['for','ging','-software-working-hours-overrides-v1'].join(''))||'{}');for(const [d,h]of Object.entries(stored)){if(validEntry(d,h))overrides[d]=h}}catch(e){status('Browser storage is unavailable. Download your CSV to keep changes.')}
+function applyOverrides(){const map=new Map(baseData.days.map(d=>[d.date,workingStorage.shared?{...d,hours:null,source:'unknown'}:{...d}]));for(const[d,h]of Object.entries({...overrides,...timerTotals(timerState,clockNow())}))map.set(d,{date:d,hours:h,source:'recorded'});const keys=[...map.keys()].sort();const rows=[];if(keys.length){for(let d=new Date(keys[0]+'T00:00:00Z');iso(d)<=data.today;d.setUTCDate(d.getUTCDate()+1)){const key=iso(d);rows.push(map.get(key)||{date:key,hours:null,source:'unknown'})}}data.days=rows;byDate=new Map(rows.map(d=>[d.date,d]));render()}
+async function persist(next){await workingStorage.setItem(storageKey,JSON.stringify(next));overrides=next;applyOverrides()}
+function hoursCSV(next=overrides){const rows=new Map(workingStorage.shared?[]:baseData.days.filter(d=>d.hours!==null).map(d=>[d.date,d.hours]));for(const[d,h]of Object.entries(next))rows.set(d,h);return 'date,hours\n'+[...rows].sort(([a],[b])=>a.localeCompare(b)).map(([d,h])=>`${d},${h}`).join('\n')+'\n'}
+function parseCSV(text){const lines=text.replace(/^\uFEFF/,'').trim().split(/\r?\n/);if(lines.shift().trim()!=='date,hours')throw Error('CSV must have the header date,hours.');const result={};for(const line of lines){if(!line.trim())continue;const fields=line.split(',');const [d,h]=fields;const hours=Number(h);if(fields.length!==2||!h.trim()||!validEntry(d,hours))throw Error('Invalid CSV row: '+line);if(d in result)throw Error('Duplicate date: '+d);result[d]=hours}return result}
+function downloadCSV(text,name){const url=URL.createObjectURL(new Blob([text],{type:'text/csv'}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
+function fillEditor(){const d=row(el('edit-date').value),minutes=Math.round((d.hours||0)*60);el('edit-hours').value=Math.floor(minutes/60);el('edit-minutes').value=minutes%60}
+el('edit-date').value=data.today;el('edit-date').max=data.today;el('edit-date').addEventListener('change',fillEditor);
+el('hours-form').addEventListener('submit',async event=>{event.preventDefault();const d=el('edit-date').value,h=Number(el('edit-hours').value),m=Number(el('edit-minutes').value),total=h+m/60;if(!Number.isInteger(h)||!Number.isInteger(m)||m<0||m>59||!validEntry(d,total)){status('Enter a valid date through today and a total between 0 and 24 hours.');return}const next={...overrides,[d]:total};try{await persist(next);status(`Đã lưu ${duration(total)} cho ${d} vào dữ liệu chung.`)}catch(e){status('Chưa lưu được thay đổi. Tải lại dữ liệu rồi thử lại.')}});
+el('download-hours').onclick=()=>{downloadCSV(hoursCSV(),'working-hours.csv');status('Đã xuất bản sao CSV của tổng giờ chung.')};
+el('import-hours').onclick=()=>el('import-file').click();el('import-file').onchange=async()=>{const file=el('import-file').files[0];if(!file)return;try{const imported=parseCSV(await file.text());await persist({...overrides,...imported});fillEditor();status(`Imported ${Object.keys(imported).length} daily totals into the shared database.`)}catch(e){status(e.message)}el('import-file').value=''};
+
+const timerKey='flint-software-working-hours-timer-v1';
+let timerState=null,busy=false;
+const autoPaused=()=>workingStorage.shared?JSON.parse(workingStorage.getItem('flint-software-working-hours-paused-v1')||'false'):Boolean(baseData.autoPaused);
+function readTimer(){
+  const value=JSON.parse(workingStorage.getItem(timerKey)||'null');
+  if(value===null)return null;
+  if(!value||!Number.isFinite(value.startedAt)||value.startedAt<0||!value.baseline||typeof value.baseline!=='object'||Array.isArray(value.baseline)||Object.entries(value.baseline).some(([d,h])=>!validEntry(d,h))||(value.endedAt!=null&&(!Number.isFinite(value.endedAt)||value.endedAt<value.startedAt)))throw Error('Dữ liệu bộ đếm không hợp lệ.');
+  return value;
+}
+function timerTotals(state,now){
+  if(!state)return {};
+  const result={},end=Math.max(state.startedAt,state.endedAt??now);
+  for(let cursor=state.startedAt;cursor<end;){
+    const day=vietnamDay(cursor),midnight=Date.parse(day+'T00:00:00+07:00')+86400000,stop=Math.min(end,midnight);
+    result[day]=Math.min(24,(state.baseline[day]||0)+(stop-cursor)/3600000);
+    cursor=stop;
+  }
+  return result;
+}
+function timerMessage(text){el('timer-status').textContent=text}
+function reloadOverrides(){const stored=JSON.parse(workingStorage.getItem(storageKey)||'{}');for(const[d,h]of Object.entries(stored))if(!validEntry(d,h))throw Error('Dữ liệu giờ làm không hợp lệ.');overrides=stored}
+function timerDisplay(){
+  const active=Boolean(timerState),elapsed=active?Math.max(0,Math.floor(((timerState.endedAt??clockNow())-timerState.startedAt)/1000)):0;
+  el('timer-elapsed').textContent=[Math.floor(elapsed/3600),Math.floor(elapsed%3600/60),elapsed%60].map(n=>String(n).padStart(2,'0')).join(':');
+  el('timer-state').textContent=timerState?.endedAt!=null?'Đã dừng · chờ lưu':active?'Đang tính':'Chưa bắt đầu';
+  el('auto-state').textContent=autoPaused()?'Đã tạm dừng · giờ không tự tăng':'Đang hoạt động';
+  el('auto-toggle').textContent=busy?'Đang lưu…':autoPaused()?'Tiếp tục':'Tạm dừng';
+  el('auto-toggle').disabled=busy||!workingStorage.shared;
+  el('auto-toggle').setAttribute('aria-busy',String(busy));
+  el('timer-start').disabled=busy||active||autoPaused()||Boolean(workingStorage.readonly);el('timer-stop').disabled=busy||!active;
+  // Freeze daily edits during a running session so its starting total stays unambiguous.
+  document.querySelectorAll('#hours-form input, #hours-form button, #download-hours, #import-hours, #export').forEach(node=>{node.disabled=busy||active||Boolean(workingStorage.readonly)});
+}
+async function timerAction(action,report=timerMessage){
+ if(busy||!workingStorage.shared)return;busy=true;timerDisplay();
+ try{
+ const run=async()=>{try{syncToday();if(workingStorage.refresh)await workingStorage.refresh();reloadOverrides();timerState=readTimer();await action();applyOverrides();timerDisplay()}catch(error){if(workingStorage.shared){try{await workingStorage.refresh();reloadOverrides();timerState=readTimer();applyOverrides()}catch{}}report('Chưa lưu được: '+error.message);timerDisplay()}};
+ if(!workingStorage.remote&&navigator.locks?.request){try{await navigator.locks.request(timerKey,run)}catch(error){if(error.name==='SecurityError')await run();else timerMessage(error.message)}}else await run();
+ }finally{busy=false;timerDisplay()}
+}
+el('auto-toggle').onclick=()=>{
+ const command=autoPaused()?'resume':'pause';
+ const report=text=>{el('auto-status').textContent=text};report('');
+ return timerAction(async()=>{
+  await workingStorage.command(command);reloadOverrides();timerState=readTimer();
+  report(command==='pause'?'Đã tạm dừng và lưu tổng giờ.':'Đã tiếp tục ước tính từ bây giờ.');
+ },report);
+};
+el('timer-start').onclick=()=>timerAction(async()=>{
+ if(timerState){timerMessage('Đã có một phiên chung đang chạy.');return}
+ if(workingStorage.shared){await workingStorage.command('start');reloadOverrides();timerState=readTimer();timerMessage('Đang tính · phiên chung trên cả hai máy.');return}
+ applyOverrides();const startedAt=clockNow(),day=vietnamDay(startedAt),baseline={[day]:row(day).hours||0};
+ const next={startedAt,baseline};await workingStorage.setItem(timerKey,JSON.stringify(next));timerState=next;
+ timerMessage('Đang tính. Bấm Dừng khi bạn kết thúc công việc.');
+});
+el('timer-stop').onclick=()=>timerAction(async()=>{
+ if(!timerState){timerMessage('Không có phiên đang chạy.');return}
+ if(workingStorage.shared){await workingStorage.command('stop');reloadOverrides();timerState=readTimer();timerMessage('Đã dừng và lưu vào file dữ liệu chung trong vault.');return}
+ const stopped={...timerState,endedAt:Math.max(timerState.startedAt,timerState.endedAt??clockNow())};
+ await workingStorage.setItem(timerKey,JSON.stringify(stopped));timerState=stopped;
+ const next={...overrides,...timerTotals(stopped,stopped.endedAt)};
+ // Absolute totals make retrying a failed save safe: no double addition.
+ await workingStorage.setItem(storageKey,JSON.stringify(next));overrides=next;
+ await workingStorage.removeItem(timerKey);timerState=null;
+ timerMessage('Đã dừng và lưu tổng giờ trong trình duyệt. Bạn có thể bắt đầu phiên tiếp theo.');
+});
+try{timerState=readTimer()}catch(error){timerMessage(error.message)}
+window.addEventListener('storage',event=>{if([timerKey,storageKey].includes(event.key)){try{syncToday();reloadOverrides();timerState=readTimer();applyOverrides();timerDisplay()}catch(error){timerMessage(error.message)}}});
+function refreshTimer(){syncToday();if(timerState){applyOverrides()}timerDisplay()}
+window.setInterval(refreshTimer,1000);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')refreshTimer()});
+applyOverrides();fillEditor();timerDisplay();
+if(workingStorage.readonly)timerMessage('Bản xem tĩnh. Mở dashboard từ Codex trên mỗi máy để dùng chung đồng hồ và tổng giờ.');
+let syncing=false;
+async function syncShared(){if(!workingStorage.shared||syncing||busy)return;syncing=true;try{await workingStorage.refresh();syncToday();reloadOverrides();timerState=readTimer();applyOverrides();timerDisplay()}catch(error){timerMessage(error.message)}finally{syncing=false}}
+window.setInterval(syncShared,5000);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')void syncShared()});
+})().catch(error=>{document.getElementById('timer-status').textContent=error.message});
+</script></body></html>

@@ -225,6 +225,14 @@ describe('Codex Remote HTTP boundary', () => {
     expect((await fetchLocal(port, '/api/working-hours', { ...options, method: 'POST', body: changeHours })).status).toBe(200)
     expect((await fetchLocal(port, '/api/working-hours', { ...options, method: 'POST', body: changeHours })).status).toBe(409)
     expect((await fetchLocal(port, '/api/working-hours', { ...options, csrf: 'wrong', method: 'POST', body: changeHours })).status).toBe(403)
+    const pauseHours = { action: 'pause', expectedRevision: 1 }
+    expect((await fetchLocal(port, '/api/working-hours', { ...options, csrf: 'wrong', method: 'POST', body: pauseHours })).status).toBe(403)
+    expect((await fetchLocal(port, '/api/working-hours', { ...options, origin: 'https://attacker.test', method: 'POST', body: pauseHours })).status).toBe(403)
+    const pausedHours = await fetchLocal(port, '/api/working-hours', { ...options, method: 'POST', body: pauseHours })
+    expect(pausedHours.status).toBe(200)
+    expect(JSON.parse(pausedHours.body)).toMatchObject({autoPaused: true, timer: null, revision: 2})
+    expect((await fetchLocal(port, '/api/working-hours', { ...options, method: 'POST', body: pauseHours })).status).toBe(409)
+    expect(JSON.parse((await fetchLocal(port, '/api/working-hours', { ...options, method: 'POST', body: {action: 'resume', expectedRevision: 2} })).body)).toMatchObject({autoPaused: false, timer: null, revision: 3})
     const presenceBody = { clientId: 'test-tab', visible: true, processing: false }
     expect((await fetchLocal(port, '/api/work-presence', { ...options, method: 'POST', body: presenceBody })).status).toBe(200)
     expect((await fetchLocal(port, '/api/work-presence', { ...options, csrf: 'wrong', method: 'POST', body: presenceBody })).status).toBe(403)
