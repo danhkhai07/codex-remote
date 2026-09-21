@@ -155,9 +155,10 @@ export function ConversationFolders({ snapshot, error, threads, selectedId, sear
   const [dialog, setDialog] = useState<FolderDialogState | null>(null)
   const folders = useMemo(() => snapshot ? groupConversations(threads, snapshot) : [], [threads, snapshot])
   const selectedGroup = selectedId ? snapshot?.assignments[selectedId] ?? 'ungrouped' : null
+  const selectedIsLeader = snapshot?.groups.some(group => group.leaderThreadId === selectedId) ?? false
   useEffect(() => {
-    if (selectedGroup) setCollapsed(current => current[selectedGroup] ? { ...current, [selectedGroup]: false } : current)
-  }, [selectedId, selectedGroup])
+    if (selectedGroup && !selectedIsLeader) setCollapsed(current => current[selectedGroup] ? { ...current, [selectedGroup]: false } : current)
+  }, [selectedId, selectedGroup, selectedIsLeader])
   return <>
     {snapshot && <div className="conversation-folders-toolbar">
       <span>Folders</span>
@@ -172,6 +173,7 @@ export function ConversationFolders({ snapshot, error, threads, selectedId, sear
       if (searching && !grouped.length) return null
       const id = group?.id ?? 'ungrouped'
       const expanded = searching || !collapsed[id]
+      const visible = expanded ? grouped : grouped.filter(thread => thread.id === group?.leaderThreadId)
       return <section className="conversation-folder" key={id} aria-label={group?.name ?? 'Ungrouped'}>
         <div className="conversation-folder-heading">
           <button type="button" className="conversation-folder-toggle" aria-expanded={expanded}
@@ -184,8 +186,8 @@ export function ConversationFolders({ snapshot, error, threads, selectedId, sear
           {group && <FolderActions group={group} disabled={disabled} createDisabled={createDisabled} onCreate={() => { setCollapsed(current => ({ ...current, [id]: false })); onCreate(group.id) }}
             onContext={() => onContext(group.contextPath)} onEdit={kind => setDialog({ kind, group })} />}
         </div>
-        {expanded && <div className="conversation-folder-threads">
-          {grouped.map(thread => renderThread(thread, () => setDialog({ kind: 'move', thread })))}
+        {(expanded || visible.length > 0) && <div className="conversation-folder-threads">
+          {visible.map(thread => renderThread(thread, () => setDialog({ kind: 'move', thread })))}
           {!grouped.length && <p className="folder-empty">No conversations</p>}
         </div>}
       </section>

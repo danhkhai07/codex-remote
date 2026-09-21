@@ -22,7 +22,12 @@ export function groupConversations(threads: Thread[], snapshot: GroupSnapshot) {
     ;(bucket ?? ungrouped).push(thread)
   }
   return [
-    ...snapshot.groups.map(group => ({ group, threads: buckets.get(group.id)! })),
+    ...snapshot.groups.map(group => {
+      const members = buckets.get(group.id)!
+      const leaderIndex = members.findIndex(thread => thread.id === group.leaderThreadId)
+      if (leaderIndex > 0) members.unshift(...members.splice(leaderIndex, 1))
+      return { group, threads: members }
+    }),
     { group: null, threads: ungrouped },
   ]
 }

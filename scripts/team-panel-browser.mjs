@@ -41,7 +41,7 @@ try {
     })
     await page.route('**/api/threads', async route => {
       const json = await (await route.fetch()).json()
-      json.data.push({ ...json.data[0], id: 'worker', name: 'Fixture worker' })
+      json.data.unshift({ ...json.data[0], id: 'worker', name: 'Fixture worker', updatedAt: json.data[0].updatedAt + 1000 })
       await route.fulfill({ json })
     })
     await page.route('**/api/threads/worker', async route => {
@@ -69,6 +69,11 @@ try {
     const leaderTab = page.locator('.view-tabs').getByRole('button', { name: 'Leader', exact: true })
     const conversationTab = page.locator('.view-tabs').getByRole('button', { name: 'Conversation', exact: true })
     await composer.waitFor()
+    if ((await page.locator('.workspace-title h1').textContent()) !== 'Plan question fixture') {
+      if (viewport.width < 800) await page.getByRole('button', { name: 'Open conversations', exact: true }).click()
+      await page.locator('.thread-row').filter({ hasText: 'Plan question fixture' }).click()
+      await page.waitForFunction(() => document.querySelector('.workspace-title h1')?.textContent === 'Plan question fixture')
+    }
     await page.waitForFunction(() => document.querySelector('.workspace-content')?.scrollTop > 1000)
     const isOnscreen = locator => locator.evaluate(el => {
       const r = el.getBoundingClientRect()
@@ -93,7 +98,29 @@ try {
       }
     }
     await layout()
+    assert.match(await page.locator('.thread-row-title').first().textContent(), /Plan question fixture/, 'Leader is first despite newer worker')
     assert.equal(await team.isVisible(), false)
+    if (viewport.width < 800) await page.getByRole('button', { name: 'Open conversations', exact: true }).click()
+    const folder = page.locator('.conversation-folder').filter({ has: page.locator('.folder-name', { hasText: 'Fixture folder' }) })
+    const folderToggle = folder.locator('.conversation-folder-toggle')
+    await folderToggle.click()
+    assert.equal(await folderToggle.getAttribute('aria-expanded'), 'false')
+    assert.equal(await folder.locator('.thread-row').count(), 1, 'Collapsed folder retains only its leader')
+    assert.match(await folder.locator('.thread-row-title').textContent(), /Plan question fixture/)
+    const search = page.getByRole('searchbox')
+    await search.fill('Fixture worker')
+    assert.equal(await folder.locator('.thread-row').count(), 1)
+    assert.match(await folder.locator('.thread-row-title').textContent(), /Fixture worker/, 'Search does not force a nonmatching leader into results')
+    await search.fill('')
+    assert.equal(await folderToggle.getAttribute('aria-expanded'), 'false')
+    assert.match(await folder.locator('.thread-row-title').textContent(), /Plan question fixture/)
+    if (shots) await page.screenshot({ path: resolve(shots, `folder-collapsed-${viewport.width}x${viewport.height}.png`) })
+    await folder.locator('.thread-row').click()
+    assert.equal(await folderToggle.getAttribute('aria-expanded'), 'false', 'Opening leader keeps folder collapsed')
+    if (viewport.width < 800) await page.getByRole('button', { name: 'Open conversations', exact: true }).click()
+    await folderToggle.click()
+    assert.equal(await folder.locator('.thread-row').count(), 2)
+    if (viewport.width < 800) await folder.locator('.thread-row').first().click()
     if (shots) await page.screenshot({ path: resolve(shots, `conversation-${viewport.width}x${viewport.height}.png`) })
     await composer.fill('Draft stays while reviewing work')
     await transcript.focus(); await transcript.press('Home')
@@ -167,6 +194,13 @@ try {
     // Worker ownership, release and navigation.
     leaderId = 'worker'; revision++; paused = ['plan-fixture']
     await page.reload(); await composer.waitFor(); await leaderTab.click()
+    assert.match(await page.locator('.thread-row-title').first().textContent(), /Fixture worker/, 'Changing leader updates folder order')
+    if (viewport.width < 800) await page.getByRole('button', { name: 'Open conversations', exact: true }).click()
+    await folderToggle.click()
+    assert.equal(await folder.locator('.thread-row').count(), 1)
+    assert.match(await folder.locator('.thread-row-title').textContent(), /Fixture worker/)
+    await folderToggle.click()
+    if (viewport.width < 800) await page.getByRole('button', { name: 'Close conversations', exact: true }).click({ position: { x: viewport.width - 5, y: 500 } })
     await team.getByRole('button', { name: 'Cho leader giao việc trở lại', exact: true }).click()
     assert.deepEqual(actions.at(-1), { action: 'release' })
     await layout()

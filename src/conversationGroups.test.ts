@@ -27,4 +27,22 @@ describe('conversation folders', () => {
     expect(groupConversations(threads, { ...snapshot, groups: [] })).toEqual([{ group: null, threads }])
     expect(groupConversations([thread('third')], snapshot)[0].threads.map(thread => thread.id)).toEqual(['third'])
   })
+  it('pins each leader first while preserving other conversations and input order', () => {
+    const threads = ['first', 'orphan', 'second', 'third'].map(thread)
+    const withLeader = { ...snapshot, groups: snapshot.groups.map(group => ({ ...group, leaderThreadId: 'third' })) }
+    expect(groupConversations(threads, withLeader).map(bucket => bucket.threads.map(item => item.id)))
+      .toEqual([['third', 'first'], [], ['orphan', 'second']])
+    expect(threads.map(item => item.id)).toEqual(['first', 'orphan', 'second', 'third'])
+    const changed = { ...withLeader, groups: withLeader.groups.map(group => ({ ...group, leaderThreadId: 'first' })) }
+    expect(groupConversations(threads, changed)[0].threads.map(item => item.id)).toEqual(['first', 'third'])
+  })
+
+  it('does not inject a leader excluded by search or assigned to another folder', () => {
+    const withLeader = { ...snapshot, groups: snapshot.groups.map(group => ({ ...group, leaderThreadId: 'third' })) }
+    expect(groupConversations([thread('first')], withLeader)[0].threads.map(item => item.id)).toEqual(['first'])
+    expect(groupConversations([thread('first'), thread('third')], {
+      ...withLeader, assignments: { first: 'alpha', third: 'empty' },
+    }).map(bucket => bucket.threads.map(item => item.id))).toEqual([['first'], ['third'], []])
+  })
+
 })
