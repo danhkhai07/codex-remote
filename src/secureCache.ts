@@ -1,8 +1,9 @@
-import { CompactEncrypt, compactDecrypt } from 'jose'
+import { CompactEncrypt, compactDecrypt, decodeProtectedHeader } from 'jose'
 import { decode64, deriveKey, encode64, jsonBytes, randomId, text, utf8 } from '../server/secure-wire'
 import type { ResponseMeta } from '../server/secure-response'
 export const SECURE_CACHE_DB = 'codex-remote-cipher-cache-v1'
 const LIMIT = 64 * 1024 * 1024, ENTRY_LIMIT = 8 * 1024 * 1024, AGE = 7 * 86400000
+const MAX_ENTRIES = 1024, MAX_SCAN = 4096, MAX_PENDING = 16
 export type CachedMeta = { path: string; representation: string; response: ResponseMeta; expires: number }
 type RecordEntry = { id: string; namespace: string; bytes: number; touched: number; expires: number; meta: string; body: string }
 function database(): Promise<IDBDatabase> {
@@ -29,15 +30,27 @@ async function encrypted(key: CryptoKey, namespace: string, id: string, kind: st
 }
 async function decrypted(key: CryptoKey, namespace: string, id: string, kind: string, value: string) {
   if (typeof value !== 'string' || value.length > ENTRY_LIMIT) throw Error('Invalid cache')
-  const { protectedHeader: h, plaintext } = await compactDecrypt(value, key, { keyManagementAlgorithms: ['dir'], contentEncryptionAlgorithms: ['A256GCM'] })
+  const h = decodeProtectedHeader(value)
   if (Object.keys(h).sort().join(',') !== 'alg,enc,id,kind,ns,typ' || h.typ !== 'codex-cache-v1' || h.ns !== namespace || h.id !== id || h.kind !== kind) throw Error('Invalid cache')
+  const { plaintext } = await compactDecrypt(value, key, { keyManagementAlgorithms: ['dir'], contentEncryptionAlgorithms: ['A256GCM'], maxDecompressedLength: 0 })
   return plaintext
+}
+/** Treat IDB rows as untrusted; never let negative/NaN accounting bypass limits. */
+function validEntry(value: unknown): value is RecordEntry {
+  const row = value as RecordEntry | undefined
+  return Boolean(row && typeof row.id === 'string' && row.id.length <= 256 && typeof row.namespace === 'string'
+    && row.id.startsWith(row.namespace + ':') && typeof row.meta === 'string' && typeof row.body === 'string'
+    && Number.isSafeInteger(row.bytes) && row.bytes > 0 && row.bytes <= ENTRY_LIMIT
+    && row.bytes === row.meta.length + row.body.length && Number.isFinite(row.touched) && row.touched >= 0
+    && Number.isFinite(row.expires) && row.expires >= 0)
 }
 export class CipherCache {
   #key?: CryptoKey
   #index?: CryptoKey
   #epoch = 0
   #writes: Promise<void> = Promise.resolve()
+  #pending = 0
+  #pendingBytes = 0
   constructor(readonly namespace: string) {}
   async unlock(owner: CryptoKey) {
     const epoch = ++this.#epoch
@@ -73,9 +86,9 @@ export class CipherCache {
       const key = this.#key, epoch = this.#epoch
       if (!key) return null
       const entry = await transaction<RecordEntry | undefined>('entries', 'readonly', s => s.get(this.namespace + ':' + id))
-      if (!entry || entry.namespace !== this.namespace || entry.expires < Date.now() || entry.bytes > ENTRY_LIMIT) return null
+      if (!validEntry(entry) || entry.id !== this.namespace + ':' + id || entry.namespace !== this.namespace || entry.expires < Date.now()) return null
       const meta = JSON.parse(text.decode(await decrypted(key, this.namespace, id, 'meta', entry.meta))) as CachedMeta
-      if (meta.expires < Date.now() || !meta.response?.revision || epoch !== this.#epoch) return null
+      if (!Number.isFinite(meta.expires) || meta.expires < Date.now() || typeof meta.path !== 'string' || typeof meta.representation !== 'string' || !meta.response?.revision || epoch !== this.#epoch) return null
       return { entry, meta }
     } catch { return null }
   }
@@ -86,45 +99,64 @@ export class CipherCache {
     if (epoch !== this.#epoch) throw Error('Cache locked')
     // Touch only the current row in the same transaction; never resurrect a
     // purged/evicted entry or race logout with an untracked background write.
+    if (this.#pending < MAX_PENDING) {
+    this.#pending++
     this.#writes = this.#writes.then(async () => {
       if (epoch !== this.#epoch) return
       const db = await database()
       try { await new Promise<void>((resolve, reject) => {
         const tx = db.transaction('entries', 'readwrite'), store = tx.objectStore('entries'), request = store.get(cached.entry.id)
         const timer = setTimeout(() => { try { tx.abort() } catch { /* closed */ }; reject(Error('Cache timeout')) }, 3000)
-        request.onsuccess = () => { try { const row = request.result as RecordEntry | undefined; if (epoch === this.#epoch && row?.body === cached.entry.body) store.put({ ...row, touched: Date.now() }) } catch { tx.abort(); reject(Error('Cache unavailable')) } }
+        request.onsuccess = () => { try { const row = request.result as RecordEntry | undefined; if (epoch === this.#epoch && validEntry(row) && row.body === cached.entry.body) store.put({ ...row, touched: Date.now() }) } catch { tx.abort(); reject(Error('Cache unavailable')) } }
         tx.oncomplete = () => { clearTimeout(timer); resolve() }; tx.onabort = tx.onerror = () => { clearTimeout(timer); reject(Error('Cache unavailable')) }
       }) } finally { db.close() }
-    }).catch(() => {})
+    }).catch(() => {}).finally(() => { this.#pending-- })
+    }
     return result
   }
   async put(id: string, meta: CachedMeta, body: Uint8Array) {
+    const key = this.#key, epoch = this.#epoch
+    if (!key || body.length > ENTRY_LIMIT || !meta.response.revision || this.#pending >= MAX_PENDING || this.#pendingBytes + body.length > LIMIT) return
+    this.#pending++; this.#pendingBytes += body.length
     const operation = this.#writes.then(async () => {
-      const key = this.#key, epoch = this.#epoch
-      if (!key || body.length > ENTRY_LIMIT || !meta.response.revision) return
-      meta.expires = Date.now() + AGE
-      const bodyContext = await this.#bodyContext(id, meta.response.revision)
+      if (epoch !== this.#epoch) return
+      meta = { ...meta, expires: Date.now() + AGE }
+      const bodyContext = await this.#bodyContext(id, meta.response.revision!)
       const [encodedMeta, encodedBody] = await Promise.all([encrypted(key, this.namespace, id, 'meta', jsonBytes(meta)), encrypted(key, this.namespace, bodyContext, 'body', body)])
       const bytes = encodedMeta.length + encodedBody.length
       if (bytes > ENTRY_LIMIT || epoch !== this.#epoch) return
       const db = await database()
       try { await new Promise<void>((resolve, reject) => {
-        const tx = db.transaction('entries', 'readwrite'), store = tx.objectStore('entries'), read = store.getAll()
-        const timer = setTimeout(() => { try { tx.abort() } catch { /* already closed */ }; reject(Error('Cache timeout')) }, 3000)
+        if (epoch !== this.#epoch) { resolve(); return }
+        const tx = db.transaction('entries', 'readwrite'), store = tx.objectStore('entries'), read = store.openCursor()
+        const timer = setTimeout(() => { try { tx.abort() } catch { /* closed */ }; reject(Error('Cache timeout')) }, 3000)
+        const retained: Array<{ id: string; bytes: number; touched: number }> = []
+        let total = 0, scanned = 0
+        const next = { id: this.namespace + ':' + id, namespace: this.namespace, bytes, expires: meta.expires, touched: Date.now(), meta: encodedMeta, body: encodedBody } satisfies RecordEntry
         read.onsuccess = () => {
           try {
-          if (epoch !== this.#epoch) { tx.abort(); return }
-          const entries = read.result as RecordEntry[]
-          let total = entries.reduce((sum, entry) => sum + (Number.isFinite(entry.bytes) ? entry.bytes : LIMIT), 0)
-          for (const entry of entries.sort((a, b) => a.touched - b.touched)) {
-            if (entry.id === this.namespace + ':' + id || entry.expires < Date.now() || total + bytes > LIMIT) { store.delete(entry.id); total -= Number.isFinite(entry.bytes) ? entry.bytes : LIMIT }
-          }
-          store.put({ id: this.namespace + ':' + id, namespace: this.namespace, bytes, expires: meta.expires, touched: Date.now(), meta: encodedMeta, body: encodedBody } satisfies RecordEntry)
+            if (epoch !== this.#epoch) { tx.abort(); return }
+            const cursor = read.result
+            if (!cursor) { store.put(next); return }
+            // A corrupt database may exceed our row cap. Discard this cache only;
+            // no drafts, keys or unrelated browser storage share this store.
+            if (++scanned > MAX_SCAN) { store.clear(); store.put(next); return }
+            const row: unknown = cursor.value
+            if (!validEntry(row) || row.id !== cursor.primaryKey || row.id === next.id || row.expires < Date.now()) cursor.delete()
+            else {
+              retained.push({ id: row.id, bytes: row.bytes, touched: row.touched }); total += row.bytes
+              while (retained.length >= MAX_ENTRIES || total + bytes > LIMIT) {
+                let oldest = 0
+                for (let i = 1; i < retained.length; i++) if (retained[i].touched < retained[oldest].touched) oldest = i
+                const [removed] = retained.splice(oldest, 1); store.delete(removed.id); total -= removed.bytes
+              }
+            }
+            cursor.continue()
           } catch { tx.abort(); reject(Error('Cache write failed')) }
         }
         tx.oncomplete = () => { clearTimeout(timer); resolve() }; tx.onabort = tx.onerror = () => { clearTimeout(timer); reject(Error('Cache write failed')) }
       }) } finally { db.close() }
-    }).catch(() => {})
+    }).catch(() => {}).finally(() => { this.#pending--; this.#pendingBytes -= body.length })
     this.#writes = operation; await operation
   }
   async purgeOtherGenerations(assertLive: () => void = () => {}, signal?: AbortSignal) {
@@ -150,8 +182,8 @@ export class CipherCache {
   async purgeApp() {
     this.lock(); await this.#writes
     try {
-      const entries = await transaction<RecordEntry[]>('entries', 'readonly', s => s.getAll()), app = this.namespace.split(':')[0] + ':'
-      for (const entry of entries) if (entry.namespace.startsWith(app)) await transaction('entries', 'readwrite', s => s.delete(entry.id))
+      const app = this.namespace.split(':')[0] + ':'
+      await transaction('entries', 'readwrite', s => s.delete(IDBKeyRange.bound(app, app + '\uffff')))
     } catch { /* Best effort when browser storage is denied. */ }
   }
 }
