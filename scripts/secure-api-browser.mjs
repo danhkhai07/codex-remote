@@ -59,6 +59,17 @@ try {
     await field.waitFor(); assert.equal(await field.getAttribute('type'), 'password'); assert.equal(await field.getAttribute('autocomplete'), 'current-password')
     await field.fill(material.key); await target.getByRole('button', { name: 'Mở khóa', exact: true }).click(); await target.locator('#instruction').waitFor()
   }
+  // A legacy tab appearing after the root gate must block key proof too.
+  const stale = await context.newPage()
+  await stale.route('**/preview/5180/late-fixture', route => route.fulfill({ contentType: 'text/html', body: '<body>Fixture old tab</body>' }))
+  await stale.goto(config.publicOrigin.origin + '/preview/5180/late-fixture')
+  const proofsBefore = requests.filter(r => r.url.endsWith('/api/secure/handshake')).length
+  await page.getByLabel('Khóa mã hóa riêng', { exact: true }).fill(material.key)
+  await page.getByRole('button', { name: 'Mở khóa', exact: true }).click()
+  await page.getByRole('alert').filter({ hasText: 'tab hoặc cửa sổ' }).waitFor()
+  assert.equal(requests.filter(r => r.url.endsWith('/api/secure/handshake')).length, proofsBefore)
+  assert.equal(await page.locator('#instruction').count(), 0)
+  await stale.close()
   await unlock(page)
   const harness = async target => { await target.evaluate(async key => { const m = await import('/secure-fixture-harness.js'); await m.secureSetup(); await m.unlockSecure(key); window.fixtureSecure = m }, material.key) }
   await harness(page)

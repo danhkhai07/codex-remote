@@ -25,6 +25,7 @@ try {
   await context.route('**/*', async route => {
    const url = new URL(route.request().url()), path = url.pathname
    const json = value => route.fulfill({json: value})
+   if (path === '/api/secure/setup') return json({required: false, version: 1})
    if (path === '/api/session') return json({csrf: 'fixture-csrf', expiresAt: Math.floor(Date.now()/1000)+3600, workspaces: [{id: '0', path: '/tmp', label: 'Fixture'}]})
    if (path === '/api/working-hours') {
     if (route.request().method() === 'POST') {
@@ -39,6 +40,7 @@ try {
     return json(store.read())
    }
    if (path === '/api/files/html-preview' || path === '/api/files/content') return route.fulfill({contentType: 'text/html', body: html})
+   if (path === '/api/files/roots') return json({roots: ['/tmp']})
    if (path === '/api/files/list') return json({path: '/tmp', parentPath: null, total: 1, offset: 0, limit: 100, entries: [{name: 'index.html', path: dashboardPath, kind: 'file', symlink: false, size: html.length, modifiedAt: new Date(now).toISOString()}]})
    if (path === '/api/files/info') return json({path: dashboardPath, name: 'index.html', extension: '.html', contentType: 'text/html', kind: 'text', size: html.length, previewable: true, createdAt: new Date(now).toISOString(), modifiedAt: new Date(now).toISOString()})
    if (path === '/api/threads') return json({data: [thread], nextCursor: null})
