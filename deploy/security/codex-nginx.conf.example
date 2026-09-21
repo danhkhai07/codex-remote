@@ -33,7 +33,7 @@ server {
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
-    server_name ~^p[1-9][0-9]{3,4}\.danhkhai\.io\.vn$;
+    server_name "~^p[1-9][0-9]{3,4}\.danhkhai\.io\.vn$";
     # REQUIRED: replace with reviewed wildcard certificate paths.
     ssl_certificate /etc/letsencrypt/live/PREVIEW-WILDCARD/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/PREVIEW-WILDCARD/privkey.pem;
