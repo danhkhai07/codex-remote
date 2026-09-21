@@ -11,7 +11,7 @@ import type { RemoteConfig } from './config.js'
 import { SessionRegistry } from './session-registry.js'
 import { readOwnerKey, type OwnerKeyFile } from './secure-key.js'
 import { SecureResponse } from './secure-response.js'
-import { channelKey, context, importOwner, jsonBytes, MAX_REQUEST_BYTES, randomId, seal, text, unseal, wireLines, type Challenge } from './secure-wire.js'
+import { channelKey, context, importOwner, jsonBytes, MAX_REQUEST_BYTES, MAX_REQUEST_BODY_FRAMES, MAX_REQUEST_WIRE_BYTES, randomId, seal, text, unseal, wireLines, type Challenge } from './secure-wire.js'
 type Channel = { request: SecureKey; response: SecureKey; session: SessionPayload; expires: number; seen: Set<string>; active: Set<ServerResponse>; unwatch: () => void }
 type Pending = { challenge: Challenge; session: SessionPayload }
 type Dispatch = (req: IncomingMessage, res: ServerResponse) => Promise<void>
@@ -129,7 +129,7 @@ export class SecureApi {
       res.once('close', release)
       const valid = () => this.#channels.get(channelId) === channel && this.sessions.valid(session) && channel.expires > Date.now()
       try {
-        const lines = wireLines(req), first = await lines.next()
+        const lines = wireLines(req, { bytes: MAX_REQUEST_WIRE_BYTES, lines: MAX_REQUEST_BODY_FRAMES + 2 }), first = await lines.next()
         if (first.done || !valid()) throw Error()
         const head = JSON.parse(text.decode(await unseal(channel.request, context(channelId, 'request', requestId, 0, 'head'), first.value))) as { method: string; path: string; headers: Record<string, string>; resource: string; revision?: string }
         if (!['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH'].includes(head.method) || typeof head.path !== 'string' || head.path.length > 16384 || !head.path.startsWith('/api/') || head.path.startsWith('/api/secure/') || head.path === '/api/session/login' || /[\r\n\\#]/.test(head.path) || !id(head.resource) || (head.revision !== undefined && !id(head.revision))) throw Error()
@@ -144,7 +144,7 @@ export class SecureApi {
           if (kind === 'end') {
             const end = JSON.parse(text.decode(value)); if (end.bytes !== inputBytes || end.chunks !== count) throw Error(); complete = true
           } else {
-            if (value.length > 65536 || inputBytes + value.length > MAX_REQUEST_BYTES || !this.#budget(value.length)) throw Error()
+            if (!value.length || value.length > 65536 || count >= MAX_REQUEST_BODY_FRAMES || inputBytes + value.length > MAX_REQUEST_BYTES || !this.#budget(value.length)) throw Error()
             inputBytes += value.length; count++; parts.push(Buffer.from(value))
           }
         }

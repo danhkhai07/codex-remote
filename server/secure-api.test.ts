@@ -11,7 +11,7 @@ import { SecureTransport } from './secure-client.js'
 import { SecureApi } from './secure-api.js'
 import { SessionRegistry } from './session-registry.js'
 import { createSession } from './auth.js'
-import { channelKey, context, importOwner, jsonBytes, randomId, seal, type Challenge } from './secure-wire.js'
+import { channelKey, context, importOwner, jsonBytes, randomId, seal, MAX_REQUEST_BODY_FRAMES, type Challenge } from './secure-wire.js'
 import type { RemoteConfig } from './config.js'
 const cleanup: Array<() => Promise<void>> = []
 afterEach(async () => { vi.restoreAllMocks(); for (const fn of cleanup.splice(0).reverse()) await fn() })
@@ -272,4 +272,25 @@ it('admits bounded proof attempts before body and ignores spoofed IP churn', asy
   // Use a new session: expired sessions never reach proof admission.
   const issued = createSession(f.config.sessionSecret, 600, f.config.password)
   expect((await f.call('/api/secure/handshake', { method: 'POST', body: '{}', headers: { Cookie: 'codex_remote_session=' + issued.token } })).status).toBe(401)
+})
+
+it('rejects empty body records and frame-count amplification before business dispatch', async () => {
+  const f = await fixture(true), challenge = await (await f.call('/api/secure/challenge', { method: 'POST' })).json() as Challenge
+  const owner = await importOwner(f.material.key)
+  const proof = await seal(await channelKey(owner, challenge, 'proof'), context(challenge.channel, 'proof', challenge.id, 0, 'proof'), jsonBytes({}))
+  expect((await f.call('/api/secure/handshake', { method: 'POST', body: JSON.stringify({ id: challenge.id, proof }) })).status).toBe(200)
+  const key = await channelKey(owner, challenge, 'request')
+  for (const count of [1, MAX_REQUEST_BODY_FRAMES + 1]) {
+    const request = randomId(), byte = count === 1 ? new Uint8Array(0) : new Uint8Array([42])
+    const packets = [await seal(key, context(challenge.channel, 'request', request, 0, 'head'), jsonBytes({ method: 'POST', path: '/api/mutation', headers: {}, resource: randomId() }))]
+    for (let i = 0; i < count; i++) packets.push(await seal(key, context(challenge.channel, 'request', request, i + 1, 'body'), byte))
+    packets.push(await seal(key, context(challenge.channel, 'request', request, count + 1, 'end'), jsonBytes({ bytes: count * byte.length, chunks: count })))
+    expect((await f.call('/api/secure/request', { method: 'POST', headers: { 'X-Secure-Channel': challenge.channel, 'X-Secure-Request': request }, body: packets.join('\n') + '\n' })).status).toBe(400)
+    expect(f.effects()).toBe(0)
+  }
+  await f.transport.unlock(f.material.key)
+  // Arbitrary small producer chunks coalesce into bounded wire frames.
+  const stream = new ReadableStream<Uint8Array>({ start(target) { for (let i = 0; i < 2048; i++) target.enqueue(new Uint8Array([42])); target.close() } })
+  const normal = await f.transport.request('/api/mutation', { method: 'POST', body: stream as unknown as BodyInit })
+  await normal.response.arrayBuffer(); expect(f.effects()).toBe(1)
 })

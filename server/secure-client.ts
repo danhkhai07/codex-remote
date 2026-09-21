@@ -1,6 +1,6 @@
 import type { SecureKey } from './secure-wire.js'
 import { decodeProtectedHeader } from 'jose'
-import { channelKey, context, FRAME_BYTES, importOwner, jsonBytes, MAX_REQUEST_BYTES, randomId, seal, text, unseal, webBytes, wireLines, type Challenge, type SecureMetadata } from './secure-wire.js'
+import { channelKey, context, FRAME_BYTES, frameBytes, importOwner, jsonBytes, MAX_REQUEST_BYTES, randomId, seal, text, unseal, webBytes, wireLines, type Challenge, type SecureMetadata } from './secure-wire.js'
 import type { ResponseMeta } from './secure-response.js'
 export class SecureTransportError extends Error { constructor(readonly status: number, message: string) { super(message) } }
 type Ready = { id: string; request: SecureKey; response: SecureKey; expires: number }
@@ -75,13 +75,10 @@ export class SecureTransport {
       const parts: string[] = [(await seal(channel.request, context(channel.id, 'request', requestId, sequence++, 'head'), jsonBytes({ method, path, headers, resource, revision: cache?.revision }))) + '\n']
       if (init.body !== undefined && init.body !== null) {
         const body = new Response(init.body).body!
-        for await (const chunk of webBytes(body)) {
-          for (let offset = 0; offset < chunk.length; offset += FRAME_BYTES) {
-            const part = chunk.slice(offset, offset + FRAME_BYTES)
+        for await (const part of frameBytes(webBytes(body))) {
             bytes += part.length; chunks++
             if (bytes > MAX_REQUEST_BYTES || signal.aborted || epoch !== this.#epoch) throw Error('Upload exceeds limit or was cancelled')
             parts.push((await seal(channel.request, context(channel.id, 'request', requestId, sequence++, 'body'), part)) + '\n')
-          }
         }
       }
       parts.push((await seal(channel.request, context(channel.id, 'request', requestId, sequence++, 'end'), jsonBytes({ bytes, chunks }))) + '\n')
@@ -114,7 +111,7 @@ export class SecureTransport {
               if (end.bytes !== received || end.chunks !== count || !(await lines.next()).done) throw Error('Invalid response completion')
               if (signal.aborted || epoch !== this.#epoch) throw Error('Secure stream closed')
               target.close(); cleanup()
-            } else { if (value.length > FRAME_BYTES) throw Error('Oversized response'); received += value.length; count++; target.enqueue(value) }
+            } else { if (!value.length || value.length > FRAME_BYTES) throw Error('Invalid response body frame'); received += value.length; count++; target.enqueue(value) }
           } catch (error) { controller.abort(); cleanup(); target.error(!['GET', 'HEAD'].includes(method) ? new SecureTransportError(0, 'Result is uncertain after connection loss. Check current state before retrying this action.') : error) }
         },
         cancel: async () => { controller.abort(); cleanup(); await lines.return(undefined) },
