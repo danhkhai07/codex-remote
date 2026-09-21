@@ -1,3 +1,4 @@
+import { MAX_CACHE_BODY_BYTES, noPreviewCache, previewCacheable, previewRequestHeaders, validatePreviewBody } from './preview-cache.js'
 import { getSession } from './auth.js'
 import { previewPath, rewritePreviewText } from './preview-paths.js'
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
@@ -191,6 +192,7 @@ export class LocalhostPreview {
     const cookie = applicationCookies(typeof headers.cookie === 'string' ? headers.cookie : undefined)
     if (cookie) headers.cookie = cookie
     else delete headers.cookie
+    if (req.method === 'GET' || req.method === 'HEAD') previewRequestHeaders(headers)
     if (this.#pathOrigin) headers['accept-encoding'] = 'identity'
     headers.host = `127.0.0.1:${port}`
     headers['x-forwarded-host'] = new URL(origin).host
@@ -217,7 +219,6 @@ export class LocalhostPreview {
       } catch { /* Preserve upstream redirects that are not URLs. */ }
     }
     if (this.#pathOrigin) {
-      headers['cache-control'] = 'no-store'
       headers['service-worker-allowed'] = `/preview/${port}/`
       headers['referrer-policy'] = 'same-origin'
       delete headers['clear-site-data']
@@ -258,7 +259,7 @@ export class LocalhostPreview {
         res.writeHead(307, { Location: `/preview/${port}/` + url.search, 'Cache-Control': 'no-store' }); res.end(); return
       }
       if (url.pathname.startsWith('/__codex_preview__/')) throw new LocalhostPreviewError(404, 'Unknown preview endpoint')
-      const upstream = request({ hostname: '127.0.0.1', port, path: `${url.pathname}${url.search}`, method: req.method, headers: this.#requestHeaders(req, port, origin), agent: false })
+      const upstream = request({ hostname: '127.0.0.1', port, path: `${url.pathname}${url.search}`, method: req.method === 'HEAD' ? 'GET' : req.method, headers: this.#requestHeaders(req, port, origin), agent: false })
       this.#track(upstream)
       const timeout = setTimeout(() => upstream.destroy(new LocalhostPreviewError(504, 'The localhost app took too long to respond.')), 30_000)
       timeout.unref()
@@ -266,26 +267,51 @@ export class LocalhostPreview {
         clearTimeout(timeout)
         const headers = this.#responseHeaders(response, port, origin)
         const type = String(headers['content-type'] ?? '')
+        const status = response.statusCode ?? 502
+        const cacheable = previewCacheable(req, url.pathname, status, response.headers)
+        const rewrite = Boolean(this.#pathOrigin && /text\/html|text\/css|javascript|ecmascript/.test(type)
+          && !headers['content-encoding'] && status === 200
+          && !/(?:^|,)\s*no-transform(?:\s|,|$)/i.test(String(headers['cache-control'] ?? '')))
+        noPreviewCache(headers)
         response.on('error', () => res.destroy())
-        if (this.#pathOrigin && /text\/html|text\/css|javascript|ecmascript/.test(type) && !headers['content-encoding'] && req.method !== 'HEAD') {
+        if (rewrite || cacheable) {
           const chunks: Buffer[] = []
-          let size = 0
-          response.on('data', chunk => {
+          let size = 0, streaming = false
+          const buffer = (chunk: Buffer) => {
             size += chunk.length
-            if (size > 16 * 1024 * 1024) { httpError(res, new LocalhostPreviewError(413, 'Preview text exceeds 16 MB')); response.destroy(); return }
+            if (size > MAX_CACHE_BODY_BYTES) {
+              if (rewrite) { httpError(res, new LocalhostPreviewError(413, 'Preview text exceeds 16 MB')); response.destroy(); return }
+              // Large untransformed bodies remain streamed, never cached/buffered further.
+              streaming = true
+              res.writeHead(status, headers)
+              response.removeListener('data', buffer)
+              if (req.method !== 'HEAD') {
+                for (const part of chunks) res.write(part)
+                res.write(chunk)
+                response.pipe(res) // Restore stream backpressure for the remaining body.
+              } else { response.resume(); res.end() }
+              chunks.length = 0
+              return
+            }
             chunks.push(Buffer.from(chunk))
-          })
+          }
+          response.on('data', buffer)
           response.on('end', () => {
             if (res.writableEnded || res.destroyed) return
-            const body = Buffer.from(rewritePreviewText(Buffer.concat(chunks).toString('utf8'), type, port))
-            delete headers.etag
+            if (streaming) return
+            const original = Buffer.concat(chunks)
+            const body = rewrite ? Buffer.from(rewritePreviewText(original.toString('utf8'), type, port)) : original
+            if (rewrite) { delete headers.etag; delete headers['last-modified']; delete headers['content-md5']; delete headers.digest }
             headers['content-length'] = String(body.length)
-            res.writeHead(response.statusCode ?? 502, headers)
-            res.end(body)
+            const unchanged = cacheable && validatePreviewBody(req, headers, body)
+            if (unchanged) delete headers['content-length']
+            res.writeHead(unchanged ? 304 : status, headers)
+            res.end(unchanged || req.method === 'HEAD' ? undefined : body)
           })
         } else {
-          res.writeHead(response.statusCode ?? 502, headers)
-          response.pipe(res)
+          res.writeHead(status, headers)
+          if (req.method === 'HEAD') { response.resume(); res.end() }
+          else response.pipe(res)
         }
       })
       upstream.once('error', error => { clearTimeout(timeout); httpError(res, error) })
