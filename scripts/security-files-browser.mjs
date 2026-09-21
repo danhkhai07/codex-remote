@@ -18,7 +18,7 @@ try {
   await controller.start(); server.listen(0, '127.0.0.1'); await once(server, 'listening')
   config.publicOrigin = new URL(`http://127.0.0.1:${server.address().port}`)
   for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 600 }]) {
-    const context = await browser.newContext({ viewport, serviceWorkers: 'block' }), page = await context.newPage()
+    const context = await browser.newContext({ viewport, serviceWorkers: 'allow' }), page = await context.newPage()
     await page.route('**/api/conversation-groups', route => route.fulfill({ json: { revision: 0, groups: [], assignments: {} } }))
     await context.request.post(`${config.publicOrigin}api/session/login`, { headers: { Origin: config.publicOrigin.origin }, data: { password: config.password } })
     await page.goto(config.publicOrigin.origin); await page.locator('#instruction').waitFor()

@@ -160,7 +160,7 @@ async function serveStatic(res: ServerResponse, distRoot: string, pathname: stri
     if (metadata.isDirectory()) candidate = resolve(candidate, 'index.html')
     const finalMetadata = await fs.stat(candidate)
     const filename = candidate.split(sep).at(-1)
-    const cacheControl = ['index.html', 'sw.js', 'manifest.webmanifest'].includes(filename ?? '')
+    const cacheControl = ['index.html', 'sw.js', 'migration-check-sw.js', 'manifest.webmanifest'].includes(filename ?? '')
       ? 'no-cache'
       : candidate.includes(`${sep}assets${sep}`)
         ? 'public, max-age=31536000, immutable'

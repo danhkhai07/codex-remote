@@ -1,3 +1,4 @@
+import { ensurePreviewMigrationReady } from './legacyPreviewWorkers'
 import type { SkillList, SkillSelection } from '../server/skills'
 import type { ServiceInput, ServicesSnapshot } from '../server/services'
 import type { ReplySnapshot } from '../server/read-state'
@@ -97,11 +98,14 @@ export const api = {
   pushVisibility: (endpoint: string, visible: boolean, csrf: string) => request<{ ok: boolean }>('/api/push/visibility', { method: 'POST', body: JSON.stringify({ endpoint, visible }) }, csrf),
   subscribePush: (subscription: PushSubscriptionJSON, csrf: string) => request<{ ok: boolean }>('/api/push/subscription', { method: 'POST', body: JSON.stringify(subscription) }, csrf),
   unsubscribePush: (csrf: string) => request<{ ok: boolean }>('/api/push/subscription', { method: 'DELETE', body: '{}' }, csrf),
-  session: (signal?: AbortSignal) => request<Session>('/api/session', { signal }),
-  login: (password: string) => request<Session>('/api/session/login', {
-    method: 'POST',
-    body: JSON.stringify({ password }),
-  }),
+  session: async (signal?: AbortSignal) => {
+    await ensurePreviewMigrationReady()
+    return request<Session>('/api/session', { signal })
+  },
+  login: async (password: string) => {
+    await ensurePreviewMigrationReady(true)
+    return request<Session>('/api/session/login', { method: 'POST', body: JSON.stringify({ password }) })
+  },
   logout: (csrf: string) => request<{ ok: boolean }>('/api/session/logout', { method: 'POST', body: '{}' }, csrf),
   threads: () => request<ThreadList>('/api/threads'),
   conversationGroups: () => request<GroupSnapshot>('/api/conversation-groups'),

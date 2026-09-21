@@ -21,7 +21,7 @@ try {
   server.listen(0, '127.0.0.1'); await once(server, 'listening')
   config.publicOrigin = new URL(`http://127.0.0.1:${server.address().port}`)
   for (const viewport of [{ width: 1280, height: 900 }, { width: 320, height: 600 }, { width: 390, height: 844 }, { width: 390, height: 600 }]) {
-    const context = await browser.newContext({ viewport, serviceWorkers: 'block' })
+    const context = await browser.newContext({ viewport, serviceWorkers: 'allow' })
     const page = await context.newPage()
     page.setDefaultTimeout(10000)
     const errors = []; page.on('pageerror', error => errors.push(error.message))
