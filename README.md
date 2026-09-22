@@ -94,6 +94,23 @@ state lives in the vault's generated `.state/Orchestration.json`, separate from
 knowledge notes. Use stable `requestId` values when retrying commands. Code tasks
 must follow the existing rule of separate worktrees and hosted-service registration.
 
+Before assigning work, use the capability command `{"action":"models"}` to inspect
+the runtime catalog, filtered to **gpt-6-astra** and **gpt-5.6-sol**, with supported
+efforts for each. Add top-level `model` and `effort` to a `spawn` or `delegate`
+command, for example `"model":"gpt-5.6-sol","effort":"high"` **only if the catalog
+lists that pair**. Omitted fields inherit the leader turn. Missing, unavailable,
+disallowed or unsupported values fail before task reservation or conversation
+creation; no fallback or effort reduction occurs. Queued tasks are revalidated
+before dispatch. Stable request IDs retain the original choice even on retries.
+
+Choose Sol for routine bounded work and Astra for security, architecture or
+high-risk work, with a brief explanation based on the task. Security work should
+plan carefully and use xhigh/max when listed in the catalog; do not assume high
+meets that requirement or invent supported efforts. This is a leader decision,
+not keyword-based routing. Task snapshots and result reports include the chosen
+model/effort. Overrides do not change user/global settings, active turns, access
+permissions or Plan/Code mode. Automatic wakeups keep the leader's settings.
+
 Leaders in **Code** mode can also manage conversations through that same private
 command capability:
 
