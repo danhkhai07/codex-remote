@@ -145,6 +145,17 @@ release manual control, acknowledge pending reports or change worker conversatio
 The authenticated team API also accepts `resolve` with the current `leaderEpoch`,
 behind the existing session and CSRF checks.
 
+The separate Leader page defaults to all queued/active work, every unresolved
+failure or interruption, and up to three recent terminal results within 24 hours
+(including verified recoveries, dated by their recovery time). The three-result
+and 24-hour thresholds are display choices, never worker limits. Unresolved errors
+remain visible regardless of age or whether their report has reached the leader.
+“Xem lịch sử (N)” / “Thu gọn (N)” shows or hides the other retained results; it
+does not resolve, acknowledge, archive or delete anything. Recovery summaries stay
+visible; evidence and the original attempt are expandable. History remains bounded
+by the existing server retention (200 inactive tasks plus all unfinished work),
+not an unlimited audit archive. Error reports still use the existing result flow.
+
 Use the same `requestId` to retry an archive. `status` includes archive receipts:
 100 recent completions are retained; the total is capped at 200 including uncertain
 operations. A retry acknowledges the original completion only while the target

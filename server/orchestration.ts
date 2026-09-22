@@ -97,7 +97,8 @@ export class ConversationOrchestrator {
     return {
       groupId: group?.id ?? null, leaderId: group?.leaderThreadId ?? null, members,
       paused: this.#state.paused.filter(id => members.includes(id)),
-      tasks: this.#state.tasks.filter(task => task.groupId === group?.id).slice(-100).map(({ settings: _settings, ...task }) => ({ ...task, settings: { model: _settings.model, effort: _settings.effort }, instruction: task.instruction.slice(0, 1000), result: task.result?.slice(0, 4000) })),
+      // Return the retained folder history; a positional tail can hide active work or new errors.
+      tasks: this.#state.tasks.filter(task => task.groupId === group?.id).map(({ settings: _settings, ...task }) => ({ ...task, settings: { model: _settings.model, effort: _settings.effort }, instruction: task.instruction.slice(0, 1000), result: task.result?.slice(0, 4000) })),
       archives: (this.#state.archives ?? []).filter(item => item.groupId === group?.id).map(item => ({ ...item })),
       pendingResults: this.#state.notices.filter(note => note.groupId === group?.id && note.status === 'pending').length,
       unconfirmedResults: this.#state.notices.filter(note => note.groupId === group?.id && note.status === 'review').length,

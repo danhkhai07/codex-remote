@@ -515,18 +515,20 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
 .team-page-heading h2 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
 .team-page-heading p { margin: 8px 0 16px; }
 .conversation-team-body > p { margin: 8px 0; }
+.team-history-toggle { min-height: 44px; }
 .team-tasks { list-style: none; padding: 0; margin: 12px 0 0; }
 .team-tasks > li { border-top: 1px solid var(--line); padding: 12px 0; }
 .team-task-heading, .team-task-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .team-task-heading strong { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .team-task-status { color: var(--muted); }
 .team-task-status.is-running, .team-task-status.is-completed, .team-task-status.is-resolved { color: var(--accent); }
-.team-task-status.is-failed { color: #f6a498; }
+.team-task-status.is-failed, .team-task-status.is-interrupted { color: #f6a498; }
 .team-task-actions { margin-top: 8px; }
 .team-task-actions button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
 .team-task-actions .team-task-stop { min-width: 44px; min-height: 44px; padding: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; text-align: center; }
 .team-task-result { margin-top: 8px; }
 .team-task-result p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.team-task-recovery { margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .message-orchestration .message-author { color: #e7c44a; }
 .thread-unread-badge {
   display: inline-flex;

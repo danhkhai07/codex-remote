@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { api } from './api'
 import { threadTitle } from './model'
 import type { Thread } from './types'
 import type { ConversationGroup } from './conversationGroups'
 import type { ConversationTask } from '../server/orchestration'
+import { isUnfinishedTask, selectTeamTasks } from './teamTaskSelection'
 
 export type TeamSnapshot = {
   groupId: string | null; leaderId: string | null; members: string[]; paused: string[]
@@ -11,7 +12,6 @@ export type TeamSnapshot = {
   limits: { concurrent: number; dispatchesLeft: number; wakeupsLeft: number }
 }
 const statuses: Record<string, string> = { creating: 'Đang tạo convo', queued: 'Đang chờ', starting: 'Đang gửi', running: 'Đang làm', stopping: 'Đang dừng', completed: 'Hoàn tất', failed: 'Có lỗi', cancelled: 'Đã dừng', interrupted: 'Bị ngắt' }
-const unfinished = (status: string) => ['creating', 'queued', 'starting', 'running', 'stopping'].includes(status)
 
 export function ConversationTeam({ threadId, group, threads, csrf, enabled, revision, onOpen }: {
   threadId: string; group: ConversationGroup; threads: Thread[]; csrf: string; enabled: boolean; revision: number
@@ -20,6 +20,8 @@ export function ConversationTeam({ threadId, group, threads, csrf, enabled, revi
   const [team, setTeam] = useState<TeamSnapshot | null>(null)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
+  const taskListId = useId()
   useEffect(() => {
     if (!enabled) return
     const abort = new AbortController()
@@ -43,7 +45,9 @@ export function ConversationTeam({ threadId, group, threads, csrf, enabled, revi
     finally { setSaving(false) }
   }
   const title = (id: string) => { const thread = threads.find(thread => thread.id === id); return thread ? threadTitle(thread) : id }
-  const pending = team?.tasks.filter(task => unfinished(task.status)).length ?? 0
+  const pending = team?.tasks.filter(task => isUnfinishedTask(task.status)).length ?? 0
+  const { current, history } = selectTeamTasks(team?.tasks ?? [])
+  const visible = showHistory ? [...current, ...history] : current
   const isLeader = group.leaderThreadId === threadId
   const paused = team?.paused.includes(threadId)
   const label = isLeader ? '★ Bạn đang ở convo leader' : group.leaderThreadId ? `Leader: ${title(group.leaderThreadId)}` : 'Điều phối đã tắt'
@@ -61,14 +65,18 @@ export function ConversationTeam({ threadId, group, threads, csrf, enabled, revi
         {team.pendingResults > 0 && <p className="muted">{team.pendingResults} kết quả chờ gửi về leader.{team.limits.wakeupsLeft === 0 ? ' Gửi tin nhắn mới cho leader để tiếp tục.' : ''}</p>}
         {team.unconfirmedResults > 0 && <p role="status">Có {team.unconfirmedResults} thông báo chưa xác nhận đã gửi. Xem kết quả từng việc và lịch sử leader trước khi yêu cầu gửi lại.</p>}
         {team.tasks.length === 0 && <p className="muted">Chưa có công việc được giao.</p>}
-        <ul className="team-tasks">{[...team.tasks].reverse().map(task => <li key={task.id}>
+        {history.length > 0 && <button type="button" className="quiet-button team-history-toggle" aria-expanded={showHistory}
+          aria-controls={taskListId} onClick={() => setShowHistory(value => !value)}>{showHistory ? 'Thu gọn' : 'Xem lịch sử'} ({history.length})</button>}
+        {!showHistory && current.length === 0 && history.length > 0 && <p className="muted">Không có công việc hiện hành.</p>}
+        <ul id={taskListId} className="team-tasks">{visible.map(task => <li key={task.id}>
           <div className="team-task-heading"><strong>{task.title}</strong><span className={`team-task-status is-${task.resolution ? 'resolved' : task.status}`}>{task.resolution ? 'Đã xử lý' : statuses[task.status]}</span></div>
           <div className="team-task-actions">
             {task.threadId && <button type="button" className="quiet-button" onClick={() => onOpen(task.threadId)}>{title(task.threadId)} ↗</button>}
-            {unfinished(task.status) && <button type="button" className="quiet-button team-task-stop" aria-label="Dừng việc" title="Dừng việc" disabled={!enabled || saving} onClick={() => void action({ action: 'cancel', taskId: task.id })}>[x]</button>}
+            {isUnfinishedTask(task.status) && <button type="button" className="quiet-button team-task-stop" aria-label="Dừng việc" title="Dừng việc" disabled={!enabled || saving} onClick={() => void action({ action: 'cancel', taskId: task.id })}>[x]</button>}
           </div>
+          {task.resolution && <p className="team-task-recovery">{task.resolution.summary}</p>}
           {task.resolution && <details className="team-task-result"><summary>Kết quả tiếp quản</summary>
-            <p>{task.resolution.summary}</p><p>{task.resolution.evidence}</p>
+            <p>{task.resolution.evidence}</p>
             <p className="muted">Xác nhận bởi {title(task.resolution.resolvedBy)} · {new Date(task.resolution.resolvedAt).toLocaleString('vi-VN')}</p>
           </details>}
           {task.result && <details className="team-task-result"><summary>{task.resolution ? `Lượt trước: ${statuses[task.status]}` : 'Kết quả'}</summary><p>{task.result}</p></details>}

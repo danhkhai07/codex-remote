@@ -32,12 +32,17 @@ try {
     let failCancel = true
     const groups = () => ({ revision, groups: [{ id: 'group', name: 'Fixture folder', contextPath: 'unused', leaderThreadId: leaderId, leaderEpoch: revision }],
       assignments: { 'plan-fixture': 'group', worker: 'group' } })
+    const hoursAgo = hours => new Date(Date.now() - hours * 60 * 60_000).toISOString()
     const tasks = Array.from({ length: 30 }, (_, i) => ({ id: `task-${i}`, threadId: 'worker', groupId: 'group', title: `Task ${i}: ${'Long title '.repeat(10)}`,
-      status: i === 29 ? 'running' : 'completed', result: 'Long result without overflowing the page. '.repeat(100) }))
+      status: i === 29 ? 'running' : 'completed', createdAt: hoursAgo(96), updatedAt: hoursAgo(i === 29 ? 0 : 48 + i),
+      result: 'Long result without overflowing the page. '.repeat(100) }))
+    tasks[23].updatedAt = hoursAgo(3); tasks[24].updatedAt = hoursAgo(2); tasks[25].updatedAt = hoursAgo(4)
+    tasks[26].status = 'interrupted'; tasks[26].result = 'Older unreported interruption stays visible'
+    tasks[27].status = 'failed'; tasks[27].updatedAt = hoursAgo(1); tasks[27].result = 'New error must remain visible'
     tasks[28].status = 'failed'
     tasks[28].result = 'Original usageLimitExceeded report'
     tasks[28].resolution = { summary: 'Leader completed the recovery', evidence: 'Deployment verified ' + 'reference'.repeat(60),
-      resolvedBy: 'plan-fixture', resolvedAt: '2026-09-21T02:50:40Z', leaderEpoch: 1 }
+      resolvedBy: 'plan-fixture', resolvedAt: hoursAgo(0.5), leaderEpoch: 1 }
     await page.route('**/api/conversation-groups', route => route.fulfill({ json: groups() }))
     await page.route('**/api/conversation-groups/group/leader', route => {
       if (failLeader) return route.fulfill({ status: 503, json: { error: 'Fixture leader update failed' } })
@@ -63,7 +68,7 @@ try {
           return route.fulfill({ status: 503, json: { error: 'Fixture cancel failed' } })
         }
         if (action.action === 'release') paused = []
-        else tasks.find(task => task.id === action.taskId).status = 'cancelled'
+        else Object.assign(tasks.find(task => task.id === action.taskId), { status: 'cancelled', updatedAt: hoursAgo(0) })
       }
       await route.fulfill({ json: { groupId: 'group', leaderId, members: ['plan-fixture', 'worker'], paused, tasks,
         pendingResults: 1, unconfirmedResults: 0, limits: { concurrent: MAX_CONCURRENT_WORKERS, dispatchesLeft: 10, wakeupsLeft: 4 } } })
@@ -136,9 +141,43 @@ try {
     await team.locator('.team-tasks > li').first().waitFor()
     await layout()
     assert.equal(await composer.inputValue(), 'Draft stays while reviewing work')
+    const rows = team.locator('.team-tasks > li'), history = team.getByRole('button', { name: /^(Xem lịch sử|Thu gọn)/ })
+    const row = i => rows.filter({ hasText: `Task ${i}:` })
+    assert.equal(await rows.count(), 6, 'Active + unresolved errors + three recent results')
+    for (const i of [23, 24, 26, 27, 28, 29]) assert.equal(await row(i).count(), 1)
+    assert.equal(await row(25).count(), 0, 'Fourth recent completion belongs to history')
+    assert.equal(await history.textContent(), 'Xem lịch sử (24)')
+    assert.equal(await history.getAttribute('aria-expanded'), 'false')
+    if (shots) await page.screenshot({ path: resolve(shots, `current-${viewport.width}x${viewport.height}.png`) })
+    await history.focus(); await history.press('Enter')
+    assert.equal(await rows.count(), 30)
+    assert.equal(await history.textContent(), 'Thu gọn (24)')
+    assert.equal(await history.getAttribute('aria-expanded'), 'true')
+    await conversationTab.click(); await leaderTab.click()
+    assert.equal(await history.getAttribute('aria-expanded'), 'true', 'History choice survives tab switches')
+    await layout()
+    if (shots) await page.screenshot({ path: resolve(shots, `history-${viewport.width}x${viewport.height}.png`) })
+    await history.focus(); await history.press('Space')
+    assert.equal(await rows.count(), 6)
+    // A newly failing old task returns to the default list, never only a count.
+    tasks[0].status = 'failed'; tasks[0].updatedAt = hoursAgo(0); tasks[0].result = 'New failure delivered through live refresh'
+    let updated = page.waitForResponse(response => response.url().endsWith('/orchestration'))
+    controller.events.publish('codex', { method: 'orchestration/changed', params: {} }); await updated
+    await row(0).waitFor()
+    assert.equal(await rows.count(), 7)
+    assert.equal(await history.textContent(), 'Xem lịch sử (23)')
+    assert.equal(await row(0).locator('.team-task-status').textContent(), 'Có lỗi')
+    tasks[1].status = 'interrupted'; tasks[1].updatedAt = hoursAgo(0)
+    updated = page.waitForResponse(response => response.url().endsWith('/orchestration'))
+    controller.events.publish('codex', { method: 'orchestration/changed', params: {} }); await updated
+    await row(1).waitFor()
+    assert.equal(await rows.count(), 8)
+    assert.equal(await history.textContent(), 'Xem lịch sử (22)')
+    assert.equal(await row(1).locator('.team-task-status').textContent(), 'Bị ngắt')
     const recovered = team.locator('.team-tasks > li').filter({ hasText: 'Task 28:' })
     assert.equal(await recovered.locator('.team-task-status').textContent(), 'Đã xử lý')
     assert.equal(await recovered.getByRole('button', { name: 'Dừng việc' }).count(), 0)
+    assert.equal(await recovered.getByText('Leader completed the recovery', { exact: true }).isVisible(), true)
     await recovered.getByText('Kết quả tiếp quản', { exact: true }).click()
     assert.equal(await recovered.getByText('Leader completed the recovery', { exact: true }).isVisible(), true)
     await recovered.getByText('Lượt trước: Có lỗi', { exact: true }).click()
@@ -238,7 +277,7 @@ try {
     assert.equal(await leaderTab.count(), 0)
     assert.equal(await isOnscreen(composer), true)
     assert.deepEqual(errors, [])
-    console.log(`PASS ${viewport.width}x${viewport.height}: separate Leader page, Files right, keyboard, scrolling/draft, cancel/retry, Plan/reload, worker controls and fallback`)
+    console.log(`PASS ${viewport.width}x${viewport.height}: recent/history counts, live errors, recovery evidence/original error, separate Leader page, Files right, keyboard, scrolling/draft, cancel/retry, Plan/reload, worker controls and fallback`)
     await context.close()
   }
 } finally {

@@ -710,3 +710,20 @@ it('waits for a cancelled in-flight dispatch to settle before recording recovery
   f.finish('worker', task.turnId!, 'Late completion after cancellation')
   expect(f.orchestra.snapshot('leader').tasks[0]).toEqual(resolved)
 })
+
+it('returns retained history without clipping active tasks or unresolved errors behind a positional limit', async () => {
+  const f = setup(), { task } = await f.delegate(f.token())
+  const path = join(f.root, '.state/Orchestration.json'), state = JSON.parse(readFileSync(path, 'utf8'))
+  // A private fixture models older state whose task array was not sorted by status.
+  state.tasks = Array.from({ length: 150 }, (_, i) => ({ ...task, id: `retained-${i}`, status: 'completed' }))
+  state.tasks[0].status = 'failed'; state.tasks[1].status = 'queued'; state.tasks[2].status = 'running'
+  state.tasks.push({ ...task, id: 'other-folder', groupId: 'elsewhere' })
+  writeFileSync(path, JSON.stringify(state))
+  const restored = new ConversationOrchestrator(f.vault, f.driver)
+  cleanups.push(() => restored.stop())
+  const snapshot = restored.snapshot('leader')
+  expect(snapshot.tasks).toHaveLength(150)
+  expect(snapshot.tasks.slice(0, 3).map(item => item.status)).toEqual(['failed', 'queued', 'running'])
+  expect(snapshot.tasks.some(item => item.id === 'other-folder')).toBe(false)
+  expect(JSON.parse(readFileSync(path, 'utf8')).tasks).toEqual(state.tasks)
+})
