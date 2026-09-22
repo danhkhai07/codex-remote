@@ -6,7 +6,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, chmod, unlink } from 
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { fork, execFile } from 'node:child_process'
+import { fork, execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { once } from 'node:events'
 import { createServer, Agent, request } from 'node:http'
@@ -17,7 +17,7 @@ import { receiptBinding, servicePolicy } from './cutover-ops.mjs'
 import { destinationSnapshot } from './destinations.mjs'
 const run = promisify(execFile), reviewed = process.env.REVIEW_RELEASE
 const gatewayScript = new URL('./fixtures/key-gateway.mjs', import.meta.url), driverScript = new URL('./fixtures/key-driver.mjs', import.meta.url)
-async function fixture(t) {
+async function fixture(t, { separateRunner = false } = {}) {
   assert(reviewed, 'REVIEW_RELEASE required; R5 acceptance must not silently skip')
   const root = await mkdtemp(join(tmpdir(), 'r5-key-cutover-')), main = join(root, 'main'), release = join(root, 'release'), outside = release + '.activation'
   const key = join(root, 'private/owner-key.json'), files = join(root, 'files'), vault = join(root, 'vault'), children = new Set(), sockets = new Set()
@@ -48,10 +48,16 @@ async function fixture(t) {
   const state = extra => atomicBytes(join(root, 'service-state.json'), JSON.stringify({ ...policy, ActiveState: active ? 'active' : 'inactive', SubState: active ? 'running' : 'dead', MainPID: String(active?.pid ?? 0), ControlPID: '0', ControlGroup: oldIdentity.cgroup, fixtureCgroupEmpty: !active, ...extra }), 0o600)
   state()
   const now = new Date().toISOString(), evidence = { fixture: { at: now, files: [] } }
+  let runner
+  if (separateRunner) {
+    runner = spawn(process.execPath, ['-e', 'process.send({ready:true});setInterval(()=>{},1000)'], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] })
+    children.add(runner); await once(runner, 'message', { signal: AbortSignal.timeout(5000) })
+  }
+  const runnerPid = runner?.pid ?? process.pid
   await writeFile(join(outside, 'evidence.json'), JSON.stringify(evidence)); await writeFile(join(outside, 'authorization.json'), JSON.stringify({ at: now }))
   await writeFile(join(outside, 'attempt.json'), JSON.stringify({ status: 'running', phase: 'old-watcher-restart' }))
-  await writeFile(join(root, 'lock/owner.json'), JSON.stringify({ release, pid: process.pid }))
-  const permit = { app: APP, release, seal: fileHash(join(release, 'seal.json')), runner: { pid: process.pid, start: processStart(process.pid) }, old: oldIdentity, lock: join(root, 'lock'), port, servicePolicy: servicePolicy(policy), receipts: receiptBinding(outside, evidence), provision: provisionPlan(meta, assertKeyLocation), destinations: destinationSnapshot([join(main, '.env')]), backend: tree(join(main, 'dist-server')), dependencies: {}, stable: {} }
+  await writeFile(join(root, 'lock/owner.json'), JSON.stringify({ release, pid: runnerPid }))
+  const permit = { app: APP, release, seal: fileHash(join(release, 'seal.json')), runner: { pid: runnerPid, start: processStart(runnerPid) }, old: oldIdentity, lock: join(root, 'lock'), port, servicePolicy: servicePolicy(policy), receipts: receiptBinding(outside, evidence), provision: provisionPlan(meta, assertKeyLocation), destinations: destinationSnapshot([join(main, '.env')]), backend: tree(join(main, 'dist-server')), dependencies: {}, stable: {} }
   await writeFile(join(outside, 'key-cutover-permit.json'), JSON.stringify(permit))
   const get = () => new Promise((resolve, reject) => {
     const req = request({ host: '127.0.0.1', port, path: '/api/files/content?' + new URLSearchParams({ path: key }), agent, headers: { Cookie: cookie } }, res => { let bytes = 0; res.on('data', chunk => { bytes += chunk.length }); res.on('end', () => resolve({ status: res.statusCode, bytes })) }); req.on('error', reject); req.end()
@@ -75,7 +81,7 @@ async function fixture(t) {
     return result
   }
   const cli = (name,args=[]) => run(process.execPath,[join(reviewed,'operator/scripts',name),...args],{cwd:root,env,timeout:15000})
-  return { root,main,release,outside,key,oldIdentity,state,get,upgrade,drive,stop,start,cli,env, alive: () => processStart(oldIdentity.pid) === oldIdentity.start }
+  return { root,main,release,outside,key,oldIdentity,state,get,upgrade,drive,stop,start,cli,env, runner, alive: () => processStart(oldIdentity.pid) === oldIdentity.start }
 }
 const fault = message => Object.assign(Error(message), { fixtureFault: true })
 test('R5: actual legacy Files sees no key during wait; stop closes keepalive/upgraded connections before key init; required CLI succeeds', async t => {
@@ -137,4 +143,48 @@ test('R5: unexpected existing key destination blocks before stop; never silently
   const f=await fixture(t);await mkdir(join(f.root,'private'),{mode:0o700});await writeFile(f.key,'non-secret-invalid-existing-placeholder',{mode:0o600})
   const before=fileHash(f.key);assert.equal((await f.drive())[0],1);assert(f.alive());assert.equal(fileHash(f.key),before)
   assert.equal(JSON.parse(await readFile(join(f.outside,'key-cutover-state.json'),'utf8')).phase,'pre-stop')
+})
+
+for (const boundary of ['pre-stop', 'generate-owner-key', 'start-required']) test('CR2: actual runner death at ' + boundary + ' prevents the next service/key effect', async t => {
+  const f = await fixture(t, { separateRunner: true }); let killed = false, starts = 0
+  const [code] = await f.drive(async message => {
+    if (message.action === 'start') starts++
+    if (!killed && message.phase === boundary && (boundary === 'pre-stop' || message.probe === 'listener')) {
+      const exited = once(f.runner, 'exit'); f.runner.kill('SIGKILL'); await exited; killed = true
+    }
+  })
+  assert(killed); assert.equal(code, 1); assert.equal(starts, 0)
+  const state = JSON.parse(await readFile(join(f.outside, 'key-cutover-state.json'), 'utf8'))
+  assert.equal(state.reason, 'cutover-runner-not-alive')
+  if (boundary === 'pre-stop') { assert(f.alive()); assert(!existsSync(f.key)); assert.equal((await f.get()).status, 404) }
+  else { assert(!f.alive()); await assert.rejects(f.get()); assert.equal(existsSync(f.key), boundary === 'start-required') }
+})
+
+test('CR2: withdrawing parent phase during final listener await prevents start', async t => {
+  const f = await fixture(t); let changed = false, starts = 0
+  const [code] = await f.drive(async message => {
+    if (message.action === 'start') starts++
+    if (!changed && message.phase === 'start-required' && message.probe === 'listener') {
+      await writeFile(join(f.outside, 'attempt.json'), JSON.stringify({ status: 'failed', phase: 'old-watcher-restart' })); changed = true
+    }
+  })
+  assert(changed); assert.equal(code, 1); assert.equal(starts, 0); assert(existsSync(f.key)); assert(!f.alive()); await assert.rejects(f.get())
+  assert.equal(JSON.parse(await readFile(join(f.outside, 'key-cutover-state.json'), 'utf8')).reason, 'cutover-parent-phase-invalid')
+})
+
+// Inverse finding probe: green means a replacement key was silently adopted, not acceptance.
+test('CR2 inverse: key replaced after init but before binding is adopted without a drift rejection', async t => {
+  const f = await fixture(t); let generatedHash, replacementHash
+  const [code] = await f.drive(async message => {
+    if (message.phase === 'bind-owner-key' && message.status === 'running') {
+      generatedHash = fileHash(f.key)
+      await f.cli('secure-key.mjs', ['rotate', f.key])
+      replacementHash = fileHash(f.key); assert.notEqual(replacementHash, generatedHash)
+    }
+  })
+  assert.equal(code, 0)
+  const binding = JSON.parse(await readFile(join(f.outside, 'key-binding.json'), 'utf8'))
+  assert.equal(binding.key.metadata.sha256, replacementHash)
+  assert.notEqual(binding.key.metadata.sha256, generatedHash)
+  assert(!f.alive()); assert([401, 403].includes((await f.get()).status))
 })
