@@ -1,4 +1,4 @@
-// Read-only artifact provenance for the residual lifecycle/retention fixes.
+// Read-only artifact provenance for the residual native creation lifetime fix.
 // Run after focused server checks through codex-heavy, with the unchanged matching client.
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync, lstatSync } from 'node:fs'
@@ -9,11 +9,11 @@ import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const reviewed = '/root/WORKTREES/cr-leader-resolution-history-fixes'
+const reviewed = '/root/WORKTREES/cr-leader-lifecycle-report-retention'
 const candidate = '/root/WORKTREES/cr-leader-resolution-history-security'
 const capacity = '/root/WORKTREES/cr-leader-capacity-model-security'
 const security = '/root/.local/state/codex-remote/releases/secure-api-80843c0-review-r6-dc9ee20'
-const base = 'fc40c05b607b99b04d63e812c443d1c309745031'
+const base = '14cc1893c84a77a1de397c4371f9c1ad65d6e1ba'
 const git = (at, ...args) => execFileSync('git', ['-C', at, ...args], { encoding: 'utf8', maxBuffer: 24 * 1024 * 1024 }).trimEnd()
 const hash = path => createHash('sha256').update(readFileSync(path)).digest('hex')
 function files(at, prefix = '', output = {}) {
@@ -25,9 +25,10 @@ function files(at, prefix = '', output = {}) {
   return output
 }
 assert.equal(git(root, 'merge-base', base, 'HEAD'), base)
-assert.equal(git(reviewed, 'rev-parse', 'HEAD'), '3f7e139c25f42943d15bab6bb18f982646228193')
+assert.equal(git(reviewed, 'rev-parse', 'HEAD'), '82b4367efb52f9340a2301c64273de7ab3de58a2')
 assert.equal(git(reviewed, 'status', '--porcelain'), '')
-assert.equal(git(root, 'diff', '--name-only', '3f7e139', '--', 'src', 'public', 'vite.config.ts'), '')
+assert.equal(git(root, 'diff', '--name-only', '3f7e139', '--', 'src', 'public', 'vite.config.ts', 'scripts/team-panel-browser.mjs'), 'scripts/team-panel-browser.mjs')
+assert.equal(git(root, 'diff', '--name-only', '82b4367', '--', 'src', 'public', 'vite.config.ts', 'scripts/team-panel-browser.mjs'), '')
 assert.equal(git(candidate, 'rev-parse', 'HEAD'), '100381eaabe7c54a55cc051a03f9a5499f6fe297')
 assert.equal(git(capacity, 'rev-parse', 'HEAD'), 'd07206aeaefc591f7d4ae35a4b858883c154e53d')
 assert.equal(git(candidate, 'status', '--porcelain'), '')
@@ -40,14 +41,14 @@ const delta = before => Object.entries(backend).flatMap(([path, sha256]) => {
 })
 const incremental = delta(reviewed), sinceOriginal = delta(candidate), sinceCapacity = delta(capacity)
 const names = list => list.map(item => item.path.slice(12)).sort()
-assert.deepEqual(names(incremental), ['orchestration.js', 'orchestration.js.map'])
+assert.deepEqual(names(incremental), ['controller.js', 'controller.js.map', 'orchestration.js', 'orchestration.js.map'])
 assert.deepEqual(names(sinceCapacity), ['http-app.js', 'http-app.js.map', ...names(incremental)].sort())
 const inventory = JSON.parse(readFileSync(join(security, 'inventory.json'), 'utf8'))
 const combined = inventory.groups.backend.flatMap(item => {
   const sha256 = hash(join(root, item.path))
   return sha256 === item.sha256 ? [] : [{ path: item.path, oldSha256: item.sha256, sha256 }]
 })
-assert.deepEqual(names(combined), ['controller.js', 'controller.js.map', ...names(sinceCapacity)].sort())
+assert.deepEqual(names(combined), names(sinceCapacity))
 for (const name of ['controller', 'http-app', 'orchestration']) {
   const source = readFileSync(join(root, 'server', name + '.ts'), 'utf8')
   const emitted = ts.transpileModule(source, { fileName: name + '.ts', compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022, esModuleInterop: true, sourceMap: true } })
@@ -95,7 +96,20 @@ while (pending.length) {
 }
 for (const name of ['src/ConversationTeam.tsx', 'src/teamTaskSelection.ts', 'src/App.tsx', 'src/api.ts']) assert(checkedSources.has(name), 'missing current map source: ' + name)
 assert.equal(client['sw.js'], hash(join(root, 'public/sw.js')))
+// Reuse unchanged UI/full-suite evidence by its recorded hashes, not a new run claim.
+const reviewDir = '/root/.local/state/codex-remote/reviews/leader-lifecycle-retention-82b4367-cr3'
+const decision = JSON.parse(readFileSync(join(reviewDir, 'review-decision.json'), 'utf8'))
+const reusedPath = join(reviewDir, 'reused-evidence.json')
+assert.equal(hash(reusedPath), decision.evidence[reusedPath])
+const reused = JSON.parse(readFileSync(reusedPath, 'utf8'))
+assert.equal(hash('/tmp/cr-leader-lifecycle-delivery.json'), reused.authorDeliverySha256)
+for (const [path, sha256] of Object.entries(reused.verified)) assert.equal(hash(path), sha256, 'reused evidence changed: ' + path)
+const fullReceipt = JSON.parse(readFileSync('/tmp/cr-leader-review-fixes-delivery.json', 'utf8'))
+assert.equal(fullReceipt.head, '3f7e139c25f42943d15bab6bb18f982646228193')
+assert.equal(hash(fullReceipt.checks.log), fullReceipt.checks.logSha256)
+const reusedEvidence = { verified: reused.verified, fullSuite: { head: fullReceipt.head, checks: fullReceipt.checks },
+  browserRerun: false, clientRebuilt: false, fullSuiteRerun: false }
 console.log(JSON.stringify({ head: git(root, 'rev-parse', 'HEAD'), dirty: git(root, 'status', '--porcelain'), base,
   backendCompared: Object.keys(backend).length, sealedSecurityCompared: inventory.groups.backend.length,
   incremental, sinceOriginal, sinceCapacity, combined, backend, clientEntries: entries, clientGraph: [...seen].sort(), checkedSources: [...checkedSources].sort(),
-  completeClient: client, unchangedClient: true, hours, hoursSources, unchangedDependencies: true, sourceEmissionMatch: true, mapEmissionMatch: true, noProductionWrites: true }, null, 2))
+  completeClient: client, unchangedClient: true, hours, hoursSources, unchangedDependencies: true, sourceEmissionMatch: true, mapEmissionMatch: true, reusedEvidence, noProductionWrites: true }, null, 2))

@@ -74,7 +74,7 @@ export class RemoteController {
       workspaces: () => this.workspaces,
       read: async threadId => threadFromResult(await this.readThread(threadId)) as { id: string },
       inspect: async threadId => threadFromResult(await this.#readThreadMetadata(threadId)) as { id: string },
-      create: async (workspaceId, groupId, settings) => threadFromResult(await this.createThread(workspaceId, settings.fullAccess, groupId)) as { id: string },
+      create: async (workspaceId, groupId, settings, guard) => threadFromResult(await this.createThread(workspaceId, settings.fullAccess, groupId, guard)) as { id: string },
       normalizeName: normalizeThreadName,
       rename: (threadId, name, guard) => this.renameThread(threadId, name, guard),
       archive: (threadId, guard, onDispatch) => this.archiveThread(threadId, guard, onDispatch),
@@ -293,6 +293,8 @@ export class RemoteController {
       sandbox: fullAccess ? 'danger-full-access' : 'workspace-write',
       serviceName: 'codex_remote_control',
     }, undefined, live)
+    // An accepted native create is not undone; stale replies cannot mutate local ownership.
+    live?.()
     this.#markResumed(threadFromResult(result))
     if (groupId !== undefined && groupId !== null) this.contextVault!.assignThread(String(threadFromResult(result).id), groupId)
     return result

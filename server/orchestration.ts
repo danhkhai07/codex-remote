@@ -34,7 +34,7 @@ export type OrchestrationDriver = {
   workspaces: () => Array<{ id: string; label: string; path: string }>
   read: (threadId: string) => Promise<ThreadInfo>
   inspect: (threadId: string) => Promise<ThreadInfo>
-  create: (workspaceId: string, groupId: string, settings: TurnSettings) => Promise<ThreadInfo>
+  create: (workspaceId: string, groupId: string, settings: TurnSettings, guard: () => void) => Promise<ThreadInfo>
   normalizeName: (value: unknown) => string
   rename: (threadId: string, name: string, guard?: () => void) => Promise<unknown>
   archive: (threadId: string, guard: () => void, onDispatch: () => void) => Promise<unknown>
@@ -349,7 +349,7 @@ export class ConversationOrchestrator {
     try {
       if (!threadId) {
         checkAdmission()
-        const created = await this.#driver.create(workspaceId, group.id, task.settings)
+        const created = await this.#driver.create(workspaceId, group.id, task.settings, checkAdmission)
         this.#live(lifetime)
         threadId = task.threadId = created.id
         this.#save()

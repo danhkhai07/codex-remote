@@ -504,7 +504,7 @@ it('pins overridden task settings across simultaneous retries and leaves leader 
   expect(first.task.id).toBe(retry.task.id)
   const chosen = { ...inherited, model: 'gpt-5.6-sol', effort: 'low' }
   expect(first.task.settings).toEqual(chosen)
-  expect(f.driver.create).toHaveBeenCalledExactlyOnceWith('0', f.group.id, chosen)
+  expect(f.driver.create).toHaveBeenCalledExactlyOnceWith('0', f.group.id, chosen, expect.any(Function))
   await f.orchestra.start(); await f.orchestra.pump()
   expect(f.driver.start).toHaveBeenCalledWith(first.task.threadId, expect.any(String), chosen, expect.any(Function))
   expect(await f.orchestra.command(cap, { ...command, model: 'other', effort: 'invalid' })).toMatchObject({ duplicate: true, task: { settings: chosen } })
