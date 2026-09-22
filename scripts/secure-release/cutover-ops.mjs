@@ -49,7 +49,15 @@ export async function cutoverOps(release, fixtureIO) {
     },
   }
   const destinations = new Destinations(permit.destinations.entries, permit.destinations.parents)
-  let config, binding
+  let config, binding, generated
+  const createdPath = join(outside, 'key-created.json')
+  function generatedKey() {
+    assert(generated, 'generated-key-identity-missing')
+    same(json(createdPath), generated.receipt, 'generated-key-receipt-drift')
+    assert(fileHash(createdPath) === generated.sha256, 'generated-key-receipt-drift')
+    same(ownerIdentity(meta, readOwnerKey), generated.receipt.key, 'generated-owner-key-drift')
+    return generated.receipt.key
+  }
   function authority() {
     assert(processStart(permit.runner.pid) === permit.runner.start, 'cutover-runner-not-alive')
     same(json(permit.lock + '/owner.json'), { release, pid: permit.runner.pid }, 'cutover-lock-owner-drift')
@@ -87,21 +95,29 @@ export async function cutoverOps(release, fixtureIO) {
   return {
     claim: async () => { const fd = openSync(join(outside, 'key-cutover-claimed.json'), 'wx', 0o600); try { writeFileSync(fd, JSON.stringify({ at: new Date().toISOString(), pid: process.pid, seal }) + '\n'); fsyncSync(fd) } finally { closeSync(fd) }; const parent = openSync(outside, 'r'); try { fsyncSync(parent) } finally { closeSync(parent) } },
     state: async value => atomicBytes(join(outside, 'key-cutover-state.json'), JSON.stringify({ ...value, release, seal, old: permit.old, at: new Date().toISOString() }) + '\n', 0o600),
-    preStop: async () => { installed(); same(provisionPlan(meta, assertKeyLocation), permit.provision, 'cutover-provision-drift'); assert(record(join(outside, 'key-binding.json')).absent, 'previous-key-binding'); assert(io.processStart(permit.old.pid) === permit.old.start && io.properties().MainPID === String(permit.old.pid), 'old-process-changed-before-stop') },
+    preStop: async () => { installed(); same(provisionPlan(meta, assertKeyLocation), permit.provision, 'cutover-provision-drift'); assert(record(createdPath).absent && record(join(outside, 'key-binding.json')).absent, 'previous-key-binding'); assert(io.processStart(permit.old.pid) === permit.old.start && io.properties().MainPID === String(permit.old.pid), 'old-process-changed-before-stop') },
     stop: async () => { authority(); await io.control('stop') },
     isolated,
     preProvision: async () => { installed(); same(provisionPlan(meta, assertKeyLocation), permit.provision, 'cutover-provision-drift'); await isolated() },
     init: async () => {
       await isolated(); installed(); same(provisionPlan(meta, assertKeyLocation), permit.provision, 'cutover-provision-drift'); stoppedNow()
-      command(process.execPath, [join(release, 'operator/scripts/secure-key.mjs'), 'init', meta.keyFile], meta.main, { ...parseEnv(readFileSync(join(meta.main, '.env'), 'utf8')), PATH: process.env.PATH, NODE_ENV: 'production' })
+      command(process.execPath, [join(release, 'runner/key-init.mjs'), release], meta.main, { PATH: process.env.PATH, NODE_ENV: 'production' })
+      // Capture the creator's known-value receipt synchronously before any later
+      // phase/socket await. Interrupted creation is never adopted on retry.
+      const receipt = json(createdPath)
+      assert(receipt.version === 1 && receipt.release === release && receipt.seal === seal && receipt.app === APP && receipt.keyFile === meta.keyFile, 'generated-key-receipt-invalid')
+      same(receipt.old, permit.old, 'generated-key-old-boundary-drift')
+      generated = { receipt, sha256: fileHash(createdPath) }
+      generatedKey()
     },
     bind: async () => {
-      await isolated(); binding = { release, seal, app: APP, oldGone: true, old: permit.old, at: new Date().toISOString(), key: ownerIdentity(meta, readOwnerKey) }
+      await isolated(); const key = generatedKey()
+      binding = { release, seal, app: APP, oldGone: true, old: permit.old, at: new Date().toISOString(), created: { path: createdPath, sha256: generated.sha256 }, key }
       assert(record(join(outside, 'key-binding.json')).absent, 'key-binding-already-exists')
       atomicBytes(join(outside, 'key-binding.json'), JSON.stringify(binding) + '\n', 0o600)
       return { path: join(outside, 'key-binding.json'), sha256: fileHash(join(outside, 'key-binding.json')) }
     },
-    beforeStart: async () => { installed(); same(ownerIdentity(meta, readOwnerKey), binding.key, 'bound-owner-key-drift'); await isolated() },
-    start: async () => { await isolated(); installed(); same(ownerIdentity(meta, readOwnerKey), binding.key, 'bound-owner-key-drift'); stoppedNow(); await io.control('start') },
+    beforeStart: async () => { installed(); same(generatedKey(), binding.key, 'bound-owner-key-drift'); await isolated() },
+    start: async () => { await isolated(); installed(); same(generatedKey(), binding.key, 'bound-owner-key-drift'); stoppedNow(); await io.control('start') },
   }
 }

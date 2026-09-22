@@ -2,7 +2,7 @@
 // Only fake credentials, owned tempdirs and loopback child processes.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, chmod, unlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, chmod, unlink, copyFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -12,12 +12,12 @@ import { once } from 'node:events'
 import { createServer, Agent, request } from 'node:http'
 import { connect } from 'node:net'
 import { APP, SOURCE, tree, fileHash, atomicBytes } from './common.mjs'
-import { processStart, provisionPlan } from './key-state.mjs'
+import { processStart, provisionPlan, boundOwner } from './key-state.mjs'
 import { receiptBinding, servicePolicy } from './cutover-ops.mjs'
 import { destinationSnapshot } from './destinations.mjs'
 const run = promisify(execFile), reviewed = process.env.REVIEW_RELEASE
 const gatewayScript = new URL('./fixtures/key-gateway.mjs', import.meta.url), driverScript = new URL('./fixtures/key-driver.mjs', import.meta.url)
-async function fixture(t, { separateRunner = false } = {}) {
+async function fixture(t, { separateRunner = false, creatorFault } = {}) {
   assert(reviewed, 'REVIEW_RELEASE required; R5 acceptance must not silently skip')
   const root = await mkdtemp(join(tmpdir(), 'r5-key-cutover-')), main = join(root, 'main'), release = join(root, 'release'), outside = release + '.activation'
   const key = join(root, 'private/owner-key.json'), files = join(root, 'files'), vault = join(root, 'vault'), children = new Set(), sockets = new Set()
@@ -30,6 +30,13 @@ async function fixture(t, { separateRunner = false } = {}) {
   await symlink('/root/WORKTREES/cr-secure-api-review-fixes/dist-server',join(main,'dist-server'))
   await writeFile(join(main,'source-revision'), SOURCE)
   await symlink(join(reviewed, 'operator'), join(release, 'operator'))
+  await mkdir(join(release, 'runner'))
+  for (const name of ['key-init.mjs', 'common.mjs', 'key-state.mjs', 'cutover-ops.mjs', 'destinations.mjs']) await copyFile(new URL(name, import.meta.url), join(release, 'runner', name))
+  if (creatorFault) {
+    await copyFile(new URL('key-init.mjs', import.meta.url), join(release, 'runner/key-init-actual.mjs'))
+    await copyFile(new URL('fixtures/key-init-fault.mjs', import.meta.url), join(release, 'runner/key-init.mjs'))
+    await writeFile(join(root, 'creator-fault-mode'), creatorFault)
+  }
   const meta = { app: APP, sourceTarget: SOURCE, main, keyFile: key, fileRoots: [files], requiredEncryption: true, activationEligible: true }
   await writeFile(join(release, 'metadata.json'), JSON.stringify(meta))
   await writeFile(join(release, 'seal.json'), JSON.stringify({ app: APP, files: tree(release) }))
@@ -95,6 +102,11 @@ test('R5: actual legacy Files sees no key during wait; stop closes keepalive/upg
   })
   assert.equal(code,0); assert(upgradedClosed)
   const before=fileHash(f.key), receipt=JSON.parse(await readFile(join(f.outside,'key-binding.json'),'utf8')); assert.equal(receipt.oldGone,true); assert(receipt.key.digest)
+  const createdPath=join(f.outside,'key-created.json'), created=JSON.parse(await readFile(createdPath,'utf8'))
+  assert.equal(created.key.metadata.sha256,before); assert.equal(created.key.key,undefined)
+  assert.deepEqual(receipt.created,{path:createdPath,sha256:fileHash(createdPath)})
+  const { readOwnerKey }=await import(join(reviewed,'operator/dist-server/secure-key.js'))
+  assert.deepEqual(boundOwner(f.release,JSON.parse(await readFile(join(f.release,'metadata.json'),'utf8')),fileHash(join(f.release,'seal.json')),readOwnerKey),created.key)
   const denied=await f.get(); assert([401,403].includes(denied.status))
   const note=join(f.root,'note.md'); await writeFile(note,'FAKE CUTOVER KNOWLEDGE')
   const written=JSON.parse((await f.cli('knowledge.mjs',['write','--path','References/R5.md','--file',note,'--revision','','--actor','fixture'])).stdout)
@@ -172,19 +184,57 @@ test('CR2: withdrawing parent phase during final listener await prevents start',
   assert.equal(JSON.parse(await readFile(join(f.outside, 'key-cutover-state.json'), 'utf8')).reason, 'cutover-parent-phase-invalid')
 })
 
-// Inverse finding probe: green means a replacement key was silently adopted, not acceptance.
-test('CR2 inverse: key replaced after init but before binding is adopted without a drift rejection', async t => {
-  const f = await fixture(t); let generatedHash, replacementHash
+// R6 inverse converted to acceptance: actual adapter + real owned-process CLI.
+for (const boundary of ['after-init', 'binding-listener']) for (const change of ['rotate', 'replace']) test('R6: ' + change + ' at ' + boundary + ' cannot be adopted as generated', async t => {
+  const f = await fixture(t); let generatedHash, replacementHash, createdHash, changed=false, starts=0
   const [code] = await f.drive(async message => {
-    if (message.phase === 'bind-owner-key' && message.status === 'running') {
+    if (message.action === 'start') starts++
+    if (!changed && message.phase === 'bind-owner-key' && (boundary === 'after-init' ? message.status === 'running' : message.probe === 'listener')) {
       generatedHash = fileHash(f.key)
-      await f.cli('secure-key.mjs', ['rotate', f.key])
-      replacementHash = fileHash(f.key); assert.notEqual(replacementHash, generatedHash)
+      createdHash = fileHash(join(f.outside,'key-created.json'))
+      if (change === 'replace') await unlink(f.key)
+      await f.cli('secure-key.mjs', [change === 'replace' ? 'init' : 'rotate', f.key])
+      replacementHash = fileHash(f.key); assert.notEqual(replacementHash, generatedHash); changed=true
     }
   })
-  assert.equal(code, 0)
-  const binding = JSON.parse(await readFile(join(f.outside, 'key-binding.json'), 'utf8'))
-  assert.equal(binding.key.metadata.sha256, replacementHash)
-  assert.notEqual(binding.key.metadata.sha256, generatedHash)
-  assert(!f.alive()); assert([401, 403].includes((await f.get()).status))
+  assert(changed); assert.equal(code,1); assert.equal(starts,0); assert(!f.alive()); await assert.rejects(f.get())
+  assert(!existsSync(join(f.outside,'key-binding.json')))
+  const state=JSON.parse(await readFile(join(f.outside,'key-cutover-state.json'),'utf8'))
+  assert.equal(state.phase,'bind-owner-key'); assert.equal(state.status,'failed'); assert.equal(state.reason,'generated-owner-key-drift')
+  assert.equal(fileHash(f.key),replacementHash); assert.equal(fileHash(join(f.outside,'key-created.json')),createdHash)
+  assert.equal(JSON.parse(await readFile(join(f.outside,'key-created.json'),'utf8')).key.metadata.sha256,generatedHash)
+  assert.equal((await f.drive())[0],1); assert.equal(fileHash(f.key),replacementHash,'no adoption/deletion/rotation on retry')
+  assert.deepEqual(JSON.parse(await readFile(join(f.outside,'key-cutover-state.json'),'utf8')),state,'claim failure preserves original phase evidence')
+})
+
+for (const creatorFault of ['rotate','replace','kill']) test('R6: actual creator ' + creatorFault + ' after key fsync preserves provenance or unbound failure',async t=>{
+  const f=await fixture(t,{creatorFault});let starts=0
+  assert.equal((await f.drive(message=>{if(message.action==='start')starts++}))[0],1)
+  assert.equal(starts,0);assert(!f.alive());await assert.rejects(f.get())
+  const state=JSON.parse(await readFile(join(f.outside,'key-cutover-state.json'),'utf8'))
+  assert.equal(state.phase,'generate-owner-key');assert.equal(state.status,'failed');assert(!existsSync(join(f.outside,'key-binding.json')))
+  const fault=JSON.parse(await readFile(join(f.root,'creator-fault-result.json'),'utf8')), before=fileHash(f.key)
+  if(creatorFault==='kill') {
+    assert(!existsSync(join(f.outside,'key-created.json')));assert.equal(before,fault.originalHash)
+  } else {
+    const created=JSON.parse(await readFile(join(f.outside,'key-created.json'),'utf8'))
+    assert.equal(created.key.metadata.sha256,fault.originalHash);assert.notEqual(before,fault.originalHash)
+    assert.equal(before,fault.replacementHash);assert.equal(state.reason,'generated-owner-key-drift')
+  }
+  assert.equal((await f.drive())[0],1);assert.equal(fileHash(f.key),before)
+  assert.deepEqual(JSON.parse(await readFile(join(f.outside,'key-cutover-state.json'),'utf8')),state)
+})
+
+test('R6: creation receipt cannot change during the final start listener await',async t=>{
+  const f=await fixture(t);let changed=false,starts=0,keyHash
+  assert.equal((await f.drive(async message=>{
+    if(message.action==='start')starts++
+    if(!changed&&message.phase==='start-required'&&message.probe==='listener') {
+      keyHash=fileHash(f.key)
+      const path=join(f.outside,'key-created.json'),created=JSON.parse(await readFile(path,'utf8'))
+      await writeFile(path,JSON.stringify({...created,at:'2020-01-01T00:00:00Z'})+'\n');changed=true
+    }
+  }))[0],1)
+  assert(changed);assert.equal(starts,0);assert(!f.alive());await assert.rejects(f.get());assert.equal(fileHash(f.key),keyHash)
+  assert.equal(JSON.parse(await readFile(join(f.outside,'key-cutover-state.json'),'utf8')).reason,'generated-key-receipt-drift')
 })

@@ -122,7 +122,7 @@ export function productionOps(release) {
     // whenever its own receipt is valid, even if migration/key readiness is pending.
     const infraErrors = evidenceErrors(outside, seal, evidence).filter(error => error.includes('infrastructure') || error.includes('dns-tls'))
     if (!infraErrors.length) { try { await verifyInfrastructure(evidence.infrastructure) } catch (error) { blockers.push(error.message) } }
-    try { provision = await candidateConfig(); assert(record(join(outside, 'key-binding.json')).absent, 'previous-key-binding'); same(command('/usr/bin/systemctl', ['show', 'codex-remote.service', '-p', 'Type', '-p', 'KillMode', '-p', 'SendSIGKILL', '-p', 'TriggeredBy', '-p', 'ControlGroup']), baseline.cutoverPolicy, 'service-stop-policy-drift') } catch (error) { blockers.push('pre-key-provision-not-ready:' + error.message) }
+    try { provision = await candidateConfig(); assert(record(join(outside, 'key-created.json')).absent && record(join(outside, 'key-binding.json')).absent, 'previous-key-binding'); same(command('/usr/bin/systemctl', ['show', 'codex-remote.service', '-p', 'Type', '-p', 'KillMode', '-p', 'SendSIGKILL', '-p', 'TriggeredBy', '-p', 'ControlGroup']), baseline.cutoverPolicy, 'service-stop-policy-drift') } catch (error) { blockers.push('pre-key-provision-not-ready:' + error.message) }
     if (applying) {
       try {
         const authority = json(join(outside, 'authorization.json'))

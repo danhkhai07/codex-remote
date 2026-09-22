@@ -298,4 +298,10 @@ A crash after stop can leave the unit down; after generation it can leave a boun
 or unbound key. The old process cannot serve it because its death, full cgroup
 and listener boundary precede generation. There is no automatic key rotation,
 old-code/config rollback or plaintext recovery. `key-cutover-state.json`, the
-one-use claim and `key-binding.json` retain exact/unknown outcomes for review.
+one-use claim, `key-created.json` and `key-binding.json` retain exact/unknown outcomes for review.
+
+R6 supersedes runner8b395de/seal4e319915 as an activation candidate. Its original
+init-to-bind gap could adopt a concurrent replacement. The cutover-only creator
+now records the generated identity from its own bytes/open descriptors, and the
+adapter verifies that identity after later awaits. Do not pre-provision, adopt an
+unbound key or rerun a claimed attempt. See [R6 implementation](secure-release-generated-identity.md).

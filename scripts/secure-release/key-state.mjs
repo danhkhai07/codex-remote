@@ -1,6 +1,6 @@
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import { readFileSync } from 'node:fs'
-import { assert, record, parentIdentity, hash, same, json } from './common.mjs'
+import { assert, record, parentIdentity, hash, same, json, fileHash } from './common.mjs'
 
 export function processStart(pid) {
   try { return readFileSync('/proc/' + pid + '/stat', 'utf8').split(') ').at(-1).split(' ')[19] }
@@ -26,6 +26,12 @@ export function ownerIdentity(meta, readOwnerKey) {
 export function boundOwner(release, meta, seal, readOwnerKey) {
   const receipt = json(release + '.activation/key-binding.json')
   assert(receipt.release === release && receipt.seal === seal && receipt.app === meta.app && receipt.oldGone === true, 'key-binding-not-proven')
+  const path = join(release + '.activation', 'key-created.json')
+  assert(receipt.created?.path === path && receipt.created.sha256 === fileHash(path), 'key-creation-receipt-drift')
+  const created = json(path)
+  assert(created.version === 1 && created.release === release && created.seal === seal && created.app === meta.app && created.keyFile === meta.keyFile, 'key-creation-not-proven')
+  same(created.old, receipt.old, 'key-creation-old-boundary-drift')
+  same(created.key, receipt.key, 'key-creation-binding-drift')
   const key = ownerIdentity(meta, readOwnerKey)
   same(key, receipt.key, 'generated-owner-key-drift')
   return key

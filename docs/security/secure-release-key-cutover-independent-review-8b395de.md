@@ -1,5 +1,10 @@
 # Independent key cutover review — 8b395de, 2026-09-22
 
+Historical review of exact8b395de follows unchanged. The later R6 implementation
+converts its inverse probe into rejecting acceptance tests; that change is
+[documented separately](secure-release-generated-identity.md) and awaits independent/root
+review. It does not retroactively approve 8b395de or its seal.
+
 **Decision: R5's legacy key-exposure boundary is addressed; one new P2 (R6)
 requires a focused runner correction before activation.** Application acceptance
 at 80843c0 is unchanged. R1–R4 corrections remain intact in the reviewed code and

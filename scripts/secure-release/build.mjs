@@ -83,7 +83,7 @@ export function prepare(output, inventoryPath, kind = 'review-only') {
     for (const match of text.matchAll(/(?:from\s*|import\s*)['"](\.[^'"]+)['"]/g)) pending.push(join(dirname(local), match[1]))
   }
   writeFileSync(join(output, 'old/package.json'), '{"type":"module"}\n')
-  for (const name of ['common.mjs', 'runner.mjs', 'production.mjs', 'verify.mjs', 'destinations.mjs', 'publication.mjs', 'lock.mjs', 'key-state.mjs', 'key-cutover.mjs', 'cutover-ops.mjs', 'cutover-bin/systemctl']) copy(join(checkout, 'scripts/secure-release', name), 'runner/' + name)
+  for (const name of ['common.mjs', 'runner.mjs', 'production.mjs', 'verify.mjs', 'destinations.mjs', 'publication.mjs', 'lock.mjs', 'key-state.mjs', 'key-cutover.mjs', 'cutover-ops.mjs', 'key-init.mjs', 'cutover-bin/systemctl']) copy(join(checkout, 'scripts/secure-release', name), 'runner/' + name)
   const infraNames = ['admin-active.conf', 'admin-cutover-gated.conf', 'preview-active.conf', 'preview-parked.conf', 'cloudflare-real-ip.conf', 'workboard-isolated.conf', 'workboard-embedding.patch', 'workboard-review.bundle', 'workboard-delivery.json']
   for (const name of infraNames) copy(join(INFRA, name), 'infra/' + name)
   const admin = readFileSync(join(output, 'infra/admin-active.conf'), 'utf8')
