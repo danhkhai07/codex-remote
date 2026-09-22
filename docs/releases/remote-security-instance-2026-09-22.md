@@ -140,7 +140,10 @@ reported root's accepted boundary direction and CR2's staged prerequisite
 backport restricts legacy Files roots and descriptor access while retaining old
 UI/native root/fullAccess. This task did not independently review that patch;
 the note says root review/ALL-idle activation remain. Actual observed old runtime
-is still783b1e3/PID1758426. A staged patch is not a live key boundary.
+was783b1e3/PID1758426 during preparation. The final handoff read subsequently
+observed main fast-forwarded to7b8c20a while gateway PID1758426 and Hours hashes
+were unchanged. This worker made no main change. Source publication alone is not
+proof of the live Files boundary; root must finish and verify its runtime install.
 
 This worker must finish its current turn so it does not itself prevent ALL-idle
 legacy publication. Root owns the legacy install and must verify its actual live
@@ -190,7 +193,8 @@ key is created. No Services registry was falsely updated to claim the new app li
 ## Next commands and ownership
 
 No initial-cutover runner may be armed: it would stop the old gateway. No old seal
-may be translated to this new architecture. Keep the existing main at783b1e3.
+may be translated to this new architecture. This worker leaves main to root's
+separate legacy-prerequisite task (observed783b1e3 →7b8c20a during this handoff).
 
 Read-only package recheck:
 
