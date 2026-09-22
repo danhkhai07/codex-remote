@@ -83,8 +83,12 @@ message. Stopping the leader also stops automatic wakeups until another user tur
 Results go to the current leader when it is idle. Workers and automatic result
 turns inherit the leader's Plan/Code mode; planning tasks remain in Plan mode.
 Each direct leader instruction
-allows at most 20 tasks, 8 automatic result wakeups, 12 unfinished tasks, and 3
-concurrent delegated turns per folder. These budgets survive restart; ambiguous
+allows at most 20 tasks, 8 automatic result wakeups and 12 unfinished tasks.
+Concurrent worker turns per folder use the shared `MAX_CONCURRENT_WORKERS` in
+[`server/orchestration.ts`](server/orchestration.ts), also reported by
+`status.limits.concurrent` and the injected leader help. The leader is excluded;
+this is a ceiling, not a target number of workers. Heavy checks still queue one
+job at a time through `codex-heavy`. These budgets survive restart; ambiguous
 in-flight sends are flagged for review rather than automatically repeated. Task
 state lives in the vault's generated `.state/Orchestration.json`, separate from
 knowledge notes. Use stable `requestId` values when retrying commands. Code tasks

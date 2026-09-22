@@ -6,6 +6,7 @@ import { mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { CodexAppServer } from '../dist-server/codex-app-server.js'
 import { RemoteController } from '../dist-server/controller.js'
+import { MAX_CONCURRENT_WORKERS } from '../dist-server/orchestration.js'
 import { createRemoteHttpServer } from '../dist-server/http-app.js'
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
 const app = new CodexAppServer(process.execPath, [resolve('server/fixtures/plan-questions.mjs')])
@@ -61,7 +62,7 @@ try {
         else tasks.find(task => task.id === action.taskId).status = 'cancelled'
       }
       await route.fulfill({ json: { groupId: 'group', leaderId, members: ['plan-fixture', 'worker'], paused, tasks,
-        pendingResults: 1, unconfirmedResults: 0, limits: { concurrent: 3, dispatchesLeft: 10, wakeupsLeft: 4 } } })
+        pendingResults: 1, unconfirmedResults: 0, limits: { concurrent: MAX_CONCURRENT_WORKERS, dispatchesLeft: 10, wakeupsLeft: 4 } } })
     })
     await context.request.post(`${config.publicOrigin}api/session/login`, { headers: { Origin: config.publicOrigin.origin }, data: { password: config.password } })
     await page.goto(config.publicOrigin.origin)

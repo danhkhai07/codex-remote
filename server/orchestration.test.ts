@@ -7,7 +7,7 @@ import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { afterEach, expect, it, vi } from 'vitest'
 import { ContextVault } from './context-vault.js'
-import { ConversationOrchestrator, type ConversationTask, type OrchestrationDriver } from './orchestration.js'
+import { ConversationOrchestrator, MAX_CONCURRENT_WORKERS, type ConversationTask, type OrchestrationDriver } from './orchestration.js'
 import { normalizeThreadName } from './controller.js'
 import { listenOrchestration } from './orchestration-socket.js'
 
@@ -116,13 +116,86 @@ it('waits for busy conversations and never starts two delegated turns in the sam
   expect(f.orchestra.snapshot('leader').tasks.map(task => task.status)).toEqual(['running', 'queued'])
 })
 
-it('limits concurrent workers and preserves the dispatch budget during automatic leader turns', async () => {
+it('starts the eighth worker, queues the ninth, and reports the same limit in status and help', async () => {
   const f = setup(), cap = f.token()
-  for (let i = 0; i < 4; i++) { f.add(`worker-${i}`); await f.delegate(cap, `worker-${i}`, `task-${i}`) }
+  f.threads.get('leader')!.status = { type: 'active' }
+  for (let i = 0; i < 9; i++) { f.add(`worker-${i}`); await f.delegate(cap, `worker-${i}`, `task-${i}`) }
   await f.orchestra.start(); await f.orchestra.pump()
-  expect(f.driver.start).toHaveBeenCalledTimes(3)
-  f.token('leader', settings, false)
-  expect(f.orchestra.snapshot('leader').limits).toMatchObject({ dispatchesLeft: 16 })
+  expect(f.driver.start).toHaveBeenCalledTimes(8)
+  expect(f.orchestra.snapshot('leader').tasks.map(task => task.status)).toEqual([...Array(8).fill('running'), 'queued'])
+  const help = f.orchestra.context('leader', settings, false)
+  expect(MAX_CONCURRENT_WORKERS).toBe(8)
+  expect(help).toContain(`Maximum ${MAX_CONCURRENT_WORKERS} delegated worker turns per folder at a time (leader excluded)`)
+  expect(f.orchestra.snapshot('leader').limits).toEqual({ concurrent: MAX_CONCURRENT_WORKERS, dispatchesLeft: 11, wakeupsLeft: 8 })
+})
+
+it.each(['complete', 'cancel'])('releases exactly one of eight slots on %s', async action => {
+  const f = setup(), cap = f.token()
+  f.threads.get('leader')!.status = { type: 'active' }
+  for (let i = 0; i < 10; i++) { f.add(`worker-${i}`); await f.delegate(cap, `worker-${i}`, `task-${i}`) }
+  await f.orchestra.start(); await f.orchestra.pump()
+  const first = f.orchestra.snapshot('leader').tasks[0]
+  if (action === 'complete') f.finish(first.threadId, first.turnId!)
+  else await f.orchestra.cancel(first.id)
+  await f.orchestra.pump(); await f.orchestra.pump()
+  expect(f.driver.start).toHaveBeenCalledTimes(9)
+  expect(f.orchestra.snapshot('leader').tasks.filter(task => task.status === 'running')).toHaveLength(8)
+  expect(f.orchestra.snapshot('leader').tasks.at(-1)?.status).toBe('queued')
+})
+
+it('reserves starting and stopping slots while concurrent pumps share the same work', async () => {
+  const f = setup(), cap = f.token(), start = f.driver.start, interrupt = f.driver.interrupt
+  f.threads.get('leader')!.status = { type: 'active' }
+  for (let i = 0; i < 9; i++) { f.add(`worker-${i}`); await f.delegate(cap, `worker-${i}`, `task-${i}`) }
+  let releaseStart!: () => void, releaseStop!: () => void
+  const startGate = new Promise<void>(resolve => { releaseStart = resolve })
+  const stopGate = new Promise<void>(resolve => { releaseStop = resolve })
+  f.driver.start = vi.fn(async (...args) => { if (args[0] === 'worker-7') await startGate; return start(...args) })
+  await f.orchestra.start()
+  await vi.waitFor(() => expect(f.driver.start).toHaveBeenCalledTimes(8))
+  expect(f.orchestra.snapshot('leader').tasks[7].status).toBe('starting')
+  const pumps = Array.from({length: 12}, () => f.orchestra.pump())
+  expect(new Set(pumps).size).toBe(1)
+  releaseStart(); await Promise.all(pumps)
+  f.driver.interrupt = vi.fn(async (...args) => { await stopGate; return interrupt(...args) })
+  const cancelling = f.orchestra.cancel(f.orchestra.snapshot('leader').tasks[0].id)
+  await vi.waitFor(() => expect(f.orchestra.snapshot('leader').tasks[0].status).toBe('stopping'))
+  await Promise.all(Array.from({length: 12}, () => f.orchestra.pump()))
+  expect(f.driver.start).toHaveBeenCalledTimes(8)
+  expect(f.orchestra.snapshot('leader').tasks[8].status).toBe('queued')
+  releaseStop(); await cancelling; await f.orchestra.pump()
+  expect(f.driver.start).toHaveBeenCalledTimes(9)
+})
+
+it('counts recovered workers during startup before admitting the ninth queued task', async () => {
+  const f = setup(), cap = f.token()
+  f.threads.get('leader')!.status = { type: 'active' }
+  for (let i = 0; i < 9; i++) { f.add(`worker-${i}`); await f.delegate(cap, `worker-${i}`, `task-${i}`) }
+  await f.orchestra.start(); await f.orchestra.pump(); f.orchestra.stop()
+  const resumed = new ConversationOrchestrator(f.vault, f.driver)
+  cleanups.push(() => resumed.stop())
+  await Promise.all([resumed.start(), ...Array.from({length: 8}, () => resumed.pump())])
+  expect(f.driver.start).toHaveBeenCalledTimes(8)
+  expect(resumed.snapshot('leader').tasks.filter(task => task.status === 'running')).toHaveLength(8)
+  expect(resumed.snapshot('leader').tasks.at(-1)?.status).toBe('queued')
+  expect(resumed.snapshot('leader').limits).toEqual({concurrent: 8, dispatchesLeft: 11, wakeupsLeft: 8})
+})
+
+it('gives each folder its own eight worker slots without counting either leader', async () => {
+  const f = setup(), cap = f.token(), other = f.vault.createGroup('Other').groups.find(group => group.name === 'Other')!
+  f.add('other-leader'); f.vault.assignThread('other-leader', other.id); f.vault.setLeader(other.id, 'other-leader')
+  const otherCap = f.token('other-leader')
+  f.threads.get('leader')!.status = f.threads.get('other-leader')!.status = {type: 'active'}
+  for (let i = 0; i < 9; i++) {
+    f.add(`worker-${i}`); await f.delegate(cap, `worker-${i}`, `task-${i}`)
+    f.add(`other-${i}`); f.vault.assignThread(`other-${i}`, other.id); await f.delegate(otherCap, `other-${i}`, `other-task-${i}`)
+  }
+  await f.orchestra.start(); await f.orchestra.pump()
+  expect(f.driver.start).toHaveBeenCalledTimes(16)
+  for (const leader of ['leader', 'other-leader']) {
+    expect(f.orchestra.snapshot(leader).tasks.filter(task => task.status === 'running')).toHaveLength(8)
+    expect(f.orchestra.snapshot(leader).tasks.filter(task => task.status === 'queued')).toHaveLength(1)
+  }
 })
 
 it('routes completed results to the current leader once, deferring while that leader is busy', async () => {

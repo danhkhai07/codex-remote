@@ -7,6 +7,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { CodexAppServer } from './codex-app-server.js'
 import { ContextVault } from './context-vault.js'
 import { RemoteController } from './controller.js'
+import { MAX_CONCURRENT_WORKERS } from './orchestration.js'
 import { createRemoteHttpServer } from './http-app.js'
 import { createSession, sessionCookieName } from './auth.js'
 import type { RemoteConfig } from './config.js'
@@ -50,7 +51,7 @@ it('keeps leader changes and team controls behind session, CSRF and group checks
   })
   const path = `/api/conversation-groups/${f.group.id}/leader`
   const withoutLeader = { status: 200, data: { leaderId: null, members: ['leader', 'worker', 'second'],
-    tasks: [], limits: { concurrent: 3, dispatchesLeft: 0, wakeupsLeft: 0 } } }
+    tasks: [], limits: { concurrent: MAX_CONCURRENT_WORKERS, dispatchesLeft: 0, wakeupsLeft: 0 } } }
   expect(await call('/api/threads/worker/orchestration')).toMatchObject(withoutLeader)
   expect((await call(path, { threadId: 'leader' }, false)).status).toBe(401)
   expect((await call(path, { threadId: 'leader' }, true, 'wrong')).status).toBe(403)
