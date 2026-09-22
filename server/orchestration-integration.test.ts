@@ -103,26 +103,26 @@ it('checks delegation authority after context preparation and before sending to 
   expect(f.rpc.mock.calls.some(([method]) => method === 'turn/start')).toBe(false)
 })
 
-it('inherits Plan mode for workers and result wakeups, including native plan-only answers', async () => {
+it('overrides worker model/effort in actual RPC while preserving Plan and leader wakeup settings', async () => {
   const f = setup(), original = f.rpc.getMockImplementation()!
   f.rpc.mockImplementation((method, params, timeout) => method === 'model/list' ? Promise.resolve({ data: [{
-    id: 'test-model', model: 'test-model', isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: 'high' }],
-  }] }) : original(method, params, timeout))
+    id: 'gpt-6-astra', model: 'gpt-6-astra', isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: 'high' }],
+  }, { model: 'gpt-5.6-sol', supportedReasoningEfforts: [{ reasoningEffort: 'xhigh' }] }] }) : original(method, params, timeout))
   f.vault.setLeader(f.group.id, 'leader')
-  await f.controller.startTurn('leader', 'Research the feature and return a plan', 'test-model', 'high', false, [], [], undefined, 'plan')
+  await f.controller.startTurn('leader', 'Research the feature and return a plan', 'gpt-6-astra', 'high', false, [], [], undefined, 'plan')
   const context = JSON.stringify(f.rpc.mock.calls.filter(([method]) => method === 'thread/inject_items').at(-1)![1])
   const token = context.match(/--capability ([\w-]+)/)![1]
-  const { task } = await f.controller.orchestration!.command(token, { action: 'delegate', requestId: 'plan-task', threadId: 'worker', title: 'Research', text: 'Inspect and propose a plan only' }) as { task: { turnId: string } }
+  const { task } = await f.controller.orchestration!.command(token, { action: 'delegate', requestId: 'plan-task', model: 'gpt-5.6-sol', effort: 'xhigh', fullAccess: true, mode: 'default', threadId: 'worker', title: 'Research', text: 'Inspect and propose a plan only' }) as { task: { turnId: string } }
   await f.controller.orchestration!.start(); await f.controller.orchestration!.pump()
   const starts = () => f.rpc.mock.calls.filter(([method]) => method === 'turn/start').map(([, params]) => params)
-  expect(starts().at(-1)).toMatchObject({ threadId: 'worker', collaborationMode: { mode: 'plan' } })
+  expect(starts().at(-1)).toMatchObject({ threadId: 'worker', model: 'gpt-5.6-sol', effort: 'xhigh', sandboxPolicy: { type: 'workspaceWrite', networkAccess: false }, collaborationMode: { mode: 'plan', settings: { model: 'gpt-5.6-sol', reasoning_effort: 'xhigh' } } })
   f.app.emit('notification', { method: 'item/completed', params: { threadId: 'worker', turnId: task.turnId, item: { id: 'plan', type: 'plan', text: 'A verified plan, without code changes.' } } })
   f.app.emit('notification', { method: 'turn/completed', params: { threadId: 'worker', turn: { id: task.turnId, status: 'completed' } } })
   await f.controller.orchestration!.pump()
   expect(f.controller.orchestration!.snapshot('leader').tasks[0].result).toContain('A verified plan')
   f.app.emit('notification', { method: 'turn/completed', params: { threadId: 'leader', turn: { id: 'turn-1', status: 'completed' } } })
   await f.controller.orchestration!.pump()
-  expect(starts().at(-1)).toMatchObject({ threadId: 'leader', collaborationMode: { mode: 'plan' }, input: [{ text: expect.stringContaining('A verified plan') }] })
+  expect(starts().at(-1)).toMatchObject({ threadId: 'leader', model: 'gpt-6-astra', effort: 'high', collaborationMode: { mode: 'plan', settings: { model: 'gpt-6-astra', reasoning_effort: 'high' } }, input: [{ text: expect.stringContaining('A verified plan') }] })
 })
 
 
@@ -256,4 +256,22 @@ it('does not archive after a live-turn notification overtakes the idle metadata 
   expect(f.rpc.mock.calls.some(([method]) => ['thread/archive', 'turn/interrupt'].includes(method))).toBe(false)
   expect(f.vault.groupFor('worker')?.id).toBe(f.group.id)
   expect(orchestra.snapshot('leader').archives).toEqual([])
+})
+
+it('sends catalog-supported Astra/max overrides in Code without changing inherited full access', async () => {
+  const f = setup(), original = f.rpc.getMockImplementation()!
+  f.rpc.mockImplementation((method, params, timeout) => method === 'model/list' ? Promise.resolve({data: [
+    {model: 'gpt-5.6-sol', supportedReasoningEfforts: [{reasoningEffort: 'high'}]},
+    {model: 'gpt-6-astra', supportedReasoningEfforts: [{reasoningEffort: 'max'}]},
+  ]}) : original(method, params, timeout))
+  f.vault.setLeader(f.group.id, 'leader')
+  await f.controller.startTurn('leader', 'Delegate fake security review', 'gpt-5.6-sol', 'high', true, [], [], undefined, 'default')
+  const injected = JSON.stringify(f.rpc.mock.calls.filter(([method]) => method === 'thread/inject_items').at(-1)![1])
+  const token = injected.match(/--capability ([\w-]+)/)![1]
+  await f.controller.orchestration!.command(token, {action: 'delegate', requestId: 'security-fixture', threadId: 'worker', title: 'Fake security review', text: 'Fixture only', model: 'gpt-6-astra', effort: 'max', fullAccess: false, mode: 'plan'})
+  await f.controller.orchestration!.start(); await f.controller.orchestration!.pump()
+  expect(f.rpc.mock.calls.filter(([method]) => method === 'turn/start').at(-1)?.[1]).toMatchObject({
+    threadId: 'worker', model: 'gpt-6-astra', effort: 'max', sandboxPolicy: {type: 'dangerFullAccess'},
+    collaborationMode: {mode: 'default', settings: {model: 'gpt-6-astra', reasoning_effort: 'max'}},
+  })
 })

@@ -70,6 +70,7 @@ export class RemoteController {
     this.#config = config
     this.appServer = appServer
     if (contextVault) this.orchestration = new ConversationOrchestrator(contextVault, {
+      models: () => this.listModels(),
       workspaces: () => this.workspaces,
       read: async threadId => threadFromResult(await this.readThread(threadId)) as { id: string },
       inspect: async threadId => threadFromResult(await this.#readThreadMetadata(threadId)) as { id: string },
