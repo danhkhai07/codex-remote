@@ -101,13 +101,15 @@ effective zone-wide Full (strict) setting is sufficient without creating a new r
 TLS success alone does not prove that setting. No wildcard, CF disablement,
 zone-wide policy change, or certificate validation bypass is provided.
 
-DNS/TLS preparation remains leader-owned. The previously staged infra README's
-old Hours pin and initial DNS-only suggestion are superseded: keep new Hours,
-use the authorized seven Proxied/TTL Auto records and verify HTTP DCV through CF.
-Issue the exact-SAN certificate only after successful actual public canaries.
-Install parked HTTPS, verify origin/edge certs and target renewal dry-run. The
-bootstrap installed at 15:46 and owner repair at 17:15 are existing baseline,
-not actions performed by this preparation.
+DNS/TLS readiness remains leader-owned. The user-created proxied wildcard DNS now
+resolves all seven names; this does not authorize wildcard vhosts or more ports.
+Task a37aff40 installed the exact seven-SAN certificate and parked HTTPS on
+2026-09-22, with public DCV, origin/edge chains and targeted renewal verified.
+Its canary was removed; create a fresh canary for final preflight. Effective
+Full(strict) and clean-profile evidence remain separate gates. The historical
+infra README's DNS/Hours/key recipes are superseded. Capture a new baseline;
+do not edit old seals. See the [scoped Workboard/config readiness report](workboard-preview-readiness-2026-09-22.md)
+for exact staged hashes, the required default-vhost Host guard and remaining gates.
 
 Workboard evidence must verify the staged header-only `bc66e80` patch against the
 live non-Git-remote source, data directory, systemd drop-in, standalone login,
