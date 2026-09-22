@@ -68,6 +68,15 @@ async function fixture() {
   return { root, vault, group, app, controller, orchestra, effects, spawn, restart, statePath: join(vault.root, '.state/Orchestration.json') }
 }
 
+// Independently observe the public cache behavior after a stale create. A cold
+// access must reach metadata; silently adopting the reply would skip this read.
+async function expectUnadopted(f: Awaited<ReturnType<typeof fixture>>) {
+  const request = vi.spyOn(f.app, 'request').mockRejectedValueOnce(new Error('Owned cold metadata probe'))
+  await expect(f.controller.assertThreadAccess('created-fixture')).rejects.toThrow('Owned cold metadata probe')
+  const [method, params] = request.mock.calls.at(-1)!
+  expect(method).toBe('thread/read'); expect(params).toMatchObject({ threadId: 'created-fixture' })
+}
+
 it.each(['startup', 'reply'])('L1 control: unchanged admission lifetime creates and names exactly once with delayed %s', async phase => {
   const f = await fixture(), gate = deferred(), entered = deferred()
   if (phase === 'startup') vi.spyOn(f.app, 'start').mockImplementationOnce(async () => { entered.release(); await gate.promise })
@@ -112,6 +121,7 @@ it.each(['same', 'new'] as const)('L1 acceptance: stopped admission cannot dispa
   expect(existsSync(join(f.vault.root, 'Conversations/created-fixture'))).toBe(false)
   expect(current.snapshot('leader').tasks[0]).toMatchObject({ threadId: '', status: 'interrupted',
     resolution: { summary: 'Admission stopped before the native effect' } })
+  await expectUnadopted(f)
 })
 
 it.each(['same', 'new'] as const)('L1 acceptance: accepted create reply crossing restart preserves newer folder assignment (%s instance)', async kind => {
@@ -129,6 +139,9 @@ it.each(['same', 'new'] as const)('L1 acceptance: accepted create reply crossing
   f.vault.assignThread('created-fixture', other.id)
   const current = await f.restart(kind)
   expect(f.vault.groupFor('created-fixture')?.id).toBe(other.id)
+  const recovered = current.snapshot('leader').tasks[0]
+  current.resolveTask('leader', f.vault.groupFor('leader')!.leaderEpoch, recovered.id,
+    'New recovery preserves the accepted native creation', 'Owned pipe confirms one create and no task turn')
   const before = readFileSync(f.statePath, 'utf8')
   const record = vi.spyOn(f.vault, 'recordThread'), assign = vi.spyOn(f.vault, 'assignThread')
   gate.release()
@@ -139,7 +152,9 @@ it.each(['same', 'new'] as const)('L1 acceptance: accepted create reply crossing
   // local assignment must not replace this newer user's ownership decision.
   expect(f.vault.groupFor('created-fixture')?.id).toBe(other.id)
   expect(record).not.toHaveBeenCalled(); expect(assign).not.toHaveBeenCalled()
-  expect(current.snapshot('leader').tasks[0]).toMatchObject({ threadId: '', status: 'interrupted' })
+  expect(current.snapshot('leader').tasks[0]).toMatchObject({ threadId: '', status: 'interrupted',
+    resolution: { summary: 'New recovery preserves the accepted native creation' } })
+  await expectUnadopted(f)
 })
 
 it('L1 control: direct creation without an admission callback preserves full access and local export', async () => {

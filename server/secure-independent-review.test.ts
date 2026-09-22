@@ -195,6 +195,52 @@ it.each(['logout','expiry','rotation'] as const)('R3 actual fake-native pipe emi
  expect(await f.appServer.request('fixture/effects',{})).toEqual(['thread/start'])
 })
 
+// Independent b8c781a re-review: the new post-create callback must preserve the
+// HTTP request lifetime too, while leaving a legitimately accepted create alone.
+it.each(['logout', 'expiry', 'rotation'] as const)('L1 create HTTP post-reply guard skips local adoption after %s', async reason => {
+ const f = await fixture(true, true), gate = deferred(), entered = deferred()
+ await f.client.unlock(f.material.key)
+ const initializing = once(f.appServer, 'notification'), boot = f.appServer.start()
+ expect((await initializing)[0].method).toBe('fixture/initializing')
+ f.appServer.notify('fixture/release', {}); await boot
+ const group = f.vault!.createGroup('Original folder').groups[0]
+ const other = f.vault!.createGroup('Newer folder').groups.find(item => item.name === 'Newer folder')!
+ const request = f.appServer.request.bind(f.appServer)
+ vi.spyOn(f.appServer, 'request').mockImplementation(async (...args) => {
+  const result = await request(...args)
+  if (args[0] === 'thread/start') { entered.resolve(); await gate.promise }
+  return result
+ })
+ const create = vi.spyOn(f.controller, 'createThread')
+ const pending = f.client.request('/api/threads', { method: 'POST',
+  headers: { 'content-type': 'application/json', 'x-csrf-token': f.issued.payload.csrf },
+  body: JSON.stringify({ workspaceId: '0', groupId: group.id }),
+ }).catch(() => null)
+ await entered.promise
+ const outcome = (create.mock.results[0].value as Promise<unknown>).then(() => null, error => error)
+ expect(await request('fixture/effects', {})).toEqual(['thread/start'])
+ f.vault!.assignThread('FAKE-ONLY', other.id)
+ const record = vi.spyOn(f.vault!, 'recordThread'), assign = vi.spyOn(f.vault!, 'assignThread')
+ if (reason === 'logout') {
+  const logout = await f.client.request('/api/session/logout', { method: 'POST', headers: { 'x-csrf-token': f.issued.payload.csrf } })
+  expect(await logout.response.json()).toEqual({ ok: true })
+ } else {
+  if (reason === 'expiry') vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 601000)
+  else await writeFile(f.keyFile, JSON.stringify({ ...f.material, generation: randomId(), key: randomId(32) }))
+  expect((await f.fetcher('/api/secure/setup')).status).toBe(200)
+ }
+ gate.resolve()
+ expect(await outcome).toBeInstanceOf(Error)
+ const response = await pending
+ if (response) expect(response.response.status).not.toBe(201)
+ expect(record).not.toHaveBeenCalled(); expect(assign).not.toHaveBeenCalled()
+ expect(f.vault!.groupFor('FAKE-ONLY')?.id).toBe(other.id)
+ expect(await request('fixture/effects', {})).toEqual(['thread/start']) // No rollback/replay.
+ const rpc = vi.spyOn(f.appServer, 'request').mockRejectedValueOnce(new Error('Cold HTTP create cache'))
+ await expect(f.controller.assertThreadAccess('FAKE-ONLY')).rejects.toThrow('Cold HTTP create cache')
+ expect(rpc.mock.calls.at(-1)![0]).toBe('thread/read')
+})
+
 // Independent re-review controls: accepted effects outlive the browser request.
 // The actual stdio-startup cancellation boundary is exercised above; here the
 // fake RPC explicitly accepts turn/start before we close the request lifetime.
