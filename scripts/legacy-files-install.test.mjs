@@ -1,7 +1,20 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { parseEnv } from 'node:util'
-import { installAfterIdle, patchEnvironment, payloadNames } from './legacy-files-install.mjs'
+import { mkdtempSync, statSync, readFileSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { atomic, installAfterIdle, patchEnvironment, payloadNames } from './legacy-files-install.mjs'
+
+test('atomic publication preserves the reviewed mode under a private systemd umask', () => {
+  const root = mkdtempSync(join(tmpdir(), 'legacy-install-mode-')), previous = process.umask(0o077)
+  try {
+    for (const mode of [0o644, 0o600]) {
+      const file = join(root, String(mode)); atomic(file, Buffer.from('FAKE payload'), mode)
+      assert.equal(statSync(file).mode & 0o777, mode); assert.equal(readFileSync(file, 'utf8'), 'FAKE payload')
+    }
+  } finally { process.umask(previous); rmSync(root, { recursive: true, force: true }) }
+})
 
 test('environment transform preserves all other values and literal private strings', () => {
   const input = '# example\nCODEX_REMOTE_PASSWORD="FAKE $value with spaces"\nCODEX_REMOTE_SESSION_SECRET=FAKE-long-session-value\nCODEX_REMOTE_WORKSPACE_ROOTS=/root\nCODEX_REMOTE_FILE_ROOTS=/\nNODE_ENV=production\n'

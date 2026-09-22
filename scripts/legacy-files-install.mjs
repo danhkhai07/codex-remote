@@ -57,10 +57,10 @@ export async function installAfterIdle(ops) {
     ops.phase('complete', proof); return proof
   }
 }
-function atomic(file, bytes, mode = 0o600) {
+export function atomic(file, bytes, mode = 0o600) {
   const temporary = file + '.' + randomUUID() + '.tmp'
   const fd = fs.openSync(temporary, 'wx', mode)
-  try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+  try { fs.fchmodSync(fd, mode); fs.writeFileSync(fd, bytes); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
   fs.renameSync(temporary, file)
   const parent = fs.openSync(path.dirname(file), 'r')
   try { fs.fsyncSync(parent) } finally { fs.closeSync(parent) }
