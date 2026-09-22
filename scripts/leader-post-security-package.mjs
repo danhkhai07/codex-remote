@@ -110,6 +110,10 @@ export function privateOutput(output, excluded) {
   assert.equal(st.uid, process.getuid()); assert.equal(st.mode & 0o777, 0o700, 'observation parent is not private')
   for (const path of excluded.map(p => resolve(p))) assert(absolute !== path && !absolute.startsWith(path + '/'), 'output inside preserved directory')
 }
+export function validateIdentity(baseline, current) {
+  assert(baseline.processIdentity.split('\n').includes('MainPID=' + baseline.pid), 'PID differs within observation')
+  for (const [name, value] of Object.entries(current)) assert.equal(value, baseline[name], name + ' changed during observation')
+}
 export function observe(destination, contractPath, output) {
   verify(destination, contractPath)
   const c = json(contractPath), main = c.main
@@ -118,7 +122,7 @@ export function observe(destination, contractPath, output) {
   const source = git('rev-parse', 'HEAD')
   assert.equal(source, c.securitySource, 'security source is not live; no baseline captured')
   privateOutput(output, [main, destination, c.securityPackage, c.securityPackage + '.activation'])
-  const env = parseEnv(readFileSync(join(main, '.env'), 'utf8'))
+  const envBytes = readFileSync(join(main, '.env')), env = parseEnv(envBytes.toString('utf8'))
   const runtime = Object.fromEntries(Object.keys(c.expectedRuntime).map(path => { const full = path.startsWith('/') ? path : join(main, path); regular(full); return [path, hashFile(full)] }))
   const facts = { source, branch: git('branch', '--show-current'), dirty: git('status', '--porcelain', '--untracked-files=all'),
     remote: git('ls-remote', 'origin', 'refs/heads/main').split(/\s+/)[0],
@@ -130,15 +134,16 @@ export function observe(destination, contractPath, output) {
   const baseline = { kind: 'ACTUAL-POST-SECURITY-OBSERVATION', at: new Date().toISOString(), contractSha256: hashFile(contractPath),
     source: facts.source, remote: facts.remote, pid: facts.pid, runtime, client: files(join(main, 'dist')), backend: facts.backend,
     remoteUrls: Object.fromEntries(['fetch', 'push'].map(kind => [kind, digest(git('remote', 'get-url', ...(kind === 'push' ? ['--push'] : []), 'origin'))])),
-    configSha256: hashFile(join(main, '.env')), unitSha256: digest(command('systemctl', ['cat', 'codex-remote.service'])),
+    configSha256: digest(envBytes), unitSha256: digest(command('systemctl', ['cat', 'codex-remote.service'])),
     processIdentity: command('systemctl', ['show', 'codex-remote.service', '-p', 'MainPID', '-p', 'InvocationID', '-p', 'ExecMainStartTimestampMonotonic', '-p', 'ActiveState']),
     processCwd: realpathSync('/proc/' + facts.pid + '/cwd'), commandSha256: hashFile('/proc/' + facts.pid + '/cmdline'),
     securityProofSha256: hashFile(c.securityPackage + '.activation/postverify.json'), securityAttemptSha256: hashFile(c.securityPackage + '.activation/attempt.json'),
     allIdleProven: false, backupTaken: false, armable: false }
   assert.equal(baseline.processCwd, main)
   assert(baseline.processIdentity.includes('ActiveState=active'))
-  assert.equal(git('rev-parse', 'HEAD'), source); assert.equal(hashFile(join(main, '.env')), baseline.configSha256)
-  assert.equal(command('systemctl', ['show', 'codex-remote.service', '-p', 'MainPID', '-p', 'InvocationID', '-p', 'ExecMainStartTimestampMonotonic', '-p', 'ActiveState']), baseline.processIdentity, 'process changed during observation')
+  validateIdentity(baseline, { source: git('rev-parse', 'HEAD'), configSha256: hashFile(join(main, '.env')),
+    unitSha256: digest(command('systemctl', ['cat', 'codex-remote.service'])),
+    processIdentity: command('systemctl', ['show', 'codex-remote.service', '-p', 'MainPID', '-p', 'InvocationID', '-p', 'ExecMainStartTimestampMonotonic', '-p', 'ActiveState']) })
   assert.deepEqual(files(join(main, 'dist-server')), baseline.backend)
   assert.deepEqual(files(join(main, 'dist')), baseline.client)
   writeFileSync(output, JSON.stringify(baseline, null, 2) + '\n', { flag: 'wx', mode: 0o600 })

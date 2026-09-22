@@ -88,8 +88,8 @@ and independent16 unique cases/18 executions. No application rebuild, broad suit
 browser or crypto audit rerun is justified by a documentation/packaging change.
 
 The preparation-only helper has `stage`, `verify`, `observe`; **no arm/apply/restart
-verb**. 28 Node fixture cases verify private/exact staging, tampering/links,
-no-overwrite, wrong/incomplete/unbound security proof, wrong source/PID/config,
+verb**. 30 Node fixture cases verify private/exact staging, tampering/links,
+no-overwrite, wrong/incomplete/unbound security proof, wrong source/PID/config, config read drift and mixed/same-PID lifetime snapshots,
 backend drift, absence of activation verbs, runbook syntax/hash consistency, and refusal before reading config or creating an observation on
 old source. Lint passes. Evidence:
 `/root/.local/state/codex-remote/leader-post-security-preparation-eaed96a1/`.

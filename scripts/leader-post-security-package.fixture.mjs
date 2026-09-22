@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { digest, stage, verify, observe, validateContract, validateObserved, privateOutput } from './leader-post-security-package.mjs'
+import { digest, stage, verify, observe, validateContract, validateObserved, validateIdentity, privateOutput } from './leader-post-security-package.mjs'
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'leader-package-'))
@@ -69,6 +69,16 @@ test('valid observation requires complete bound security evidence but cannot arm
   const { c } = fixture(t); const f = facts(c)
   assert.equal(validateObserved(c, f), undefined)
   assert.equal(c.armable, false); assert.equal(c.observedPostSecurity, false)
+})
+test('stable config and PID identity accept; a mixed PID snapshot fails', () => {
+  const baseline = { pid: 13, processIdentity: 'MainPID=13\nInvocationID=first\nActiveState=active', configSha256: digest('original config') }
+  assert.doesNotThrow(() => validateIdentity(baseline, { processIdentity: baseline.processIdentity, configSha256: baseline.configSha256 }))
+  assert.throws(() => validateIdentity({ ...baseline, pid: 14 }, {}), /PID differs/)
+})
+test('config changes after parsing or a same-PID new lifetime reject observation', () => {
+  const baseline = { pid: 13, processIdentity: 'MainPID=13\nInvocationID=first', configSha256: digest('required config') }
+  assert.throws(() => validateIdentity(baseline, { configSha256: digest('changed config') }), /configSha256 changed/)
+  assert.throws(() => validateIdentity(baseline, { processIdentity: 'MainPID=13\nInvocationID=second' }), /processIdentity changed/)
 })
 for (const kind of ['old-source', 'remote', 'dirty', 'branch', 'incomplete', 'proof-hash', 'proof-path', 'proof-app', 'encryption', 'old-pid', 'runtime', 'extra-backend']) test('post-security contract rejects ' + kind, t => {
   const { c } = fixture(t), f = facts(c)
