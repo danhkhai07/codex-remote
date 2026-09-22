@@ -38,6 +38,7 @@ it('blocks new-instance keys/credentials and private Vault paths without changin
     join(f.privateRoot, 'secure-owner', 'owner-key.json'),
     join(f.project, '.local', 'state', 'codex-remote-remote', 'owner-key.json'),
     join(f.project, '.codex', 'auth.json'), join(f.project, 'remote-runtime', '.env'),
+    join(f.project, 'remote-runtime', 'owner-key.json'), join(f.project, 'remote-runtime', '.remote-push.json'),
     join(f.project, '.ssh', 'id_ed25519'), join(f.vault, '.state', 'Orchestration.json'),
     join(f.vault, 'Conversations', 'worker', '.orchestration', 'request.json'),
     join(f.vault, 'Shared', '.orchestration', 'context-key.json'),

@@ -18,6 +18,7 @@ All exist as real directories. Native workspace `/root`, password/session values
 old origin, port, presence and Hours settings are unchanged. Broad root pins now
 fail; existing Files path editing opens the allowed project/data directories.
 Private `.env`, `.codex`, `.local`, `.state`, `.orchestration`, SSH/system paths
+and the standard `owner-key.json` / `.remote-push.json` credential filenames
 remain denied under allowed roots. The new owner key must still live outside
 exposed roots; this is not isolation against an authorized root agent.
 
