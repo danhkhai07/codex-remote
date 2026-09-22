@@ -83,6 +83,7 @@ export class ConversationOrchestrator {
   #completed = new Map<string, { status: string; text: string }>()
   #timer?: ReturnType<typeof setInterval>
   #pumping?: Promise<void>
+  #lifetime = { current: true }
   #stopped = true
   #recovering = false
   #lastReconcile = 0
@@ -92,13 +93,22 @@ export class ConversationOrchestrator {
     this.#mailbox = new OrchestrationMailbox(vault.root, (token, body, threadId) => this.command(token, body, threadId))
     this.#files = new VaultFiles(vault.root)
     this.socketPath = this.#files.path('Shared/.orchestration.sock')
+    this.#state = this.#readState()
+  }
+  #readState(): State {
     const raw = this.#files.read('.state/Orchestration.json')
-    this.#state = raw ? JSON.parse(raw) : { version: 1, tasks: [], notices: [], paused: [], cycles: {} }
-    if (this.#state.version !== 1 || !Array.isArray(this.#state.tasks) || !Array.isArray(this.#state.notices)
-      || !Array.isArray(this.#state.paused) || !this.#state.cycles || (this.#state.archives !== undefined && !Array.isArray(this.#state.archives))) throw new Error('Invalid orchestration state')
+    const state = raw ? JSON.parse(raw) : { version: 1, tasks: [], notices: [], paused: [], cycles: {} }
+    if (state.version !== 1 || !Array.isArray(state.tasks) || !Array.isArray(state.notices)
+      || !Array.isArray(state.paused) || !state.cycles || (state.archives !== undefined && !Array.isArray(state.archives))) throw new Error('Invalid orchestration state')
+    return state
+  }
+  #current(lifetime = this.#lifetime) { return lifetime.current && lifetime === this.#lifetime }
+  #live(lifetime = this.#lifetime) {
+    if (!this.#current(lifetime)) throw new ContextVaultError(409, 'Orchestrator lifecycle changed; retry against the current instance')
   }
 
   #save() {
+    this.#live()
     // Preserve legacy receipts before the bounded notice log is pruned.
     for (const task of this.#state.tasks) task.resultDelivery ??= this.#resultDelivery(task)
     if (this.#state.archives) this.#state.archives = [...this.#state.archives.filter(item => item.status === 'complete').slice(-100), ...this.#state.archives.filter(item => item.status !== 'complete')]
@@ -149,6 +159,7 @@ export class ConversationOrchestrator {
 
   /** Refresh on every turn, including already resumed conversations. */
   context(threadId: string, settings: TurnSettings, user: boolean, userText = ''): string {
+    this.#live()
     this.revoke(threadId)
     if (user) { (this.#state.settings ??= {})[threadId] = settings; this.#save() }
     const group = this.vault.groupFor(threadId)
@@ -190,6 +201,7 @@ export class ConversationOrchestrator {
     for (const [key, capability] of this.#capabilities) if (capability.threadId === threadId) this.#capabilities.delete(key)
   }
   #authorize(token: string) {
+    this.#live()
     const capability = this.#capabilities.get(token)
     const group = capability && this.#group(capability.groupId)
     if (!capability || capability.expiresAt < Date.now() || group?.leaderThreadId !== capability.threadId
@@ -243,9 +255,10 @@ export class ConversationOrchestrator {
   }
 
   async command(token: string, input: Record<string, unknown>, mailboxThreadId?: string): Promise<unknown> {
+    const lifetime = this.#lifetime
     const { capability, group } = this.#authorize(token)
     if (mailboxThreadId !== undefined && mailboxThreadId !== capability.threadId) throw new ContextVaultError(403, 'Capability belongs to a different conversation')
-    const guard = () => { this.#authorize(token) }
+    const guard = () => { this.#live(lifetime); this.#authorize(token) }
     if (input.action === 'models') {
       const models = await this.#models()
       guard()
@@ -264,6 +277,7 @@ export class ConversationOrchestrator {
       const threadId = short(input.threadId, 128, 'thread ID')
       if (input.action === 'archive') return this.#archive(token, capability, threadId, short(input.requestId, 120, 'requestId'))
       const check = () => {
+        this.#live(lifetime)
         const current = this.#authorize(token).group
         this.#canManage(current, threadId)
         if (this.#archiveBlocked(threadId)) throw new ContextVaultError(409, 'Archive is in progress or needs review')
@@ -278,7 +292,7 @@ export class ConversationOrchestrator {
         await this.#driver.rename(threadId, name, check)
         check()
         return { threadId, name }
-      } finally { this.#management.delete(threadId) }
+      } finally { if (this.#current(lifetime)) this.#management.delete(threadId) }
     }
     if (input.action === 'resolve') {
       if (capability.settings.mode === 'plan') throw new ContextVaultError(403, 'Switch to Code mode before resolving tasks')
@@ -325,6 +339,7 @@ export class ConversationOrchestrator {
       if (!threadId) {
         checkAdmission()
         const created = await this.#driver.create(workspaceId, group.id, task.settings)
+        this.#live(lifetime)
         threadId = task.threadId = created.id
         this.#save()
         checkAdmission()
@@ -336,12 +351,13 @@ export class ConversationOrchestrator {
       this.kick()
       return { task }
     } catch (error) {
-      this.#finish(task, 'failed', error instanceof Error ? error.message : 'Could not create task')
+      if (this.#current(lifetime)) this.#finish(task, 'failed', error instanceof Error ? error.message : 'Could not create task')
       throw error
     }
   }
 
   async #archive(token: string, capability: Capability, threadId: string, requestId: string) {
+    const lifetime = this.#lifetime
     const receipts = this.#state.archives ??= []
     const previous = receipts.find(item => item.groupId === capability.groupId && item.leaderId === capability.threadId && item.epoch === capability.epoch && item.requestId === requestId)
     if (previous) {
@@ -352,7 +368,7 @@ export class ConversationOrchestrator {
       if (this.vault.snapshot().assignments[threadId]) throw new ContextVaultError(409, 'Conversation membership changed since this archive; inspect it first')
       return { threadId, archived: true, requestId, completedAt: previous.completedAt, duplicate: true }
     }
-    const check = () => this.#canArchive(this.#authorize(token).group, threadId)
+    const check = () => { this.#live(lifetime); this.#canArchive(this.#authorize(token).group, threadId) }
     check()
     if (this.#management.has(threadId) || this.#archiveBlocked(threadId)) throw new ContextVaultError(409, 'Conversation management is in progress or archive needs review')
     if (receipts.length >= 200) throw new ContextVaultError(409, 'Archive receipt limit reached; review uncertain operations first')
@@ -362,19 +378,22 @@ export class ConversationOrchestrator {
     try {
       this.#save()
       await this.#driver.archive(threadId, check, () => { check(); receipt.status = 'sent'; this.#save() })
+      this.#live(lifetime)
       receipt.status = 'complete'; receipt.completedAt = new Date().toISOString(); this.#save()
       this.#authorize(token)
       return { threadId, archived: true, requestId, completedAt: receipt.completedAt, duplicate: false }
     } catch (error) {
+      if (!this.#current(lifetime)) throw error
       if (receipt.status === 'preparing') this.#state.archives = this.#state.archives!.filter(item => item !== receipt)
       else if (receipt.status === 'sent') receipt.status = 'review'
       this.#save()
       throw error
-    } finally { this.#management.delete(threadId) }
+    } finally { if (this.#current(lifetime)) this.#management.delete(threadId) }
   }
 
   /** Adds a recovery record without rewriting the worker attempt or dispatching a turn. */
   resolveTask(leaderId: string, leaderEpoch: unknown, taskId: unknown, summary: unknown, evidence: unknown) {
+    this.#live()
     const group = this.vault.groupFor(leaderId)
     if (!group || group.leaderThreadId !== leaderId) throw new ContextVaultError(403, 'Only the current folder leader may resolve tasks')
     if (leaderEpoch !== (group.leaderEpoch ?? 0)) throw new ContextVaultError(409, 'Leader changed; refresh before resolving')
@@ -397,6 +416,7 @@ export class ConversationOrchestrator {
 
   /** A direct user turn takes ownership; the leader cannot clear this pause. */
   userTurn(threadId: string, text: string) {
+    this.#live()
     const group = this.vault.groupFor(threadId)
     if (!group || group.leaderThreadId === threadId || !this.#state.tasks.some(task => task.threadId === threadId && task.groupId === group.id)) return
     if (!this.#state.paused.includes(threadId)) this.#state.paused.push(threadId)
@@ -405,6 +425,7 @@ export class ConversationOrchestrator {
     this.#save()
   }
   userStop(threadId: string) {
+    this.#live()
     this.revoke(threadId)
     const group = this.vault.groupFor(threadId)
     if (!group) return
@@ -415,6 +436,7 @@ export class ConversationOrchestrator {
     this.#save()
   }
   release(threadId: string) {
+    this.#live()
     this.#state.paused = this.#state.paused.filter(id => id !== threadId)
     this.#save(); this.kick()
     return this.snapshot(threadId)
@@ -426,6 +448,7 @@ export class ConversationOrchestrator {
     this.#state.notices.push({ id: randomUUID(), groupId, threadId, text, status: 'pending', taskId })
   }
   #finish(task: ConversationTask, status: TaskStatus, text: string) {
+    this.#live()
     if (!active(task)) return
     task.status = status; task.result = text.slice(0, 16000); task.updatedAt = new Date().toISOString()
     task.resultDelivery = 'pending'
@@ -433,6 +456,7 @@ export class ConversationOrchestrator {
     this.#save()
   }
   #settle(task: ConversationTask, turnId: string, status: string, text: string) {
+    this.#live()
     if (!terminal(status)) return
     const pending = dispatchPending(task)
     task.turnId = turnId; task.dispatchPending = false
@@ -440,6 +464,7 @@ export class ConversationOrchestrator {
     else if (pending) { task.updatedAt = new Date().toISOString(); this.#save() }
   }
   completed(threadId: string, turnId: string, status: string, text: string) {
+    if (!this.#current()) return
     this.revoke(threadId)
     this.#completed.set(`${threadId}:${turnId}`, { status, text: text.slice(0, 16000) })
     while (this.#completed.size > 200) this.#completed.delete(this.#completed.keys().next().value!)
@@ -449,14 +474,18 @@ export class ConversationOrchestrator {
     this.kick()
   }
   async cancel(taskId: string, reason = 'Stopped by the user', live?: () => void) {
+    const lifetime = this.#lifetime
+    const guard = () => { this.#live(lifetime); live?.() }
+    guard()
     const task = this.#state.tasks.find(task => task.id === taskId)
     if (!task) throw new ContextVaultError(404, 'Task not found')
     if (!active(task)) return
     const turnId = task.turnId
-    live?.(); task.status = 'stopping'; this.#save()
+    guard(); task.status = 'stopping'; this.#save()
     if (turnId) {
-      try { await this.#driver.interrupt(task.threadId, turnId, live) }
+      try { await this.#driver.interrupt(task.threadId, turnId, guard); this.#live(lifetime) }
       catch (error) {
+        if (!this.#current(lifetime)) throw error
         // A failed interrupt must stay actionable, not look like a stopped worker.
         if (task.status === 'stopping') { task.status = 'running'; task.result = 'Could not confirm the stop. Retry stopping this task.'; this.#save() }
         throw error
@@ -467,6 +496,7 @@ export class ConversationOrchestrator {
     this.kick()
   }
   changed() {
+    if (!this.#current()) return
     for (const group of this.vault.snapshot().groups) {
       const previous = this.#state.cycles[group.id]
       if (group.leaderThreadId && previous && !this.#cycle(group)) {
@@ -485,6 +515,12 @@ export class ConversationOrchestrator {
     this.kick()
   }
   async start() {
+    if (!this.#stopped) return
+    if (!this.#current()) {
+      this.#state = this.#readState() // A restart reads current disk, never restores a stale in-memory snapshot.
+      this.#lifetime = { current: true }
+    }
+    const lifetime = this.#lifetime
     this.#recovering = true
     this.#stopped = false
     this.#mailbox.start()
@@ -495,59 +531,82 @@ export class ConversationOrchestrator {
     for (const task of this.#state.tasks.filter(task => dispatchPending(task) || ['creating', 'starting', 'running', 'stopping'].includes(task.status))) {
       try {
         const thread = task.threadId ? await this.#driver.read(task.threadId) : undefined
+        if (!this.#current(lifetime)) return
         const turn = originalTurn(task, thread)
         if (turn && terminal(turn.status)) this.#settle(task, turn.id, turn.status, answer(turn))
         else if (turn) { task.turnId = turn.id; task.dispatchPending = true; if (active(task)) task.status = 'running' }
         else this.#finish(task, 'interrupted', 'Server restarted before this task could be confirmed. Review the conversation before assigning a new task.')
-      } catch { this.#finish(task, 'interrupted', 'Could not reconcile the task after restart. Review the conversation; it was not sent again.') }
+      } catch {
+        if (!this.#current(lifetime)) return
+        this.#finish(task, 'interrupted', 'Could not reconcile the task after restart. Review the conversation; it was not sent again.')
+      }
     }
+    if (!this.#current(lifetime)) return
     // A sending notice may already have started a leader turn. Do not auto-send it twice.
     for (const note of this.#state.notices) if (note.status === 'sending') { note.status = 'review'; this.#setDelivery(note, 'review') }
-    this.#save(); this.#recovering = false; this.changed()
-    this.#timer = setInterval(() => this.kick(), 3000)
+    this.#save()
+    if (!this.#current(lifetime)) return
+    this.#recovering = false; this.changed()
+    if (!this.#current(lifetime)) return
+    this.#timer = setInterval(() => { if (this.#current(lifetime)) this.kick() }, 3000)
     this.#timer.unref()
     this.kick()
   }
-  stop() { this.#stopped = true; clearInterval(this.#timer); this.#capabilities.clear(); this.#mailbox.stop() }
+  stop() {
+    this.#lifetime.current = false; this.#stopped = true; this.#recovering = false
+    clearInterval(this.#timer); this.#timer = undefined; this.#pumping = undefined; this.#lastReconcile = 0
+    this.#capabilities.clear(); this.#management.clear(); this.#dispatchingTasks.clear(); this.#completed.clear(); this.#mailbox.stop()
+  }
   async reconcile() {
+    const lifetime = this.#lifetime
+    if (!this.#current(lifetime)) return
     for (const task of this.#state.tasks.filter(task => dispatchPending(task) && !this.#dispatchingTasks.has(task.id))) {
       try {
-        const thread = await this.#driver.read(task.threadId), turn = originalTurn(task, thread)
+        const thread = await this.#driver.read(task.threadId)
+        if (!this.#current(lifetime)) return
+        const turn = originalTurn(task, thread)
         if (turn && terminal(turn.status)) this.#settle(task, turn.id, turn.status, answer(turn))
         else if (turn && !task.turnId) { task.turnId = turn.id; task.dispatchPending = true; this.#save() }
-      } catch { /* A transient read failure is not evidence that a running task ended. */ }
+      } catch {
+        if (!this.#current(lifetime)) return
+        // A transient read failure is not evidence that a running task ended.
+      }
     }
   }
   kick() { if (!this.#stopped) void this.pump().catch(error => console.error('Conversation scheduling failed:', error instanceof Error ? error.message : error)) }
   pump(): Promise<void> {
     // Recovered native turns must all own their slots before admitting new work.
-    if (this.#recovering) return Promise.resolve()
+    if (this.#stopped || this.#recovering) return this.#pumping ?? Promise.resolve()
     if (this.#pumping) return this.#pumping
-    this.#pumping = this.#pump().finally(() => { this.#pumping = undefined })
+    const pumping = this.#pump(this.#lifetime).finally(() => { if (this.#pumping === pumping) this.#pumping = undefined })
+    this.#pumping = pumping
     return this.#pumping
   }
-  #taskGuard(task: ConversationTask) {
+  #taskGuard(task: ConversationTask, lifetime: { current: boolean }) {
+    this.#live(lifetime)
     const group = this.#group(task.groupId)
     if (this.#stopped || task.status !== 'starting' || !group || group.leaderThreadId !== task.leaderId || (group.leaderEpoch ?? 0) !== task.leaderEpoch) throw new ContextVaultError(409, 'Task authority changed')
     this.#canWork(group, task.threadId)
   }
-  async #pump() {
+  async #pump(lifetime: { current: boolean }) {
     if (Date.now() - this.#lastReconcile > 30_000) { this.#lastReconcile = Date.now(); await this.reconcile() }
+    if (!this.#current(lifetime)) return
     for (const task of this.#state.tasks.filter(task => task.status === 'queued')) {
-      if (this.#stopped || this.#recovering) return
+      if (!this.#current(lifetime) || this.#recovering) return
       if (this.#driver.starting(task.threadId) || this.#state.tasks.some(other => other !== task && other.threadId === task.threadId && dispatchPending(other))
         || this.#state.tasks.filter(other => other.groupId === task.groupId && (running(other) || dispatchPending(other))).length >= MAX_CONCURRENT_WORKERS) continue
       try {
         const thread = await this.#driver.inspect(task.threadId)
+        if (!this.#current(lifetime)) return
         if (task.status !== 'queued' || busy(thread)) continue
-        task.status = 'starting'; this.#taskGuard(task); this.#save()
+        task.status = 'starting'; this.#taskGuard(task, lifetime); this.#save()
         const text = `[Codex Remote · Giao việc từ leader ${task.leaderId}]\nTask-ID: ${task.id}\n${task.title}\n\n${task.instruction}\n\nĐây là việc do leader giao. Chỉ dẫn trực tiếp của người dùng được ưu tiên. Không điều phối/spawn agent khác. Với task code, tạo worktree riêng trước khi sửa. Gửi kết quả, kiểm chứng và phần còn vướng trong câu trả lời cuối; hệ thống sẽ chuyển về leader.`
         await this.#taskSettings(task.settings, {})
-        this.#taskGuard(task)
+        this.#taskGuard(task, lifetime)
         this.#dispatchingTasks.add(task.id)
         task.dispatchPending = true; this.#save() // Durable before any native dispatch, independent of cancellation status.
-        const turnId = await this.#driver.start(task.threadId, text, task.settings, () => this.#taskGuard(task))
-        if (this.#stopped) return // A recovered instance owns reconciliation after shutdown.
+        const turnId = await this.#driver.start(task.threadId, text, task.settings, () => this.#taskGuard(task, lifetime))
+        if (!this.#current(lifetime)) return
         task.turnId = turnId; this.#save()
         const completed = this.#completed.get(`${task.threadId}:${turnId}`)
         if (completed && terminal(completed.status)) { this.#settle(task, turnId, completed.status, completed.text); continue }
@@ -555,28 +614,32 @@ export class ConversationOrchestrator {
         if (!active(task)) {
           try {
             await this.#driver.interrupt(task.threadId, turnId, () => {
-              if (this.#stopped || task.turnId !== turnId || !dispatchPending(task)) throw new ContextVaultError(409, 'Original task already settled')
+              this.#live(lifetime)
+              if (task.turnId !== turnId || !dispatchPending(task)) throw new ContextVaultError(409, 'Original task already settled')
             })
-            if (!this.#stopped) this.#settle(task, turnId, 'interrupted', '')
+            if (this.#current(lifetime)) this.#settle(task, turnId, 'interrupted', '')
           } catch { /* Preserve cancellation/result; the exact native effect still needs reconciliation. */ }
           continue
         }
         task.status = 'running'; task.updatedAt = new Date().toISOString(); this.#save()
       } catch (error) {
-        if (this.#stopped) return
+        if (!this.#current(lifetime)) return
         if (error instanceof ContextVaultError && dispatchPending(task)) { task.dispatchPending = false; this.#save() } // Known pre-dispatch rejection.
         if (error instanceof ContextVaultError && error.status === 409 && error.message === 'Conversation is busy' && active(task)) { task.status = 'queued'; this.#save() }
         else this.#finish(task, 'failed', error instanceof Error ? error.message : 'Could not start task')
-      } finally { this.#dispatchingTasks.delete(task.id) }
+      } finally { if (this.#current(lifetime)) this.#dispatchingTasks.delete(task.id) }
     }
     for (const group of this.vault.snapshot().groups) {
-      if (this.#stopped || !group.leaderThreadId) continue
+      if (!this.#current(lifetime)) return
+      if (!group.leaderThreadId) continue
       const cycle = this.#cycle(group), notes = this.#state.notices.filter(note => note.groupId === group.id && note.status === 'pending').slice(0, 5)
       if (!cycle || cycle.wakeups <= 0 || !notes.length || this.#driver.starting(group.leaderThreadId)) continue
       try {
         const thread = await this.#driver.inspect(group.leaderThreadId)
+        if (!this.#current(lifetime)) return
         if (busy(thread)) continue
         const guard = () => {
+          this.#live(lifetime)
           const current = this.#group(group.id)
           if (this.#stopped || !current || current.leaderThreadId !== group.leaderThreadId || current.leaderEpoch !== group.leaderEpoch || this.#cycle(current) !== cycle) throw new ContextVaultError(409, 'Leader changed')
         }
@@ -584,11 +647,11 @@ export class ConversationOrchestrator {
         const text = `[Codex Remote · Kết quả điều phối]\n${notes.map(note => `Notice-ID: ${note.id}\n${note.text}`).join('\n\n')}\n\nĐây là kết quả/thay đổi từ các convo, không phải yêu cầu mới của người dùng. Tiếp tục mục tiêu đã được giao, tôn trọng chỉ dẫn mới của người dùng và tổng hợp kết quả.`
         notes.forEach(note => { note.status = 'sending'; this.#setDelivery(note, 'sending') }); cycle.wakeups--; this.#save()
         const turnId = await this.#driver.start(group.leaderThreadId, text, cycle.settings, guard)
-        if (this.#stopped) return // Restart owns the saved sending/review outcome.
+        if (!this.#current(lifetime)) return
         if (!turnId) throw new Error('Result delivery could not be confirmed')
         notes.forEach(note => { note.status = 'sent'; note.turnId = turnId; this.#setDelivery(note, 'delivered') }); this.#save()
       } catch (error) {
-        if (this.#stopped) return
+        if (!this.#current(lifetime)) return
         // Only a known pre-dispatch rejection is safe to retry. Transport failures are ambiguous.
         const retryable = error instanceof ContextVaultError
         if (retryable && notes.some(note => note.status === 'sending')) cycle.wakeups++

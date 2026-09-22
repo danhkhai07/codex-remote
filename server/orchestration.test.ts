@@ -837,19 +837,21 @@ it('L1: failed compensation preserves cancellation and blocks recovery until exa
   expect(resolve()).toMatchObject({ task: { status: 'cancelled', result: cancelled.result, dispatchPending: false } })
 })
 
-it('L1: late start reply from a stopped instance does not overwrite recovered state or interrupt user work', async () => {
+it.each(['new', 'same'])('L1: late start reply cannot overwrite recovery or interrupt user work after a %s instance restart', async instance => {
   const f = setup(), { task } = await f.delegate(f.token()), start = f.driver.start
   f.threads.get('leader')!.status = { type: 'active' }
   let release!: () => void, entered!: () => void
   const gate = new Promise<void>(resolve => { release = resolve }), ready = new Promise<void>(resolve => { entered = resolve })
   f.driver.start = async (...args) => { const id = await start(...args); entered(); await gate; return id }
-  await f.orchestra.start(); await ready; await f.orchestra.cancel(task.id); f.orchestra.stop()
+  await f.orchestra.start(); await ready
+  const pumping = f.orchestra.pump()
+  await f.orchestra.cancel(task.id); f.orchestra.stop()
   const original = f.threads.get('worker')!.turns![0]; original.status = 'interrupted'
-  const recovered = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => recovered.stop())
+  const recovered = instance === 'same' ? f.orchestra : new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => recovered.stop())
   await recovered.start(); await recovered.pump()
   recovered.resolveTask('leader', f.vault.groupFor('leader')!.leaderEpoch, task.id, 'Recovered after restart', 'Exact terminal')
   const path = join(f.root, '.state/Orchestration.json'), before = readFileSync(path, 'utf8')
-  release(); await f.orchestra.pump()
+  release(); await pumping
   expect(readFileSync(path, 'utf8')).toBe(before)
   expect(f.driver.interrupt).not.toHaveBeenCalled()
 })
@@ -967,7 +969,7 @@ it('L3: a known pre-dispatch rejection retains the pending report and wakeup bud
   expect(start).toHaveBeenCalledTimes(2)
 })
 
-it.each(['reply', 'error'])('L3: restart keeps an in-flight report under review despite a late old-instance %s', async reply => {
+it.each([['reply', 'new'], ['error', 'new'], ['reply', 'same'], ['error', 'same']])('L3: late report %s cannot cross a %s instance restart', async (reply, instance) => {
   const f = setup(), { task } = await f.delegate(f.token())
   f.threads.get('leader')!.status = { type: 'active' }
   await f.orchestra.start(); await f.orchestra.pump()
@@ -983,7 +985,7 @@ it.each(['reply', 'error'])('L3: restart keeps an in-flight report under review 
   f.threads.get('leader')!.status = { type: 'idle' }
   const sending = f.orchestra.pump(); await ready; f.orchestra.stop()
   try {
-    const restored = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => restored.stop())
+    const restored = instance === 'same' ? f.orchestra : new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => restored.stop())
     await restored.start(); await restored.pump()
     expect(restored.snapshot('leader').tasks[0]).toMatchObject({ status: 'failed', resultDelivery: 'review' })
     const path = join(f.root, '.state/Orchestration.json'), before = readFileSync(path, 'utf8')
@@ -1037,7 +1039,7 @@ it('L3: retiring an overflow notice does not falsely mark its task as delivered'
 })
 
 // Independent exact-3f7e139 review: exercise delayed reads as well as delayed sends.
-it('CR2 re-review inverse: a stopped reconciler can overwrite a recovered instance after a late read', async () => {
+it('L1 acceptance: a stopped reconciler cannot overwrite a recovered instance after a late read', async () => {
   const f = setup(), { task } = await f.delegate(f.token())
   f.threads.get('leader')!.status = { type: 'active' }
   await f.orchestra.start(); await f.orchestra.pump()
@@ -1055,15 +1057,18 @@ it('CR2 re-review inverse: a stopped reconciler can overwrite a recovered instan
   const path = join(f.root, '.state/Orchestration.json'), before = readFileSync(path, 'utf8')
   try {
     release(); await pending
-    expect(readFileSync(path, 'utf8')).not.toBe(before)
+    expect(readFileSync(path, 'utf8')).toBe(before)
     expect(recovered.snapshot('leader').tasks[0].resolution?.summary).toBe('Verified new recovery')
-    expect(new ConversationOrchestrator(f.vault, f.driver).snapshot('leader').tasks[0].resolution).toBeUndefined()
+    expect(new ConversationOrchestrator(f.vault, f.driver).snapshot('leader').tasks[0].resolution?.summary).toBe('Verified new recovery')
+    f.orchestra.completed('worker', original.id, 'failed', 'Late stopped-instance event')
+    f.orchestra.changed(); await f.orchestra.pump()
+    expect(readFileSync(path, 'utf8')).toBe(before)
     expect(f.driver.interrupt).not.toHaveBeenCalled()
     expect(f.driver.start).toHaveBeenCalledTimes(1)
   } finally { release(); await pending }
 })
 
-it('CR2 re-review inverse: a stopped startup read can overwrite recovery written by the next instance', async () => {
+it('L1 acceptance: a stopped startup read cannot overwrite recovery written by the next instance or install a timer', async () => {
   const f = setup(), { task } = await f.delegate(f.token())
   f.threads.get('leader')!.status = { type: 'active' }
   const path = join(f.root, '.state/Orchestration.json'), state = JSON.parse(readFileSync(path, 'utf8'))
@@ -1081,14 +1086,16 @@ it('CR2 re-review inverse: a stopped startup read can overwrite recovery written
   await recovered.start(); await recovered.pump()
   recovered.resolveTask('leader', f.vault.groupFor('leader')!.leaderEpoch, task.id, 'New recovery', 'Verified original turn')
   const before = readFileSync(path, 'utf8')
+  const timers = vi.spyOn(globalThis, 'setInterval')
   try {
     release(); await pending
-    expect(readFileSync(path, 'utf8')).not.toBe(before)
+    expect(readFileSync(path, 'utf8')).toBe(before)
     const persisted = new ConversationOrchestrator(f.vault, f.driver).snapshot('leader').tasks[0]
-    expect(persisted.resolution).toBeUndefined()
+    expect(persisted.resolution?.summary).toBe('New recovery')
     expect(persisted.resultDelivery).toBe('review')
     expect(f.driver.start).not.toHaveBeenCalled(); expect(f.driver.interrupt).not.toHaveBeenCalled()
-  } finally { release(); await pending }
+    expect(timers).not.toHaveBeenCalled()
+  } finally { release(); await pending; timers.mockRestore() }
 })
 
 it.each([199, 205])('CR2 re-review inverse: %i delivered outcomes can evict an older report still needing review', async delivered => {
@@ -1148,4 +1155,98 @@ it('CR2 re-review control: known original turn ID cannot fall back to another st
   await restored.reconcile()
   expect(recover()).toMatchObject({ task: { status: 'cancelled', result: 'Original cancellation' } })
   expect(f.driver.start).not.toHaveBeenCalled(); expect(f.driver.interrupt).not.toHaveBeenCalled()
+})
+
+it.each(['startup', 'reconcile'])('L1: same-instance stop/start invalidates an old %s read generation', async phase => {
+  const f = setup(), { task } = await f.delegate(f.token())
+  f.threads.get('leader')!.status = { type: 'active' }
+  const path = join(f.root, '.state/Orchestration.json'), state = JSON.parse(readFileSync(path, 'utf8'))
+  Object.assign(state.tasks[0], { status: 'cancelled', dispatchPending: true, turnId: 'original', result: 'Original cancellation' })
+  writeFileSync(path, JSON.stringify(state))
+  const turn = { id: 'original', status: 'inProgress', items: [] }
+  f.threads.get('worker')!.turns = [turn]
+  const subject = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => subject.stop())
+  if (phase === 'reconcile') { await subject.start(); await subject.pump() }
+  let release!: () => void, entered!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve }), ready = new Promise<void>(resolve => { entered = resolve })
+  const read = f.driver.read
+  f.driver.read = async id => { const thread = await read(id); entered(); await gate; return thread }
+  const pending = phase === 'startup' ? subject.start() : subject.reconcile()
+  await ready; subject.stop(); f.driver.read = read; turn.status = 'interrupted'
+  await subject.start(); await subject.pump()
+  subject.resolveTask('leader', f.vault.groupFor('leader')!.leaderEpoch, task.id, 'New generation recovery', 'Exact terminal')
+  const before = readFileSync(path, 'utf8'), timers = vi.spyOn(globalThis, 'setInterval')
+  try {
+    release(); await pending; await subject.start() // Repeated start is also idempotent.
+    expect(readFileSync(path, 'utf8')).toBe(before)
+    expect(subject.snapshot('leader').tasks[0]).toMatchObject({ status: 'cancelled', result: 'Original cancellation', resolution: { summary: 'New generation recovery' } })
+    expect(timers).not.toHaveBeenCalled()
+    subject.stop(); subject.completed('worker', turn.id, 'failed', 'Stale completion')
+    subject.changed(); await subject.reconcile(); await subject.pump()
+    expect(readFileSync(path, 'utf8')).toBe(before)
+    expect(f.driver.start).not.toHaveBeenCalled(); expect(f.driver.interrupt).not.toHaveBeenCalled()
+  } finally { release(); await pending; timers.mockRestore() }
+})
+
+it.each(['accepted', 'rejected'])('L1: a late %s cancellation cannot write across same-instance stop/start', async outcome => {
+  const f = setup(), { task } = await f.delegate(f.token())
+  f.threads.get('leader')!.status = { type: 'active' }
+  await f.orchestra.start(); await f.orchestra.pump()
+  let release!: () => void, entered!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve }), ready = new Promise<void>(resolve => { entered = resolve })
+  const interrupt = f.driver.interrupt
+  f.driver.interrupt = async (...args) => {
+    args[2]?.()
+    if (outcome === 'accepted') await interrupt(...args)
+    entered(); await gate
+    if (outcome === 'rejected') { args[2]?.(); throw Error('Late interrupt failure') }
+  }
+  const cancellation = f.orchestra.cancel(task.id).then(() => null, error => error)
+  await ready; f.orchestra.stop()
+  f.threads.get('worker')!.turns![0].status = 'interrupted'
+  await f.orchestra.start(); await f.orchestra.pump()
+  f.orchestra.resolveTask('leader', f.vault.groupFor('leader')!.leaderEpoch, task.id, 'Recovery after exact settlement', 'Native terminal evidence')
+  const path = join(f.root, '.state/Orchestration.json'), before = readFileSync(path, 'utf8')
+  // Even if an external interrupt reply arrives late, its orchestration continuation is stale.
+  release(); expect(await cancellation).toBeInstanceOf(Error)
+  expect(interrupt).toHaveBeenCalledTimes(outcome === 'accepted' ? 1 : 0)
+  expect(readFileSync(path, 'utf8')).toBe(before)
+  await f.orchestra.pump(); expect(readFileSync(path, 'utf8')).toBe(before)
+})
+
+it('L1: delayed scheduler inspection cannot mutate or dispatch after same-instance restart', async () => {
+  const f = setup(), { task } = await f.delegate(f.token())
+  f.threads.get('leader')!.status = { type: 'active' }
+  let release!: () => void, entered!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve }), ready = new Promise<void>(resolve => { entered = resolve })
+  const inspect = f.driver.inspect
+  f.driver.inspect = async id => { const thread = await inspect(id); if (id === 'worker') { entered(); await gate }; return thread }
+  await f.orchestra.start(); await ready
+  const pumping = f.orchestra.pump()
+  f.orchestra.stop(); f.driver.inspect = inspect
+  // A fresh owner cancels the still-unsent task before the same object restarts.
+  const owner = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => owner.stop())
+  await owner.cancel(task.id); owner.resolveTask('leader', f.vault.groupFor('leader')!.leaderEpoch, task.id, 'No dispatch occurred', 'Queued cancellation')
+  owner.stop(); await f.orchestra.start(); await f.orchestra.pump()
+  const path = join(f.root, '.state/Orchestration.json'), before = readFileSync(path, 'utf8')
+  release(); await pumping
+  expect(readFileSync(path, 'utf8')).toBe(before)
+  expect(f.orchestra.snapshot('leader').tasks[0].resolution?.summary).toBe('No dispatch occurred')
+  expect(f.driver.start).not.toHaveBeenCalled(); expect(f.driver.interrupt).not.toHaveBeenCalled()
+})
+
+it('L1: a create reply arriving in a new generation cannot save, rename or finish its old admission', async () => {
+  const f = setup(), cap = f.token(), create = f.driver.create
+  f.threads.get('leader')!.status = { type: 'active' }
+  let release!: () => void, entered!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve }), ready = new Promise<void>(resolve => { entered = resolve })
+  f.driver.create = async (...args) => { const thread = await create(...args); entered(); await gate; return thread }
+  const command = f.orchestra.command(cap, { action: 'spawn', requestId: 'late-create', title: 'Fixture', text: 'Fixture' }).then(() => null, error => error)
+  await ready; f.orchestra.stop(); await f.orchestra.start(); await f.orchestra.pump()
+  const task = f.orchestra.snapshot('leader').tasks[0]
+  f.orchestra.resolveTask('leader', f.vault.groupFor('leader')!.leaderEpoch, task.id, 'Unsent admission recovered', 'No task start')
+  const path = join(f.root, '.state/Orchestration.json'), before = readFileSync(path, 'utf8')
+  release(); expect(await command).toMatchObject({ status: 409 })
+  expect(readFileSync(path, 'utf8')).toBe(before)
+  expect(f.driver.rename).not.toHaveBeenCalled(); expect(f.driver.start).not.toHaveBeenCalled()
 })
