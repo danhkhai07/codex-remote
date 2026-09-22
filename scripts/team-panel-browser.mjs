@@ -244,17 +244,17 @@ try {
     if (viewport.width === 390 && viewport.height === 600) {
       // L3 acceptance: only reliable per-task delivery moves old errors into history.
       const saved = structuredClone(tasks)
-      const stale = Array.from({ length: 200 }, (_, i) => ({ ...saved[0], id: `old-error-${i}`, title: `Old reported error ${i}`,
+      const stale = Array.from({ length: 205 }, (_, i) => ({ ...saved[0], id: `old-error-${i}`, title: `Old reported error ${i}`,
         status: 'failed', resolution: undefined, resultDelivery: 'delivered', dispatchPending: false,
         updatedAt: hoursAgo(720), result: 'Already reported; no successful recovery claimed' }))
-      const uncertain = ['pending', 'sending', 'review', 'unknown'].map(resultDelivery => ({ ...stale[0], id: `delivery-${resultDelivery}`, title: `Uncertain ${resultDelivery}`, resultDelivery }))
+      const uncertain = ['pending', 'sending', 'review', 'unknown', undefined].map(resultDelivery => ({ ...stale[0], id: `delivery-${resultDelivery}`, title: `Uncertain ${resultDelivery}`, resultDelivery }))
       tasks.splice(0, tasks.length, ...stale, { ...stale[0], id: 'still-active', title: 'Still active', status: 'running' },
         { ...stale[0], id: 'fresh-error', title: 'Fresh error', updatedAt: hoursAgo(0) }, ...uncertain,
         { ...stale[0], id: 'native-uncertain', title: 'Native settlement pending', status: 'cancelled', dispatchPending: true })
       let loaded = page.waitForResponse(response => response.url().endsWith('/orchestration'))
       controller.events.publish('codex', { method: 'orchestration/changed', params: {} }); await loaded
-      await page.waitForFunction(() => document.querySelectorAll('.team-tasks > li').length === 7)
-      assert.equal(await history.textContent(), 'Xem lịch sử (200)')
+      await page.waitForFunction(() => document.querySelectorAll('.team-tasks > li').length === 8)
+      assert.equal(await history.textContent(), 'Xem lịch sử (205)')
       assert.equal(await rows.filter({ hasText: 'Fresh error' }).count(), 1)
       assert.equal(await rows.filter({ hasText: 'Still active' }).count(), 1)
       for (const item of uncertain) assert.equal(await rows.filter({ hasText: item.title }).count(), 1)
@@ -263,15 +263,15 @@ try {
       assert.equal(await composer.inputValue(), 'Draft stays while reviewing work')
       if (shots) await page.screenshot({ path: resolve(shots, 'old-delivered-errors-current-390x600.png') })
       await history.focus(); await history.press('Enter')
-      assert.equal(await rows.count(), 207)
-      assert.equal(await history.textContent(), 'Thu gọn (200)')
+      assert.equal(await rows.count(), 213)
+      assert.equal(await history.textContent(), 'Thu gọn (205)')
       const oldError = rows.filter({ hasText: /^Old reported error 0/ })
       assert.equal(await oldError.locator('.team-task-status').textContent(), 'Có lỗi')
       await oldError.getByText('Kết quả', { exact: true }).click()
       assert.equal(await oldError.getByText('Already reported; no successful recovery claimed', { exact: true }).isVisible(), true)
       if (shots) await page.screenshot({ path: resolve(shots, 'old-delivered-errors-history-390x600.png') })
-      await history.click(); assert.equal(await rows.count(), 7)
-      console.log('PASS L3: 200 old delivered errors in history; every fresh/uncertain/native-active task stays current; original errors intact')
+      await history.click(); assert.equal(await rows.count(), 8)
+      console.log('PASS L3 selector: 205 old delivered errors in history; every fresh/uncertain/native-active task stays current; original errors intact')
       tasks.splice(0, tasks.length, ...saved)
       loaded = page.waitForResponse(response => response.url().endsWith('/orchestration'))
       controller.events.publish('codex', { method: 'orchestration/changed', params: {} }); await loaded

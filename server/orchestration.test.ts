@@ -1035,3 +1035,117 @@ it('L3: retiring an overflow notice does not falsely mark its task as delivered'
   expect(restored.snapshot('leader').tasks.find(item => item.id === 'finishing')?.resultDelivery).toBe('pending')
   expect(new ConversationOrchestrator(f.vault, f.driver).snapshot('leader').tasks.find(item => item.id === 'pending-0')?.resultDelivery).toBe('unknown')
 })
+
+// Independent exact-3f7e139 review: exercise delayed reads as well as delayed sends.
+it('CR2 re-review inverse: a stopped reconciler can overwrite a recovered instance after a late read', async () => {
+  const f = setup(), { task } = await f.delegate(f.token())
+  f.threads.get('leader')!.status = { type: 'active' }
+  await f.orchestra.start(); await f.orchestra.pump()
+  f.orchestra.userTurn('worker', 'Manual takeover')
+  const original = f.threads.get('worker')!.turns![0]
+  let release!: () => void, entered!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve }), ready = new Promise<void>(resolve => { entered = resolve })
+  const read = f.driver.read
+  f.driver.read = vi.fn(async id => { const reply = await read(id); entered(); await gate; return reply })
+  const pending = f.orchestra.reconcile(); await ready; f.orchestra.stop()
+  f.driver.read = read; original.status = 'interrupted'
+  const recovered = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => recovered.stop())
+  await recovered.start(); await recovered.pump()
+  recovered.resolveTask('leader', f.vault.groupFor('leader')!.leaderEpoch, task.id, 'Verified new recovery', 'Exact terminal evidence')
+  const path = join(f.root, '.state/Orchestration.json'), before = readFileSync(path, 'utf8')
+  try {
+    release(); await pending
+    expect(readFileSync(path, 'utf8')).not.toBe(before)
+    expect(recovered.snapshot('leader').tasks[0].resolution?.summary).toBe('Verified new recovery')
+    expect(new ConversationOrchestrator(f.vault, f.driver).snapshot('leader').tasks[0].resolution).toBeUndefined()
+    expect(f.driver.interrupt).not.toHaveBeenCalled()
+    expect(f.driver.start).toHaveBeenCalledTimes(1)
+  } finally { release(); await pending }
+})
+
+it('CR2 re-review inverse: a stopped startup read can overwrite recovery written by the next instance', async () => {
+  const f = setup(), { task } = await f.delegate(f.token())
+  f.threads.get('leader')!.status = { type: 'active' }
+  const path = join(f.root, '.state/Orchestration.json'), state = JSON.parse(readFileSync(path, 'utf8'))
+  Object.assign(state.tasks[0], { status: 'cancelled', dispatchPending: true, turnId: 'original', result: 'Original cancel', resultDelivery: 'pending' })
+  state.notices = [{ id: 'report', taskId: task.id, groupId: task.groupId, threadId: task.threadId, text: 'Original cancel', status: 'sending' }]
+  writeFileSync(path, JSON.stringify(state))
+  f.threads.get('worker')!.turns = [{ id: 'original', status: 'interrupted', items: [] }]
+  let release!: () => void, entered!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve }), ready = new Promise<void>(resolve => { entered = resolve })
+  const read = f.driver.read
+  f.driver.read = vi.fn(async id => { const reply = await read(id); entered(); await gate; return reply })
+  const old = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => old.stop())
+  const pending = old.start(); await ready; old.stop(); f.driver.read = read
+  const recovered = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => recovered.stop())
+  await recovered.start(); await recovered.pump()
+  recovered.resolveTask('leader', f.vault.groupFor('leader')!.leaderEpoch, task.id, 'New recovery', 'Verified original turn')
+  const before = readFileSync(path, 'utf8')
+  try {
+    release(); await pending
+    expect(readFileSync(path, 'utf8')).not.toBe(before)
+    const persisted = new ConversationOrchestrator(f.vault, f.driver).snapshot('leader').tasks[0]
+    expect(persisted.resolution).toBeUndefined()
+    expect(persisted.resultDelivery).toBe('review')
+    expect(f.driver.start).not.toHaveBeenCalled(); expect(f.driver.interrupt).not.toHaveBeenCalled()
+  } finally { release(); await pending }
+})
+
+it.each([199, 205])('CR2 re-review inverse: %i delivered outcomes can evict an older report still needing review', async delivered => {
+  const f = setup(), { task } = await f.delegate(f.token())
+  const path = join(f.root, '.state/Orchestration.json'), state = JSON.parse(readFileSync(path, 'utf8'))
+  state.tasks = [{ ...task, id: 'unreported', status: 'failed', result: 'Lost native leader receipt; no recovery',
+    dispatchPending: false, resultDelivery: 'review', updatedAt: '2026-01-01T00:00:00Z' },
+    ...Array.from({ length: delivered }, (_, i) => ({ ...task, id: `delivered-${i}`, status: 'failed', dispatchPending: false,
+      resultDelivery: 'delivered', updatedAt: '2026-02-01T00:00:00Z' })),
+    { ...task, id: 'fresh', status: 'running', turnId: 'fresh-turn', dispatchPending: true }]
+  state.notices = [{ id: 'uncertain-report', taskId: 'unreported', groupId: task.groupId, threadId: task.threadId,
+    status: 'review', text: 'Lost native leader receipt; no recovery' }]
+  writeFileSync(path, JSON.stringify(state))
+  const restored = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => restored.stop())
+  expect(restored.snapshot('leader').tasks.some(item => item.id === 'unreported')).toBe(true)
+  restored.completed('worker', 'fresh-turn', 'failed', 'Fresh error')
+  const result = restored.snapshot('leader')
+  expect(result.tasks).toHaveLength(200)
+  expect(result.tasks.some(item => item.id === 'unreported')).toBe(false)
+  expect(result.tasks.find(item => item.id === 'fresh')?.resultDelivery).toBe('pending')
+  expect(result.unconfirmedResults).toBe(1)
+  expect(new ConversationOrchestrator(f.vault, f.driver).snapshot('leader').tasks.some(item => item.id === 'unreported')).toBe(false)
+})
+
+it('CR2 re-review control: durable uncertainty exists before the native effect and known rejection safely releases it', async () => {
+  const f = setup(), { task } = await f.delegate(f.token()), start = f.driver.start
+  f.threads.get('leader')!.status = { type: 'active' }
+  let attempted = false
+  f.driver.start = vi.fn(async (...args) => {
+    const saved = JSON.parse(readFileSync(join(f.root, '.state/Orchestration.json'), 'utf8')).tasks.find((item: ConversationTask) => item.id === task.id)
+    expect(saved).toMatchObject({ status: 'starting', dispatchPending: true })
+    expect(f.threads.get('worker')!.turns).toEqual([])
+    if (!attempted) { attempted = true; throw new ContextVaultError(409, 'Conversation is busy') }
+    return start(...args)
+  })
+  await f.orchestra.start(); await f.orchestra.pump()
+  expect(f.orchestra.snapshot('leader').tasks[0]).toMatchObject({ status: 'queued', dispatchPending: false })
+  await f.orchestra.pump()
+  expect(f.orchestra.snapshot('leader').tasks[0]).toMatchObject({ status: 'running', dispatchPending: true })
+  expect(start).toHaveBeenCalledTimes(1)
+})
+
+it('CR2 re-review control: known original turn ID cannot fall back to another strict Task-ID match', async () => {
+  const f = setup(), { task } = await f.delegate(f.token())
+  f.threads.get('leader')!.status = { type: 'active' }
+  const path = join(f.root, '.state/Orchestration.json'), state = JSON.parse(readFileSync(path, 'utf8'))
+  Object.assign(state.tasks[0], { status: 'cancelled', dispatchPending: true, turnId: 'original', result: 'Original cancellation' })
+  writeFileSync(path, JSON.stringify(state))
+  f.threads.get('worker')!.turns = [{ id: 'other', status: 'completed', items: [{ type: 'userMessage', content: [
+    { type: 'text', text: `[Codex Remote · Giao việc từ leader leader]\nTask-ID: ${task.id}\nTitle` },
+  ] }] }]
+  const restored = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => restored.stop())
+  await restored.start(); await restored.pump()
+  const recover = () => restored.resolveTask('leader', f.vault.groupFor('leader')!.leaderEpoch, task.id, 'Recovery', 'Exact original terminal')
+  expect(recover).toThrow(/settling/)
+  f.threads.get('worker')!.turns!.push({ id: 'original', status: 'interrupted', items: [] })
+  await restored.reconcile()
+  expect(recover()).toMatchObject({ task: { status: 'cancelled', result: 'Original cancellation' } })
+  expect(f.driver.start).not.toHaveBeenCalled(); expect(f.driver.interrupt).not.toHaveBeenCalled()
+})
