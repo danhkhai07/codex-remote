@@ -1,5 +1,10 @@
 # Task resolution and focused Leader history
 
+Historical candidate100381e record. The independent review found three P2 issues;
+see [the follow-up implementation and evidence](leader-resolution-history-review-fixes.md).
+Its delivery-aware history policy supersedes the always-visible-old-error policy
+below. Neither this record nor that implementation constitutes independent approval.
+
 Task `bb4743c7-40ed-43ff-95c2-9ab6adb2d01d`, candidate only; not deployed.
 Branch `integration/leader-resolution-history-security`, preserved worktree
 `/root/WORKTREES/cr-leader-resolution-history-security`.

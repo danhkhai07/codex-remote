@@ -145,11 +145,14 @@ release manual control, acknowledge pending reports or change worker conversatio
 The authenticated team API also accepts `resolve` with the current `leaderEpoch`,
 behind the existing session and CSRF checks.
 
-The separate Leader page defaults to all queued/active work, every unresolved
-failure or interruption, and up to three recent terminal results within 24 hours
-(including verified recoveries, dated by their recovery time). The three-result
-and 24-hour thresholds are display choices, never worker limits. Unresolved errors
-remain visible regardless of age or whether their report has reached the leader.
+The separate Leader page defaults to all queued/active work, unsettled native
+dispatches, new failures/interruptions and errors whose result delivery is still
+pending or uncertain. These never count toward the three-result limit. It also
+shows up to three recent terminal results within 24 hours (including verified
+recoveries, dated by recovery time). The thresholds are display choices, never
+worker limits. Older errors with a confirmed per-task delivery receipt move into
+history while preserving their original failure and evidence. Delivery only means
+the native leader turn accepted the report, not recovery or human acknowledgement.
 “Xem lịch sử (N)” / “Thu gọn (N)” shows or hides the other retained results; it
 does not resolve, acknowledge, archive or delete anything. Recovery summaries stay
 visible; evidence and the original attempt are expandable. History remains bounded

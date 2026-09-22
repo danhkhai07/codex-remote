@@ -37,7 +37,7 @@ it('ages a completed result out at the 24-hour boundary without changing its sta
   expect(done.status).toBe('completed')
 })
 
-it('keeps every new and old unresolved failure or interruption visible, even beyond the result limit', () => {
+it('keeps every new and old unreported failure or interruption visible, even beyond the result limit', () => {
   const errors = Array.from({ length: 20 }, (_, i) => task(`error-${i}`, i % 2 ? 'interrupted' : 'failed', i * RECENT_TASK_WINDOW_MS))
   const done = Array.from({ length: 10 }, (_, i) => task(`done-${i}`, 'completed', i))
   const result = selectTeamTasks([...errors, ...done], now)
@@ -48,8 +48,8 @@ it('keeps every new and old unresolved failure or interruption visible, even bey
 })
 
 it('uses recovery time for recent recovered work while keeping the original error and outcome in history', () => {
-  const recovered = task('recovered', 'failed', 3 * RECENT_TASK_WINDOW_MS, { result: 'Original failure', resolution: resolved() })
-  const stale = task('stale-recovery', 'interrupted', 0, { result: 'Original interruption', resolution: resolved(RECENT_TASK_WINDOW_MS + 1) })
+  const recovered = task('recovered', 'failed', 3 * RECENT_TASK_WINDOW_MS, { result: 'Original failure', resolution: resolved(), resultDelivery: 'delivered' })
+  const stale = task('stale-recovery', 'interrupted', 0, { result: 'Original interruption', resolution: resolved(RECENT_TASK_WINDOW_MS + 1), resultDelivery: 'delivered' })
   const result = selectTeamTasks([recovered, stale], now)
   expect(result.current).toEqual([recovered]); expect(result.history).toEqual([stale])
   expect(result.current[0]).toMatchObject({ status: 'failed', result: 'Original failure', resolution: { summary: 'Verified recovery' } })
@@ -66,4 +66,22 @@ it('handles old timestamps conservatively and counts each retained task exactly 
   expect(ids(result.history)).toEqual(['invalid-completed'])
   expect(new Set([...ids(result.current), ...ids(result.history)]).size).toBe(tasks.length)
   expect(selectTeamTasks([], now)).toEqual({ current: [], history: [] })
+})
+
+it('never caps recent errors even when delivered, and only ages known delivered errors into history', () => {
+  const errors = Array.from({ length: 10 }, (_, i) => task(`error-${i}`, i % 2 ? 'interrupted' : 'failed', i, { resultDelivery: 'delivered' }))
+  const boundary = task('boundary-error', 'failed', RECENT_TASK_WINDOW_MS, { resultDelivery: 'delivered' })
+  const unknownTime = task('undated-delivery', 'failed', 0, { resultDelivery: 'delivered', createdAt: '', updatedAt: '' })
+  expect(selectTeamTasks([...errors, boundary, unknownTime], now).current).toHaveLength(12)
+  const later = selectTeamTasks([...errors, boundary, unknownTime], now + RECENT_TASK_WINDOW_MS + 1)
+  expect(later.current).toEqual([unknownTime])
+  expect(later.history).toHaveLength(11)
+  expect(later.history.every(item => item.resolution === undefined)).toBe(true)
+})
+
+it('keeps unsettled native work and recovered-but-unreported errors visible beyond the recent threshold', () => {
+  const uncertain = task('uncertain', 'cancelled', 2 * RECENT_TASK_WINDOW_MS, { dispatchPending: true, resultDelivery: 'delivered' })
+  const unreportedRecovery = task('unreported-recovery', 'failed', 2 * RECENT_TASK_WINDOW_MS, { resultDelivery: 'review', resolution: resolved(2 * RECENT_TASK_WINDOW_MS) })
+  const result = selectTeamTasks([uncertain, unreportedRecovery], now)
+  expect(result.current).toHaveLength(2); expect(result.history).toEqual([])
 })

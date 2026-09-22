@@ -10,15 +10,18 @@ export const MAX_CONCURRENT_WORKERS = 8
 
 export type TurnSettings = { model?: string; effort?: string; fullAccess: boolean; mode?: 'plan' | 'default' }
 export type TaskStatus = 'creating' | 'queued' | 'starting' | 'running' | 'stopping' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
+export type TaskResultDelivery = 'pending' | 'sending' | 'delivered' | 'review' | 'unknown'
 export type ConversationTask = {
   id: string; requestId: string; groupId: string; leaderId: string; leaderEpoch: number
   threadId: string; title: string; instruction: string; status: TaskStatus; createdAt: string; updatedAt: string
   turnId?: string; result?: string; settings: TurnSettings
   /** False proves no outstanding native effect; absent legacy outcomes may be uncertain. */
   dispatchPending?: boolean
+  /** Native receipt of the result message, not recovery or human acknowledgement. */
+  resultDelivery?: TaskResultDelivery
   resolution?: { summary: string; evidence: string; resolvedBy: string; resolvedAt: string; leaderEpoch: number }
 }
-type Notice = { id: string; groupId: string; threadId: string; text: string; status: 'pending' | 'sending' | 'sent' | 'review'; turnId?: string }
+type Notice = { id: string; groupId: string; threadId: string; text: string; status: 'pending' | 'sending' | 'sent' | 'review'; turnId?: string; taskId?: string }
 type Cycle = { leaderId: string; epoch: number; dispatches: number; wakeups: number; settings: TurnSettings; instructions?: string[] }
 type ArchiveReceipt = { requestId: string; threadId: string; groupId: string; leaderId: string; epoch: number; status: 'preparing' | 'sent' | 'complete' | 'review'; completedAt?: string }
 type State = { version: 1; tasks: ConversationTask[]; notices: Notice[]; paused: string[]; cycles: Record<string, Cycle>; settings?: Record<string, TurnSettings>; archives?: ArchiveReceipt[] }
@@ -96,6 +99,8 @@ export class ConversationOrchestrator {
   }
 
   #save() {
+    // Preserve legacy receipts before the bounded notice log is pruned.
+    for (const task of this.#state.tasks) task.resultDelivery ??= this.#resultDelivery(task)
     if (this.#state.archives) this.#state.archives = [...this.#state.archives.filter(item => item.status === 'complete').slice(-100), ...this.#state.archives.filter(item => item.status !== 'complete')]
     // Retain all unfinished work; bound the completed audit trail and result text.
     this.#state.tasks = [...this.#state.tasks.filter(task => !unfinished(task)).sort((a, b) => taskActivity(a) - taskActivity(b)).slice(-200), ...this.#state.tasks.filter(unfinished)]
@@ -108,6 +113,21 @@ export class ConversationOrchestrator {
     const cycle = this.#state.cycles[group.id]
     return cycle && cycle.leaderId === group.leaderThreadId && cycle.epoch === (group.leaderEpoch ?? 0) ? cycle : undefined
   }
+  #noticeTask(note: Notice) {
+    return this.#state.tasks.find(task => task.groupId === note.groupId && task.threadId === note.threadId
+      && (note.taskId ? task.id === note.taskId : note.text.startsWith(`Task ${task.id} · `)))
+  }
+  #resultDelivery(task: ConversationTask): TaskResultDelivery {
+    if (task.resultDelivery) return task.resultDelivery
+    const notes = this.#state.notices.filter(note => this.#noticeTask(note) === task)
+    if (notes.length !== 1) return 'unknown'
+    const note = notes[0]
+    return note.status === 'sent' ? (note.turnId ? 'delivered' : 'unknown') : note.status
+  }
+  #setDelivery(note: Notice, delivery: TaskResultDelivery) {
+    const task = this.#noticeTask(note)
+    if (task) task.resultDelivery = delivery
+  }
   snapshot(threadId: string) {
     const group = this.vault.groupFor(threadId)
     const members = group ? Object.entries(this.vault.snapshot().assignments).filter(([, id]) => id === group.id).map(([id]) => id) : []
@@ -116,7 +136,10 @@ export class ConversationOrchestrator {
       groupId: group?.id ?? null, leaderId: group?.leaderThreadId ?? null, members,
       paused: this.#state.paused.filter(id => members.includes(id)),
       // Return the retained folder history; a positional tail can hide active work or new errors.
-      tasks: this.#state.tasks.filter(task => task.groupId === group?.id).map(({ settings: _settings, ...task }) => ({ ...task, dispatchPending: dispatchPending(task), settings: { model: _settings.model, effort: _settings.effort }, instruction: task.instruction.slice(0, 1000), result: task.result?.slice(0, 4000) })),
+      tasks: this.#state.tasks.filter(task => task.groupId === group?.id).map(original => {
+        const { settings: _settings, ...task } = original
+        return { ...task, dispatchPending: dispatchPending(task), resultDelivery: this.#resultDelivery(original), settings: { model: _settings.model, effort: _settings.effort }, instruction: task.instruction.slice(0, 1000), result: task.result?.slice(0, 4000) }
+      }),
       archives: (this.#state.archives ?? []).filter(item => item.groupId === group?.id).map(item => ({ ...item })),
       pendingResults: this.#state.notices.filter(note => note.groupId === group?.id && note.status === 'pending').length,
       unconfirmedResults: this.#state.notices.filter(note => note.groupId === group?.id && note.status === 'review').length,
@@ -396,16 +419,17 @@ export class ConversationOrchestrator {
     this.#save(); this.kick()
     return this.snapshot(threadId)
   }
-  #notice(groupId: string, threadId: string, text: string) {
+  #notice(groupId: string, threadId: string, text: string, taskId?: string) {
     // A bounded inbox; consolidated task results also remain in the durable task log.
     const pending = this.#state.notices.filter(note => note.groupId === groupId && note.status === 'pending')
-    if (pending.length >= 40) pending[0].status = 'sent'
-    this.#state.notices.push({ id: randomUUID(), groupId, threadId, text, status: 'pending' })
+    if (pending.length >= 40) { pending[0].status = 'sent'; this.#setDelivery(pending[0], 'unknown') }
+    this.#state.notices.push({ id: randomUUID(), groupId, threadId, text, status: 'pending', taskId })
   }
   #finish(task: ConversationTask, status: TaskStatus, text: string) {
     if (!active(task)) return
     task.status = status; task.result = text.slice(0, 16000); task.updatedAt = new Date().toISOString()
-    this.#notice(task.groupId, task.threadId, `Task ${task.id} · ${task.title} · ${status}\nConvo: ${task.threadId}\nModel: ${task.settings.model ?? '(unset)'} · effort: ${task.settings.effort ?? '(unset)'}\n${task.result || '(Không có câu trả lời cuối.)'}`)
+    task.resultDelivery = 'pending'
+    this.#notice(task.groupId, task.threadId, `Task ${task.id} · ${task.title} · ${status}\nConvo: ${task.threadId}\nModel: ${task.settings.model ?? '(unset)'} · effort: ${task.settings.effort ?? '(unset)'}\n${task.result || '(Không có câu trả lời cuối.)'}`, task.id)
     this.#save()
   }
   #settle(task: ConversationTask, turnId: string, status: string, text: string) {
@@ -478,7 +502,7 @@ export class ConversationOrchestrator {
       } catch { this.#finish(task, 'interrupted', 'Could not reconcile the task after restart. Review the conversation; it was not sent again.') }
     }
     // A sending notice may already have started a leader turn. Do not auto-send it twice.
-    for (const note of this.#state.notices) if (note.status === 'sending') note.status = 'review'
+    for (const note of this.#state.notices) if (note.status === 'sending') { note.status = 'review'; this.#setDelivery(note, 'review') }
     this.#save(); this.#recovering = false; this.changed()
     this.#timer = setInterval(() => this.kick(), 3000)
     this.#timer.unref()
@@ -558,14 +582,17 @@ export class ConversationOrchestrator {
         }
         guard()
         const text = `[Codex Remote · Kết quả điều phối]\n${notes.map(note => `Notice-ID: ${note.id}\n${note.text}`).join('\n\n')}\n\nĐây là kết quả/thay đổi từ các convo, không phải yêu cầu mới của người dùng. Tiếp tục mục tiêu đã được giao, tôn trọng chỉ dẫn mới của người dùng và tổng hợp kết quả.`
-        notes.forEach(note => { note.status = 'sending' }); cycle.wakeups--; this.#save()
+        notes.forEach(note => { note.status = 'sending'; this.#setDelivery(note, 'sending') }); cycle.wakeups--; this.#save()
         const turnId = await this.#driver.start(group.leaderThreadId, text, cycle.settings, guard)
-        notes.forEach(note => { note.status = 'sent'; note.turnId = turnId }); this.#save()
+        if (this.#stopped) return // Restart owns the saved sending/review outcome.
+        if (!turnId) throw new Error('Result delivery could not be confirmed')
+        notes.forEach(note => { note.status = 'sent'; note.turnId = turnId; this.#setDelivery(note, 'delivered') }); this.#save()
       } catch (error) {
+        if (this.#stopped) return
         // Only a known pre-dispatch rejection is safe to retry. Transport failures are ambiguous.
         const retryable = error instanceof ContextVaultError
         if (retryable && notes.some(note => note.status === 'sending')) cycle.wakeups++
-        notes.forEach(note => { if (note.status === 'sending') note.status = retryable ? 'pending' : 'review' })
+        notes.forEach(note => { if (note.status === 'sending') { note.status = retryable ? 'pending' : 'review'; this.#setDelivery(note, note.status) } })
         this.#save()
       }
     }

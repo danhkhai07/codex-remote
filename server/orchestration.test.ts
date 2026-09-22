@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { afterEach, expect, it, vi } from 'vitest'
-import { ContextVault } from './context-vault.js'
+import { ContextVault, ContextVaultError } from './context-vault.js'
 import { ConversationOrchestrator, MAX_CONCURRENT_WORKERS, type ConversationTask, type OrchestrationDriver } from './orchestration.js'
 import { normalizeThreadName } from './controller.js'
 import { listenOrchestration } from './orchestration-socket.js'
@@ -903,4 +903,135 @@ it('L2: fresh failures and every unfinished record survive bounded saves with st
   expect(again.snapshot('leader').tasks).toEqual(tasks)
   again.changed()
   expect(again.snapshot('leader').tasks).toEqual(tasks)
+})
+
+it('L3: a task report is delivered only after its native receipt, without resolving the original error', async () => {
+  const f = setup(), { task } = await f.delegate(f.token())
+  f.threads.get('leader')!.status = { type: 'active' }
+  await f.orchestra.start(); await f.orchestra.pump()
+  f.finish('worker', task.turnId!, 'Original failure evidence', 'failed'); await f.orchestra.pump()
+  expect(f.orchestra.snapshot('leader').tasks[0]).toMatchObject({ status: 'failed', resultDelivery: 'pending', dispatchPending: false })
+  const start = f.driver.start
+  let release!: () => void, entered!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve }), ready = new Promise<void>(resolve => { entered = resolve })
+  f.driver.start = async (...args) => { const id = await start(...args); entered(); await gate; return id }
+  f.threads.get('leader')!.status = { type: 'idle' }
+  const sending = f.orchestra.pump(); await ready
+  try {
+    expect(f.orchestra.snapshot('leader').tasks[0].resultDelivery).toBe('sending')
+    expect(JSON.parse(readFileSync(join(f.root, '.state/Orchestration.json'), 'utf8')).tasks[0].resultDelivery).toBe('sending')
+  } finally { release(); await sending }
+  expect(f.orchestra.snapshot('leader').tasks[0]).toMatchObject({ status: 'failed', result: 'Original failure evidence', resultDelivery: 'delivered' })
+  expect(f.orchestra.snapshot('leader').tasks[0].resolution).toBeUndefined()
+  f.orchestra.stop()
+  const restored = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => restored.stop())
+  await restored.start(); await restored.pump()
+  expect(restored.snapshot('leader').tasks[0]).toEqual(f.orchestra.snapshot('leader').tasks[0])
+  expect(start).toHaveBeenCalledTimes(2)
+})
+
+it.each(['missing', 'lost'])('L3: a %s leader receipt remains uncertain and is never automatically sent again', async reply => {
+  const f = setup(), { task } = await f.delegate(f.token())
+  f.threads.get('leader')!.status = { type: 'active' }
+  await f.orchestra.start(); await f.orchestra.pump()
+  f.finish('worker', task.turnId!, 'Failure', 'failed'); await f.orchestra.pump()
+  const start = f.driver.start
+  f.driver.start = async (...args) => {
+    await start(...args)
+    if (reply === 'lost') throw Error('Native accepted but reply was lost')
+    return ''
+  }
+  f.threads.get('leader')!.status = { type: 'idle' }
+  await f.orchestra.pump()
+  expect(f.orchestra.snapshot('leader')).toMatchObject({ unconfirmedResults: 1, tasks: [{ status: 'failed', resultDelivery: 'review' }] })
+  f.orchestra.stop()
+  const restored = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => restored.stop())
+  await restored.start(); await restored.pump()
+  expect(restored.snapshot('leader').tasks[0].resultDelivery).toBe('review')
+  expect(start).toHaveBeenCalledTimes(2)
+})
+
+it('L3: a known pre-dispatch rejection retains the pending report and wakeup budget for a safe retry', async () => {
+  const f = setup(), { task } = await f.delegate(f.token())
+  f.threads.get('leader')!.status = { type: 'active' }
+  await f.orchestra.start(); await f.orchestra.pump()
+  f.finish('worker', task.turnId!, 'Failure', 'failed'); await f.orchestra.pump()
+  const start = f.driver.start
+  f.driver.start = async () => { throw new ContextVaultError(409, 'Conversation is busy') }
+  f.threads.get('leader')!.status = { type: 'idle' }
+  await f.orchestra.pump()
+  expect(f.orchestra.snapshot('leader')).toMatchObject({ pendingResults: 1, tasks: [{ resultDelivery: 'pending' }], limits: { wakeupsLeft: 8 } })
+  expect(start).toHaveBeenCalledTimes(1)
+  f.driver.start = start; await f.orchestra.pump()
+  expect(f.orchestra.snapshot('leader')).toMatchObject({ pendingResults: 0, tasks: [{ status: 'failed', resultDelivery: 'delivered' }], limits: { wakeupsLeft: 7 } })
+  expect(start).toHaveBeenCalledTimes(2)
+})
+
+it.each(['reply', 'error'])('L3: restart keeps an in-flight report under review despite a late old-instance %s', async reply => {
+  const f = setup(), { task } = await f.delegate(f.token())
+  f.threads.get('leader')!.status = { type: 'active' }
+  await f.orchestra.start(); await f.orchestra.pump()
+  f.finish('worker', task.turnId!, 'Failure', 'failed'); await f.orchestra.pump()
+  const start = f.driver.start
+  let release!: () => void, entered!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve }), ready = new Promise<void>(resolve => { entered = resolve })
+  f.driver.start = async (...args) => {
+    const id = await start(...args); entered(); await gate
+    if (reply === 'error') throw Error('Late transport error')
+    return id
+  }
+  f.threads.get('leader')!.status = { type: 'idle' }
+  const sending = f.orchestra.pump(); await ready; f.orchestra.stop()
+  try {
+    const restored = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => restored.stop())
+    await restored.start(); await restored.pump()
+    expect(restored.snapshot('leader').tasks[0]).toMatchObject({ status: 'failed', resultDelivery: 'review' })
+    const path = join(f.root, '.state/Orchestration.json'), before = readFileSync(path, 'utf8')
+    release(); await sending
+    expect(readFileSync(path, 'utf8')).toBe(before)
+    expect(start).toHaveBeenCalledTimes(2)
+  } finally { release(); await sending }
+})
+
+it('L3: legacy delivery requires an exact per-task receipt and survives pruning of the notice log', async () => {
+  const f = setup(), { task } = await f.delegate(f.token())
+  const path = join(f.root, '.state/Orchestration.json'), state = JSON.parse(readFileSync(path, 'utf8'))
+  const ids = ['legacy', 'linked', 'no-receipt', 'other-folder', 'other-worker', 'quote', 'ambiguous', 'pending', 'sending', 'review', 'absent']
+  state.tasks = ids.map(id => ({ ...task, id, status: 'failed', dispatchPending: false, resultDelivery: undefined, result: 'Original error' }))
+  const note = (id: string, extra = {}) => ({ id, groupId: task.groupId, threadId: task.threadId, text: `Task ${id} · Title · failed\nError`, status: 'sent', turnId: `receipt-${id}`, ...extra })
+  state.notices = [note('legacy'), note('linked', { taskId: 'linked', text: 'Linked result' }), note('no-receipt', { turnId: undefined }),
+    note('other-folder', { groupId: 'elsewhere' }), note('other-worker', { threadId: 'second' }), note('quote', { text: 'Quote: Task quote · failed' }),
+    note('ambiguous'), note('ambiguous', { id: 'second-copy', status: 'review' }),
+    ...['pending', 'sending', 'review'].map(status => note(status, { status, turnId: undefined })),
+    ...Array.from({ length: 100 }, (_, i) => note(`unrelated-${i}`))]
+  writeFileSync(path, JSON.stringify(state))
+  const restored = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => restored.stop())
+  const deliveries = () => Object.fromEntries(restored.snapshot('leader').tasks.map(item => [item.id, item.resultDelivery]))
+  expect(deliveries()).toEqual({ legacy: 'delivered', linked: 'delivered', 'no-receipt': 'unknown', 'other-folder': 'unknown',
+    'other-worker': 'unknown', quote: 'unknown', ambiguous: 'unknown', pending: 'pending', sending: 'sending', review: 'review', absent: 'unknown' })
+  restored.changed()
+  expect(JSON.parse(readFileSync(path, 'utf8')).notices.filter((item: { status: string }) => item.status === 'sent')).toHaveLength(100)
+  expect(JSON.parse(readFileSync(path, 'utf8')).notices.some((item: { id: string }) => item.id === 'legacy')).toBe(false)
+  f.threads.get('leader')!.status = { type: 'active' }
+  const restarted = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => restarted.stop())
+  await restarted.start(); await restarted.pump()
+  expect(restarted.snapshot('leader').tasks.find(item => item.id === 'legacy')).toMatchObject({ status: 'failed', result: 'Original error', resultDelivery: 'delivered' })
+  expect(restarted.snapshot('leader').tasks.find(item => item.id === 'sending')?.resultDelivery).toBe('review')
+  expect(restarted.snapshot('leader').tasks.every(item => !item.resolution)).toBe(true)
+  expect(f.driver.start).not.toHaveBeenCalled()
+})
+
+it('L3: retiring an overflow notice does not falsely mark its task as delivered', async () => {
+  const f = setup(), { task } = await f.delegate(f.token())
+  const path = join(f.root, '.state/Orchestration.json'), state = JSON.parse(readFileSync(path, 'utf8'))
+  state.tasks = Array.from({ length: 40 }, (_, i) => ({ ...task, id: `pending-${i}`, status: 'failed', resultDelivery: 'pending' }))
+  state.notices = state.tasks.map((item: ConversationTask) => ({ id: `notice-${item.id}`, taskId: item.id, groupId: item.groupId, threadId: item.threadId, text: 'Result', status: 'pending' }))
+  state.tasks.push({ ...task, id: 'finishing', status: 'running', turnId: 'native-turn', dispatchPending: true })
+  writeFileSync(path, JSON.stringify(state))
+  const restored = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => restored.stop())
+  restored.completed('worker', 'native-turn', 'failed', 'New failure')
+  expect(restored.snapshot('leader').pendingResults).toBe(40)
+  expect(restored.snapshot('leader').tasks.find(item => item.id === 'pending-0')?.resultDelivery).toBe('unknown')
+  expect(restored.snapshot('leader').tasks.find(item => item.id === 'finishing')?.resultDelivery).toBe('pending')
+  expect(new ConversationOrchestrator(f.vault, f.driver).snapshot('leader').tasks.find(item => item.id === 'pending-0')?.resultDelivery).toBe('unknown')
 })

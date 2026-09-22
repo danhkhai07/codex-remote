@@ -45,7 +45,7 @@ export function ConversationTeam({ threadId, group, threads, csrf, enabled, revi
     finally { setSaving(false) }
   }
   const title = (id: string) => { const thread = threads.find(thread => thread.id === id); return thread ? threadTitle(thread) : id }
-  const pending = team?.tasks.filter(task => isUnfinishedTask(task.status)).length ?? 0
+  const pending = team?.tasks.filter(task => isUnfinishedTask(task.status) || task.dispatchPending).length ?? 0
   const { current, history } = selectTeamTasks(team?.tasks ?? [])
   const visible = showHistory ? [...current, ...history] : current
   const isLeader = group.leaderThreadId === threadId
@@ -69,7 +69,7 @@ export function ConversationTeam({ threadId, group, threads, csrf, enabled, revi
           aria-controls={taskListId} onClick={() => setShowHistory(value => !value)}>{showHistory ? 'Thu gọn' : 'Xem lịch sử'} ({history.length})</button>}
         {!showHistory && current.length === 0 && history.length > 0 && <p className="muted">Không có công việc hiện hành.</p>}
         <ul id={taskListId} className="team-tasks">{visible.map(task => <li key={task.id}>
-          <div className="team-task-heading"><strong>{task.title}</strong><span className={`team-task-status is-${task.resolution ? 'resolved' : task.status}`}>{task.resolution ? 'Đã xử lý' : statuses[task.status]}</span></div>
+          <div className="team-task-heading"><strong>{task.title}</strong><span className={`team-task-status is-${task.resolution ? 'resolved' : task.status}`}>{task.dispatchPending && !isUnfinishedTask(task.status) ? 'Chờ xác nhận lượt' : task.resolution ? 'Đã xử lý' : statuses[task.status]}</span></div>
           <div className="team-task-actions">
             {task.threadId && <button type="button" className="quiet-button" onClick={() => onOpen(task.threadId)}>{title(task.threadId)} ↗</button>}
             {isUnfinishedTask(task.status) && <button type="button" className="quiet-button team-task-stop" aria-label="Dừng việc" title="Dừng việc" disabled={!enabled || saving} onClick={() => void action({ action: 'cancel', taskId: task.id })}>[x]</button>}
