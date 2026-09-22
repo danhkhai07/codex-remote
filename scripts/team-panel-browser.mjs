@@ -240,6 +240,28 @@ try {
     await page.getByRole('button', { name: 'Stop Codex', exact: true }).click()
     await page.locator('.plan-question').waitFor({ state: 'detached' })
     assert.equal(await composer.inputValue(), 'Draft stays while reviewing work')
+    if (viewport.width === 390 && viewport.height === 600) {
+      // Independent inverse: old delivered errors cannot be hidden on demand.
+      // The snapshot has no per-task delivery field; no production state involved.
+      const saved = structuredClone(tasks)
+      const stale = Array.from({ length: 200 }, (_, i) => ({ ...saved[0], id: `old-error-${i}`, title: `Old reported error ${i}`,
+        status: 'failed', resolution: undefined, updatedAt: hoursAgo(720), result: 'Already reported; no successful recovery claimed' }))
+      tasks.splice(0, tasks.length, ...stale, { ...stale[0], id: 'still-active', title: 'Still active', status: 'running' },
+        { ...stale[0], id: 'fresh-error', title: 'Fresh error', updatedAt: hoursAgo(0) })
+      let loaded = page.waitForResponse(response => response.url().endsWith('/orchestration'))
+      controller.events.publish('codex', { method: 'orchestration/changed', params: {} }); await loaded
+      await page.waitForFunction(() => document.querySelectorAll('.team-tasks > li').length === 202)
+      assert.equal(await history.count(), 0, 'Inverse finding: 200 old errors all remain current; no history button')
+      assert.equal(await rows.filter({ hasText: 'Fresh error' }).count(), 1)
+      assert.equal(await rows.filter({ hasText: 'Still active' }).count(), 1)
+      await team.evaluate(el => { el.scrollTop = 0 }); await layout()
+      assert.equal(await composer.inputValue(), 'Draft stays while reviewing work')
+      if (shots) await page.screenshot({ path: resolve(shots, 'independent-old-errors-390x600.png') })
+      console.log('INVERSE CONFIRMED: 200 old errors + fresh error + active task all current, history count zero')
+      tasks.splice(0, tasks.length, ...saved)
+      loaded = page.waitForResponse(response => response.url().endsWith('/orchestration'))
+      controller.events.publish('codex', { method: 'orchestration/changed', params: {} }); await loaded
+    }
     // Errors remain visible in both views.
     failLeader = true
     await page.getByRole('button', { name: 'Bỏ vai trò leader', exact: true }).click()

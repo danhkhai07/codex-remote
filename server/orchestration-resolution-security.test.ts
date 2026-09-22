@@ -96,3 +96,24 @@ it.each(['logout', 'expiry', 'rotation'] as const)('never resolves after %s whil
   expect(resolve).not.toHaveBeenCalled()
   expect(f.orchestra.snapshot('leader')).toEqual(before)
 })
+
+it.each(['leader-replaced', 'epoch-roundtrip', 'plan-mode'] as const)('CR2: rejects %s changed during encrypted access and still permits a fresh authorized retry', async reason => {
+  const f = await fixture()
+  let release!: () => void, entered!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve }), ready = new Promise<void>(resolve => { entered = resolve })
+  const access = vi.spyOn(f.controller, 'assertThreadAccess').mockImplementationOnce(async () => { entered(); await gate })
+  const pending = f.call(); await ready
+  if (reason === 'plan-mode') f.orchestra.context('leader', { ...settings, mode: 'plan' }, true)
+  else { f.vault.setLeader(f.vault.groupFor('leader')!.id, 'worker'); if (reason === 'epoch-roundtrip') f.vault.setLeader(f.vault.groupFor('leader')!.id, 'leader') }
+  release()
+  expect((await pending).status).toBe(reason === 'epoch-roundtrip' ? 409 : 403)
+  expect(f.orchestra.snapshot('leader').tasks[0].resolution).toBeUndefined()
+  access.mockRestore()
+  if (reason === 'leader-replaced') f.vault.setLeader(f.vault.groupFor('leader')!.id, 'leader')
+  f.orchestra.context('leader', settings, true)
+  const current = { ...f.recovery, leaderEpoch: f.vault.groupFor('leader')!.leaderEpoch }
+  expect((await f.call(current)).status).toBe(200)
+  expect((await f.call(current)).status).toBe(200)
+  expect(f.orchestra.snapshot('leader').tasks[0]).toMatchObject({ status: 'cancelled', result: 'Original unsuccessful attempt', resolution: { summary: current.summary, leaderEpoch: current.leaderEpoch } })
+  expect(f.rpc.mock.calls.every(([method]) => ['model/list', 'thread/read'].includes(method))).toBe(true)
+})

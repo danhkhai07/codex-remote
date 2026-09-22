@@ -727,3 +727,55 @@ it('returns retained history without clipping active tasks or unresolved errors 
   expect(snapshot.tasks.some(item => item.id === 'other-folder')).toBe(false)
   expect(JSON.parse(readFileSync(path, 'utf8')).tasks).toEqual(state.tasks)
 })
+
+// Independent inverse controls: green reproduces a defect in exact100381e.
+// No production task/state or native model turn is used.
+it('CR2 inverse: restart forgets unresolved dispatch settlement and permits recovery while accepted native work is active', async () => {
+  const f = setup(), cap = f.token(), { task } = await f.delegate(cap), start = f.driver.start
+  f.threads.get('leader')!.status = { type: 'active' }
+  let release!: () => void, entered!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve }), ready = new Promise<void>(resolve => { entered = resolve })
+  f.driver.start = async (...args) => {
+    await start(...args) // Native accepted the fake turn; reply is still in flight.
+    entered(); await gate
+    throw new Error('Fixture old gateway lost the reply at restart')
+  }
+  await f.orchestra.start(); await ready
+  try {
+    await f.orchestra.cancel(task.id) // No turnId yet; cancelled is written durably.
+    const command = { action: 'resolve', taskId: task.id, summary: 'Claimed recovery', evidence: 'Fixture only' }
+    await expect(f.orchestra.command(cap, command)).rejects.toMatchObject({ status: 409 })
+    expect(f.threads.get('worker')!.status).toEqual({ type: 'active' })
+    f.orchestra.stop()
+    const recovered = new ConversationOrchestrator(f.vault, f.driver)
+    cleanups.push(() => recovered.stop())
+    await recovered.start(); await recovered.pump()
+    const checkpoint = recovered.snapshot('leader').tasks[0]
+    expect(checkpoint.status).toBe('cancelled'); expect(checkpoint.turnId).toBeUndefined()
+    // Defect: start() skips this cancelled task and the in-memory Set is empty.
+    expect(recovered.resolveTask('leader', f.vault.groupFor('leader')!.leaderEpoch, task.id, command.summary, command.evidence))
+      .toMatchObject({ duplicate: false, task: { status: 'cancelled', resolution: { summary: command.summary } } })
+    expect(f.threads.get('worker')!.turns?.at(-1)?.status).toBe('inProgress')
+    expect(f.driver.interrupt).not.toHaveBeenCalled()
+  } finally { release(); await f.orchestra.pump() }
+})
+
+it('CR2 inverse: the next completion evicts a recovery just recorded on the oldest retained task', async () => {
+  const f = setup(), { task } = await f.delegate(f.token())
+  const path = join(f.root, '.state/Orchestration.json'), state = JSON.parse(readFileSync(path, 'utf8'))
+  const stale = '2026-01-01T00:00:00.000Z'
+  // Normal retention layout: 200 terminal entries followed by unfinished work.
+  state.tasks = Array.from({ length: 200 }, (_, i) => ({ ...task, id: `old-${i}`, status: i ? 'completed' : 'failed', updatedAt: stale, result: 'Original retained result' }))
+  state.tasks.push({ ...task, id: 'busy', status: 'running', turnId: 'pending-finish' })
+  writeFileSync(path, JSON.stringify(state))
+  const recovered = new ConversationOrchestrator(f.vault, f.driver)
+  cleanups.push(() => recovered.stop())
+  recovered.resolveTask('leader', f.vault.groupFor('leader')!.leaderEpoch, 'old-0', 'Fresh verified recovery', 'Fixture check passed')
+  expect(recovered.snapshot('leader').tasks.find(item => item.id === 'old-0')?.resolution?.summary).toBe('Fresh verified recovery')
+  expect(recovered.snapshot('leader').tasks.find(item => item.id === 'busy')?.status).toBe('running')
+  recovered.completed('worker', 'pending-finish', 'completed', 'Another task just finished')
+  // Defect: slice(-200) drops the freshly updated record, retaining 199 stale ones.
+  expect(recovered.snapshot('leader').tasks.some(item => item.id === 'old-0')).toBe(false)
+  expect(recovered.snapshot('leader').tasks.find(item => item.id === 'busy')?.result).toBe('Another task just finished')
+  expect(new ConversationOrchestrator(f.vault, f.driver).snapshot('leader').tasks.some(item => item.id === 'old-0')).toBe(false)
+})
