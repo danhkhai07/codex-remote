@@ -520,7 +520,7 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
 .team-task-heading, .team-task-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .team-task-heading strong { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .team-task-status { color: var(--muted); }
-.team-task-status.is-running, .team-task-status.is-completed { color: var(--accent); }
+.team-task-status.is-running, .team-task-status.is-completed, .team-task-status.is-resolved { color: var(--accent); }
 .team-task-status.is-failed { color: #f6a498; }
 .team-task-actions { margin-top: 8px; }
 .team-task-actions button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
