@@ -36,3 +36,19 @@ access races pass (89 tests), lint and server build. This intermediate run still
 contains the separate L2 inverse probe; it is not evidence that L2 is fixed.
 Log `/tmp/cr-leader-l1-verified.log`. All checks use codex-heavy, one Vitest worker,
 temporary vault/native fixtures and no real model turn or task resolution.
+
+## L2: retain recent terminal and recovery activity
+
+The inactive audit trail stays capped at 200 records, chosen by the newest actual
+terminal/recovery timestamp rather than position in the array. Invalid/missing
+legacy activity dates fall back to creation time, then a stable zero timestamp;
+equal timestamps preserve existing order. No save invents activity using its own
+clock. Every queued/active task and unsettled native effect stays retained.
+
+The independent inverse is now acceptance: recovery on the oldest of 200 records
+survives the next completion and restart, while the genuinely oldest inactive
+record is removed. A fresh failure likewise survives a later completion, repeated
+saves and reconstruction. Legacy fallback, the bound and every unfinished status
+are covered. Focused suites: 90 tests, lint and server build pass, with a final
+targeted L2 run after extending the subsequent-completion assertion.
+Logs `/tmp/cr-leader-l2-retention.log`, `/tmp/cr-leader-l2-final.log`.

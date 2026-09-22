@@ -854,7 +854,7 @@ it('L1: late start reply from a stopped instance does not overwrite recovered st
   expect(f.driver.interrupt).not.toHaveBeenCalled()
 })
 
-it('CR2 inverse: the next completion evicts a recovery just recorded on the oldest retained task', async () => {
+it('L2: the next completion retains fresh recovery and evicts the genuinely oldest inactive record', async () => {
   const f = setup(), { task } = await f.delegate(f.token())
   const path = join(f.root, '.state/Orchestration.json'), state = JSON.parse(readFileSync(path, 'utf8'))
   const stale = '2026-01-01T00:00:00.000Z'
@@ -868,8 +868,39 @@ it('CR2 inverse: the next completion evicts a recovery just recorded on the olde
   expect(recovered.snapshot('leader').tasks.find(item => item.id === 'old-0')?.resolution?.summary).toBe('Fresh verified recovery')
   expect(recovered.snapshot('leader').tasks.find(item => item.id === 'busy')?.status).toBe('running')
   recovered.completed('worker', 'pending-finish', 'completed', 'Another task just finished')
-  // Defect: slice(-200) drops the freshly updated record, retaining 199 stale ones.
-  expect(recovered.snapshot('leader').tasks.some(item => item.id === 'old-0')).toBe(false)
+  expect(recovered.snapshot('leader').tasks).toHaveLength(200)
+  expect(recovered.snapshot('leader').tasks.find(item => item.id === 'old-0')).toMatchObject({ status: 'failed', result: 'Original retained result', resolution: { summary: 'Fresh verified recovery' } })
+  expect(recovered.snapshot('leader').tasks.some(item => item.id === 'old-1')).toBe(false)
   expect(recovered.snapshot('leader').tasks.find(item => item.id === 'busy')?.result).toBe('Another task just finished')
-  expect(new ConversationOrchestrator(f.vault, f.driver).snapshot('leader').tasks.some(item => item.id === 'old-0')).toBe(false)
+  expect(new ConversationOrchestrator(f.vault, f.driver).snapshot('leader').tasks.find(item => item.id === 'old-0')?.resolution?.summary).toBe('Fresh verified recovery')
+})
+
+it('L2: fresh failures and every unfinished record survive bounded saves with stable legacy time fallbacks', async () => {
+  const f = setup(), { task } = await f.delegate(f.token())
+  const path = join(f.root, '.state/Orchestration.json'), state = JSON.parse(readFileSync(path, 'utf8'))
+  state.tasks = Array.from({ length: 200 }, (_, i) => ({ ...task, id: `old-${i}`, status: 'completed', createdAt: '2025-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }))
+  state.tasks[0].updatedAt = ''; state.tasks[0].createdAt = 'invalid' // Oldest, stable fallback zero.
+  state.tasks[1].updatedAt = 'invalid'; state.tasks[1].createdAt = '2025-01-01T00:00:00Z'
+  state.tasks.push({ ...task, id: 'fresh-failure', status: 'running', turnId: 'original', dispatchPending: true })
+  for (const status of ['queued', 'creating', 'starting', 'running', 'stopping']) state.tasks.push({ ...task, id: status, status, updatedAt: 'invalid', ...(status === 'running' ? { turnId: 'next-completion', dispatchPending: true } : {}) })
+  state.tasks.push({ ...task, id: 'uncertain-cancel', status: 'cancelled', dispatchPending: true, updatedAt: '2020-01-01T00:00:00Z' })
+  writeFileSync(path, JSON.stringify(state))
+  const restored = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => restored.stop())
+  restored.completed('worker', 'original', 'failed', 'Fresh native failure')
+  let tasks = restored.snapshot('leader').tasks
+  expect(tasks).toHaveLength(206)
+  expect(tasks.some(item => item.id === 'old-0')).toBe(false)
+  expect(tasks.find(item => item.id === 'fresh-failure')).toMatchObject({ status: 'failed', result: 'Fresh native failure', dispatchPending: false })
+  expect(tasks.find(item => item.id === 'uncertain-cancel')).toMatchObject({ status: 'cancelled', dispatchPending: true })
+  for (const status of ['queued', 'creating', 'starting', 'running', 'stopping']) expect(tasks.some(item => item.id === status)).toBe(true)
+  restored.completed('worker', 'next-completion', 'completed', 'A later completion')
+  tasks = restored.snapshot('leader').tasks
+  expect(tasks).toHaveLength(205)
+  expect(tasks.some(item => item.id === 'old-1')).toBe(false)
+  expect(tasks.find(item => item.id === 'fresh-failure')?.result).toBe('Fresh native failure')
+  restored.changed(); tasks = restored.snapshot('leader').tasks
+  const again = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => again.stop())
+  expect(again.snapshot('leader').tasks).toEqual(tasks)
+  again.changed()
+  expect(again.snapshot('leader').tasks).toEqual(tasks)
 })

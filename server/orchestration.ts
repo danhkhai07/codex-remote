@@ -43,6 +43,12 @@ const running = (task: ConversationTask) => ['starting', 'running', 'stopping'].
 const dispatchPending = (task: Pick<ConversationTask, 'dispatchPending' | 'status'>) => task.dispatchPending ?? ['starting', 'running', 'stopping', 'failed', 'cancelled', 'interrupted'].includes(task.status)
 const unfinished = (task: ConversationTask) => active(task) || dispatchPending(task)
 const terminal = (status: string) => ['completed', 'failed', 'interrupted', 'cancelled'].includes(status)
+const taskActivity = (task: ConversationTask) => {
+  const times = [task.resolution?.resolvedAt, task.updatedAt].map(value => Date.parse(value ?? '')).filter(Number.isFinite)
+  if (times.length) return Math.max(...times)
+  const created = Date.parse(task.createdAt)
+  return Number.isFinite(created) ? created : 0 // Stable legacy fallback, never the current clock.
+}
 const object = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 const short = (value: unknown, max: number, label: string): string => {
   if (typeof value !== 'string' || !value.trim() || value.length > max) throw new ContextVaultError(400, `Invalid ${label}`)
@@ -92,7 +98,7 @@ export class ConversationOrchestrator {
   #save() {
     if (this.#state.archives) this.#state.archives = [...this.#state.archives.filter(item => item.status === 'complete').slice(-100), ...this.#state.archives.filter(item => item.status !== 'complete')]
     // Retain all unfinished work; bound the completed audit trail and result text.
-    this.#state.tasks = [...this.#state.tasks.filter(task => !unfinished(task)).slice(-200), ...this.#state.tasks.filter(unfinished)]
+    this.#state.tasks = [...this.#state.tasks.filter(task => !unfinished(task)).sort((a, b) => taskActivity(a) - taskActivity(b)).slice(-200), ...this.#state.tasks.filter(unfinished)]
     this.#state.notices = [...this.#state.notices.filter(note => note.status === 'sent').slice(-100), ...this.#state.notices.filter(note => note.status !== 'sent')]
     this.#files.write('.state/Orchestration.json', JSON.stringify(this.#state, null, 2) + '\n')
     this.#driver.changed()
