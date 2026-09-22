@@ -132,13 +132,21 @@ not applicable to this user-selected dual-version deployment.
 **No reusable production key may be provisioned and no active new ingress may be
 opened until a concrete old-API/key boundary has been independently checked.**
 This is a technical prerequisite, not a request for general deployment consent.
-CR2's assessment must be received, not inferred. The smallest likely prerequisite
-is a narrowly reviewed old Files boundary that excludes the new private material
-through all canonical/proc/symlink paths while retaining old UI/jobs; this task
-has no authority to restart/replace/patch that old gateway. If an alternative
-boundary is selected, prove the actual old API cannot retrieve the key through
-it. Intentional native root compromise is outside the accepted security target;
-the demonstrated ordinary Files API read is inside it.
+During the checked-revision Vault merge, revision
+`fef7b9df829c108e73db59da1eb51d0ee9bc4d33460d98a0aaa5f1fee06f63ce`
+reported root's accepted boundary direction and CR2's staged prerequisite
+**7b8c20a74aef1bd37d92eb807e640615bd72974c**, release
+`/root/.local/state/codex-remote/releases/legacy-files-7b8c20a`. That scoped
+backport restricts legacy Files roots and descriptor access while retaining old
+UI/native root/fullAccess. This task did not independently review that patch;
+the note says root review/ALL-idle activation remain. Actual observed old runtime
+is still783b1e3/PID1758426. A staged patch is not a live key boundary.
+
+This worker must finish its current turn so it does not itself prevent ALL-idle
+legacy publication. Root owns the legacy install and must verify its actual live
+canary denial before creating the new key. This task does not restart/replace
+that old gateway. Intentional native root compromise is outside the accepted
+security target; the demonstrated ordinary Files API read is inside it.
 
 Additional activation integration: preview7hosts remain parked by instruction.
 Their active upstream must be explicitly assigned to the new gateway. Workboard's
