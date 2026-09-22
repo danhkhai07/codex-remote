@@ -6,6 +6,7 @@ import { parseEnv } from 'node:util'
 import { APP, BASE, SOURCE, HOURS, MAIN, INFRA, assert, hash, json, fileHash, record, tree, command, inside, writeJson, serviceIdentity } from './common.mjs'
 import { processStart } from './key-state.mjs'
 import { destinationSnapshot } from './destinations.mjs'
+import { renderProxyConfigs } from './proxy-configs.mjs'
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 export function verifyClient(source, inventory) {
   const files = new Set(inventory.map(item => item.path)), html = readFileSync(join(source, 'dist/index.html'), 'utf8')
@@ -86,17 +87,11 @@ export function prepare(output, inventoryPath, kind = 'review-only') {
   for (const name of ['common.mjs', 'runner.mjs', 'production.mjs', 'verify.mjs', 'destinations.mjs', 'publication.mjs', 'lock.mjs', 'key-state.mjs', 'key-cutover.mjs', 'cutover-ops.mjs', 'key-init.mjs', 'cutover-bin/systemctl']) copy(join(checkout, 'scripts/secure-release', name), 'runner/' + name)
   const infraNames = ['admin-active.conf', 'admin-cutover-gated.conf', 'preview-active.conf', 'preview-parked.conf', 'cloudflare-real-ip.conf', 'workboard-isolated.conf', 'workboard-embedding.patch', 'workboard-review.bundle', 'workboard-delivery.json']
   for (const name of infraNames) copy(join(INFRA, name), 'infra/' + name)
-  const admin = readFileSync(join(output, 'infra/admin-active.conf'), 'utf8')
-  const secureLocation = readFileSync(join(source, 'deploy/nginx/secure-api-location.conf'), 'utf8')
-  // The pre-encryption infra draft used GET /preview/... to mint a ticket. Required
-  // mode deliberately rejects that route: send legacy bookmarks to the unlock-gated
-  // Services UI, which obtains a launch ticket through the encrypted API instead.
-  const secureAdmin = admin.replace('return 303 /preview/5180/workboard/;', 'return 303 /services;')
-    .replace('rewrite ^/workboard/(.*)$ /preview/5180/workboard/$1 redirect;', 'return 303 /services;')
-  writeFileSync(join(output, 'infra/admin-active.conf'), secureAdmin.replace('    location = /workboard', secureLocation + '\n    location = /workboard'))
-  // During copy/restart block ALL public admin requests, while loopback readiness remains usable.
-  const cutover = readFileSync(join(output, 'infra/admin-cutover-gated.conf'), 'utf8')
-  writeFileSync(join(output, 'infra/admin-maintenance.conf'), cutover.replace('location / { proxy_pass http://127.0.0.1:5173; }', 'location / { add_header Cache-Control "no-store" always; return 503; }'))
+  const rendered = renderProxyConfigs({ admin: readFileSync(join(output, 'infra/admin-active.conf'), 'utf8'),
+    cutover: readFileSync(join(output, 'infra/admin-cutover-gated.conf'), 'utf8'),
+    preview: readFileSync(join(output, 'infra/preview-active.conf'), 'utf8'),
+    secureLocation: readFileSync(join(source, 'deploy/nginx/secure-api-location.conf'), 'utf8') })
+  for (const [name, bytes] of Object.entries(rendered)) writeFileSync(join(output, 'infra', name), bytes)
   copy('/root/WORKTREES/workboard-isolated-preview/server.py', 'infra/workboard-server.py')
   assert(fileHash(join(output, 'infra/workboard-server.py')) === json(join(INFRA, 'workboard-delivery.json')).candidateServerSha256, 'workboard-bundle-drift')
   const env = parseEnv(readFileSync(join(MAIN, '.env'), 'utf8')) // Values never serialized.
