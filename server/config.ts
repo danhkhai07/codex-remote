@@ -1,3 +1,4 @@
+import { validFileRoot } from './file-policy.js'
 import { validatePreviewOriginTemplate } from './localhost-preview.js'
 import { realpathSync, statSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
@@ -72,6 +73,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RemoteConfig {
   const contextVaultPath = env.CODEX_REMOTE_CONTEXT_VAULT?.trim() || resolve(homedir(), 'VAULTS', 'Codex-Context')
   if (!isAbsolute(contextVaultPath)) throw new Error('CODEX_REMOTE_CONTEXT_VAULT must be absolute')
 
+  const fileRoots = parseWorkspaceRoots(env.CODEX_REMOTE_FILE_ROOTS?.trim() || required(env, 'CODEX_REMOTE_WORKSPACE_ROOTS'))
+  if (fileRoots.some(root => !validFileRoot(root))) throw Error('File roots must be explicit project/data directories, not home/filesystem/system roots')
   return {
     previewOriginTemplate: env.CODEX_REMOTE_PREVIEW_ORIGIN_TEMPLATE?.trim() ? validatePreviewOriginTemplate(env.CODEX_REMOTE_PREVIEW_ORIGIN_TEMPLATE.trim()) : undefined,
     contextVaultPath: resolve(contextVaultPath),
@@ -83,7 +86,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RemoteConfig {
     sessionTtlSeconds: parseTtl(env.CODEX_REMOTE_SESSION_TTL_SECONDS),
     codexBin: env.CODEX_REMOTE_CODEX_BIN?.trim() || 'codex',
     workspaceRoots: parseWorkspaceRoots(required(env, 'CODEX_REMOTE_WORKSPACE_ROOTS')),
-    fileRoots: parseWorkspaceRoots(env.CODEX_REMOTE_FILE_ROOTS?.trim() || required(env, 'CODEX_REMOTE_WORKSPACE_ROOTS')),
+    fileRoots,
     production: env.NODE_ENV === 'production',
   }
 }

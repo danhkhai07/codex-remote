@@ -7,11 +7,15 @@ const env = {
   CODEX_REMOTE_PUBLIC_ORIGIN: 'https://remote.example.test',
   CODEX_REMOTE_WORKSPACE_ROOTS: '/tmp',
 }
-it('defaults file access to workspaces and allows an independent filesystem root', () => {
+it('requires explicit file roots while preserving broad native workspace access and legacy login', () => {
   expect(loadConfig(env).fileRoots).toEqual(['/tmp'])
-  const config = loadConfig({ ...env, CODEX_REMOTE_FILE_ROOTS: '/' })
-  expect(config.fileRoots).toEqual(['/'])
-  expect(config.workspaceRoots).toEqual(['/tmp'])
+  const config = loadConfig({ ...env, CODEX_REMOTE_WORKSPACE_ROOTS: '/root', CODEX_REMOTE_FILE_ROOTS: '/tmp', NODE_ENV: 'production' })
+  expect(config.fileRoots).toEqual(['/tmp'])
+  expect(config.workspaceRoots).toEqual(['/root'])
+  expect(config.password).toBe(env.CODEX_REMOTE_PASSWORD)
+  expect(config.sessionSecret).toBe(env.CODEX_REMOTE_SESSION_SECRET)
+  expect(config).not.toHaveProperty('secureApiRequired')
+  for (const root of ['/', '/root', '/proc', '/etc']) expect(() => loadConfig({ ...env, CODEX_REMOTE_FILE_ROOTS: root })).toThrow('explicit project/data')
   expect(() => loadConfig({ ...env, CODEX_REMOTE_FILE_ROOTS: 'relative' })).toThrow('absolute')
 })
 

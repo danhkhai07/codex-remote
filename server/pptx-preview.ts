@@ -1,10 +1,9 @@
 import { execFile } from 'node:child_process'
-import { constants } from 'node:fs'
-import { chown, mkdtemp, open, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { chown, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { MAX_PPTX_PREVIEW_BYTES, ServerFileError, type ServerFileInfo } from './server-files.js'
+import { MAX_PPTX_PREVIEW_BYTES, openInspectedFile, ServerFileError, type ServerFileInfo } from './server-files.js'
 
 const exec = promisify(execFile)
 const MAX_PDF_BYTES = 32 * 1024 * 1024
@@ -14,7 +13,7 @@ const MAX_PDF_BYTES = 32 * 1024 * 1024
 export async function convertPptx(file: ServerFileInfo): Promise<Buffer> {
   const directory = await mkdtemp(join(tmpdir(), 'codex-pptx-'))
   try {
-    const source = await open(file.path, constants.O_RDONLY | constants.O_NOFOLLOW)
+    const source = await openInspectedFile(file)
     try {
       const metadata = await source.stat()
       if (!metadata.isFile() || metadata.size > MAX_PPTX_PREVIEW_BYTES) throw new ServerFileError(413, 'PPTX quá lớn để xem trước (tối đa 20 MB).')

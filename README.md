@@ -178,10 +178,14 @@ file viewer also has a pin button. Pins persist on the current browser/device;
 ★ removes a pin. Opening a pin uses the usual workspace access checks.
 
 File browsing, previews and downloads use `CODEX_REMOTE_FILE_ROOTS` (comma-separated
-absolute directories). It defaults to `CODEX_REMOTE_WORKSPACE_ROOTS`; setting it
-to `/` enables browsing outside home, including `/tmp`, `/etc` and `/var`. The
-Up button can then reach `/`. Existing authentication and OS file permissions
-still apply. Workspace selection continues to use `CODEX_REMOTE_WORKSPACE_ROOTS`.
+absolute project/data directories). It defaults to `CODEX_REMOTE_WORKSPACE_ROOTS`,
+but broad filesystem/home/system roots are rejected. Secret files, native auth,
+SSH configuration and private Vault state/mailboxes stay denied even inside an
+allowed root. Symlinks and opened file descriptors are checked before reads.
+Existing pins to denied paths show an access error; use the directory path field
+to open an allowed project/data directory. Native workspace selection and
+fullAccess continue to use `CODEX_REMOTE_WORKSPACE_ROOTS` independently. This
+legacy Files backport does not change login, encryption UI or localhost previews.
 
 SVG files (up to the 10 MB text-preview limit) support Preview / Raw modes.
 Preview uses an image element, so embedded scripts do not execute and external
