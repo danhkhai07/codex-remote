@@ -728,9 +728,9 @@ it('returns retained history without clipping active tasks or unresolved errors 
   expect(JSON.parse(readFileSync(path, 'utf8')).tasks).toEqual(state.tasks)
 })
 
-// Independent inverse controls: green reproduces a defect in exact100381e.
+// Independent review controls converted to acceptance as each finding is fixed.
 // No production task/state or native model turn is used.
-it('CR2 inverse: restart forgets unresolved dispatch settlement and permits recovery while accepted native work is active', async () => {
+it('L1: restart retains unresolved dispatch settlement until the exact accepted turn ends', async () => {
   const f = setup(), cap = f.token(), { task } = await f.delegate(cap), start = f.driver.start
   f.threads.get('leader')!.status = { type: 'active' }
   let release!: () => void, entered!: () => void
@@ -742,6 +742,7 @@ it('CR2 inverse: restart forgets unresolved dispatch settlement and permits reco
   }
   await f.orchestra.start(); await ready
   try {
+    expect(JSON.parse(readFileSync(join(f.root, '.state/Orchestration.json'), 'utf8')).tasks[0].dispatchPending).toBe(true)
     await f.orchestra.cancel(task.id) // No turnId yet; cancelled is written durably.
     const command = { action: 'resolve', taskId: task.id, summary: 'Claimed recovery', evidence: 'Fixture only' }
     await expect(f.orchestra.command(cap, command)).rejects.toMatchObject({ status: 409 })
@@ -750,14 +751,107 @@ it('CR2 inverse: restart forgets unresolved dispatch settlement and permits reco
     const recovered = new ConversationOrchestrator(f.vault, f.driver)
     cleanups.push(() => recovered.stop())
     await recovered.start(); await recovered.pump()
-    const checkpoint = recovered.snapshot('leader').tasks[0]
-    expect(checkpoint.status).toBe('cancelled'); expect(checkpoint.turnId).toBeUndefined()
-    // Defect: start() skips this cancelled task and the in-memory Set is empty.
-    expect(recovered.resolveTask('leader', f.vault.groupFor('leader')!.leaderEpoch, task.id, command.summary, command.evidence))
-      .toMatchObject({ duplicate: false, task: { status: 'cancelled', resolution: { summary: command.summary } } })
+    const checkpoint = recovered.snapshot('leader').tasks[0], original = f.threads.get('worker')!.turns![0]
+    expect(checkpoint.status).toBe('cancelled'); expect(checkpoint.turnId).toBe(original.id)
+    expect(checkpoint.dispatchPending).toBe(true)
+    const resolve = () => recovered.resolveTask('leader', f.vault.groupFor('leader')!.leaderEpoch, task.id, command.summary, command.evidence)
+    expect(resolve).toThrow(/settling/)
     expect(f.threads.get('worker')!.turns?.at(-1)?.status).toBe('inProgress')
     expect(f.driver.interrupt).not.toHaveBeenCalled()
+    original.status = 'interrupted'
+    // Another user turn may stay active; settlement concerns only the original turn.
+    f.threads.get('worker')!.turns!.push({ id: 'user-owned', status: 'inProgress', items: [] })
+    await recovered.reconcile()
+    expect(resolve())
+      .toMatchObject({ duplicate: false, task: { status: 'cancelled', resolution: { summary: command.summary } } })
+    expect(resolve()).toMatchObject({ duplicate: true })
+    const settled = recovered.snapshot('leader').tasks[0]
+    expect(settled.result).toBe(checkpoint.result)
+    recovered.completed('worker', original.id, 'completed', 'Late completion must not replace the original cancel or recovery')
+    expect(recovered.snapshot('leader').tasks[0]).toEqual(settled)
+    expect(f.driver.interrupt).not.toHaveBeenCalled()
   } finally { release(); await f.orchestra.pump() }
+})
+
+it.each([true, undefined])('L1: missing or ambiguous native identity remains blocked after restart (marker %s)', async marker => {
+  const f = setup(), { task } = await f.delegate(f.token())
+  f.threads.get('leader')!.status = { type: 'active' }
+  const path = join(f.root, '.state/Orchestration.json'), state = JSON.parse(readFileSync(path, 'utf8'))
+  Object.assign(state.tasks[0], { status: 'cancelled', dispatchPending: marker, result: 'Original cancel' })
+  writeFileSync(path, JSON.stringify(state))
+  const original = { id: 'original', status: 'inProgress', items: [{ type: 'userMessage', content: [{ type: 'text', text: `[Codex Remote · Giao việc từ leader leader]\nTask-ID: ${task.id}\nTask` }] }] }
+  // A quote or a substring in another user's turn is not the original dispatch.
+  const worker = f.threads.get('worker')!
+  worker.turns = [{ id: 'user-owned', status: 'completed', items: [{ type: 'agentMessage', text: `Task-ID: ${task.id}` }] }]
+  const recovered = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => recovered.stop())
+  await recovered.start(); await recovered.pump()
+  const resolve = () => recovered.resolveTask('leader', f.vault.groupFor('leader')!.leaderEpoch, task.id, 'Recovery', 'Exact settlement verified')
+  expect(resolve).toThrow(/settling/)
+  worker.turns.push(original, { ...original, id: 'duplicate-marker' })
+  await recovered.reconcile(); expect(resolve).toThrow(/settling/)
+  worker.turns.pop(); original.status = 'unknown'
+  await recovered.reconcile(); expect(resolve).toThrow(/settling/)
+  original.status = 'inProgress'; await recovered.reconcile(); expect(resolve).toThrow(/settling/)
+  original.status = 'completed'; await recovered.reconcile()
+  expect(resolve()).toMatchObject({ task: { status: 'cancelled', result: 'Original cancel', dispatchPending: false } })
+  expect(resolve()).toMatchObject({ duplicate: true })
+  expect(f.driver.start).not.toHaveBeenCalled(); expect(f.driver.interrupt).not.toHaveBeenCalled()
+})
+
+it('L1: unresolved cancelled dispatch retains one of eight slots and manual control after restart', async () => {
+  const f = setup(), cap = f.token()
+  f.threads.get('leader')!.status = { type: 'active' }
+  for (let i = 0; i < 9; i++) { f.add(`worker-${i}`); await f.delegate(cap, `worker-${i}`, `task-${i}`) }
+  await f.orchestra.start(); await f.orchestra.pump()
+  const first = f.orchestra.snapshot('leader').tasks[0]
+  f.orchestra.userTurn(first.threadId, 'Manual takeover'); f.orchestra.stop()
+  const resumed = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => resumed.stop())
+  await Promise.all([resumed.start(), ...Array.from({ length: 10 }, () => resumed.pump())]); await resumed.pump()
+  expect(f.driver.start).toHaveBeenCalledTimes(8)
+  expect(resumed.snapshot('leader').paused).toContain(first.threadId)
+  expect(resumed.snapshot('leader').tasks.find(task => task.id === first.id)).toMatchObject({ status: 'cancelled', dispatchPending: true })
+  f.threads.get(first.threadId)!.turns![0].status = 'interrupted'
+  await resumed.reconcile(); await resumed.pump()
+  expect(f.driver.start).toHaveBeenCalledTimes(9)
+  expect(resumed.snapshot('leader').tasks.filter(task => task.dispatchPending)).toHaveLength(8)
+  expect(resumed.snapshot('leader').paused).toContain(first.threadId)
+  expect(f.driver.interrupt).not.toHaveBeenCalled()
+})
+
+it('L1: failed compensation preserves cancellation and blocks recovery until exact settlement', async () => {
+  const f = setup(), cap = f.token(), { task } = await f.delegate(cap), start = f.driver.start
+  f.threads.get('leader')!.status = { type: 'active' }
+  let release!: () => void, entered!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve }), ready = new Promise<void>(resolve => { entered = resolve })
+  f.driver.start = async (...args) => { const id = await start(...args); entered(); await gate; return id }
+  vi.mocked(f.driver.interrupt).mockRejectedValueOnce(Error('Uncertain interrupt'))
+  await f.orchestra.start(); await ready
+  f.orchestra.userTurn('worker', 'Preserve my instruction')
+  const cancelled = f.orchestra.snapshot('leader').tasks[0]
+  release(); await f.orchestra.pump()
+  const resolve = () => f.orchestra.resolveTask('leader', f.vault.groupFor('leader')!.leaderEpoch, task.id, 'Recovery', 'Verified evidence')
+  expect(resolve).toThrow(/settling/)
+  expect(f.orchestra.snapshot('leader').tasks[0]).toMatchObject({ status: 'cancelled', result: cancelled.result, dispatchPending: true })
+  expect(f.driver.interrupt).toHaveBeenCalledWith('worker', task.turnId, expect.any(Function))
+  f.finish('worker', task.turnId!, 'Exact completion', 'interrupted')
+  expect(resolve()).toMatchObject({ task: { status: 'cancelled', result: cancelled.result, dispatchPending: false } })
+})
+
+it('L1: late start reply from a stopped instance does not overwrite recovered state or interrupt user work', async () => {
+  const f = setup(), { task } = await f.delegate(f.token()), start = f.driver.start
+  f.threads.get('leader')!.status = { type: 'active' }
+  let release!: () => void, entered!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve }), ready = new Promise<void>(resolve => { entered = resolve })
+  f.driver.start = async (...args) => { const id = await start(...args); entered(); await gate; return id }
+  await f.orchestra.start(); await ready; await f.orchestra.cancel(task.id); f.orchestra.stop()
+  const original = f.threads.get('worker')!.turns![0]; original.status = 'interrupted'
+  const recovered = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => recovered.stop())
+  await recovered.start(); await recovered.pump()
+  recovered.resolveTask('leader', f.vault.groupFor('leader')!.leaderEpoch, task.id, 'Recovered after restart', 'Exact terminal')
+  const path = join(f.root, '.state/Orchestration.json'), before = readFileSync(path, 'utf8')
+  release(); await f.orchestra.pump()
+  expect(readFileSync(path, 'utf8')).toBe(before)
+  expect(f.driver.interrupt).not.toHaveBeenCalled()
 })
 
 it('CR2 inverse: the next completion evicts a recovery just recorded on the oldest retained task', async () => {
