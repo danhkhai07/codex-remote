@@ -272,6 +272,24 @@ try {
       if (shots) await page.screenshot({ path: resolve(shots, 'old-delivered-errors-history-390x600.png') })
       await history.click(); assert.equal(await rows.count(), 8)
       console.log('PASS L3 selector: 205 old delivered errors in history; every fresh/uncertain/native-active task stays current; original errors intact')
+      // Pre-existing excess is preserved by the backend while new admission is blocked.
+      // These mocked routes check accessibility; real pruning/admission is covered by orchestrator tests.
+      tasks.splice(0, tasks.length, ...stale.map((task, i) => ({ ...task, title: `Retained outstanding error ${i}`, resultDelivery: 'review', result: `Unconfirmed report ${i}; original error evidence` })),
+        { ...stale[0], id: 'accepted-failure', title: 'Fresh accepted failure', resultDelivery: 'pending', updatedAt: hoursAgo(0) },
+        { ...stale[0], id: 'accepted-active', title: 'Accepted active work', status: 'running' })
+      loaded = page.waitForResponse(response => response.url().endsWith('/orchestration'))
+      controller.events.publish('codex', { method: 'orchestration/changed', params: {} }); await loaded
+      await page.waitForFunction(() => document.querySelectorAll('.team-tasks > li').length === 207)
+      assert.equal(await history.count(), 0)
+      assert.equal(await rows.filter({ hasText: 'Fresh accepted failure' }).count(), 1)
+      assert.equal(await rows.filter({ hasText: 'Accepted active work' }).count(), 1)
+      const retained = rows.filter({ hasText: /^Retained outstanding error 0/ })
+      assert.equal(await retained.locator('.team-task-status').textContent(), 'Có lỗi')
+      await retained.getByText('Kết quả', { exact: true }).click()
+      assert.equal(await retained.getByText('Unconfirmed report 0; original error evidence', { exact: true }).isVisible(), true)
+      assert.equal(await composer.inputValue(), 'Draft stays while reviewing work'); await layout()
+      if (shots) await page.screenshot({ path: resolve(shots, 'outstanding-overflow-evidence-390x600.png') })
+      console.log('PASS L3 overflow: 205 pre-existing uncertain results remain accessible with original evidence, fresh failure and active work')
       tasks.splice(0, tasks.length, ...saved)
       loaded = page.waitForResponse(response => response.url().endsWith('/orchestration'))
       controller.events.publish('codex', { method: 'orchestration/changed', params: {} }); await loaded

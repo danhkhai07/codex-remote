@@ -1,5 +1,5 @@
-// Read-only artifact provenance for the three bounded Leader review fixes.
-// Run after npm run check through codex-heavy; never copies or publishes a payload.
+// Read-only artifact provenance for the residual lifecycle/retention fixes.
+// Run after focused server checks through codex-heavy, with the unchanged matching client.
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync, lstatSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -9,10 +9,11 @@ import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const reviewed = '/root/WORKTREES/cr-leader-resolution-history-fixes'
 const candidate = '/root/WORKTREES/cr-leader-resolution-history-security'
 const capacity = '/root/WORKTREES/cr-leader-capacity-model-security'
 const security = '/root/.local/state/codex-remote/releases/secure-api-80843c0-review-r6-dc9ee20'
-const base = '790c064da950a46bfb6a6a862d606421f11f0627'
+const base = 'fc40c05b607b99b04d63e812c443d1c309745031'
 const git = (at, ...args) => execFileSync('git', ['-C', at, ...args], { encoding: 'utf8', maxBuffer: 24 * 1024 * 1024 }).trimEnd()
 const hash = path => createHash('sha256').update(readFileSync(path)).digest('hex')
 function files(at, prefix = '', output = {}) {
@@ -24,6 +25,9 @@ function files(at, prefix = '', output = {}) {
   return output
 }
 assert.equal(git(root, 'merge-base', base, 'HEAD'), base)
+assert.equal(git(reviewed, 'rev-parse', 'HEAD'), '3f7e139c25f42943d15bab6bb18f982646228193')
+assert.equal(git(reviewed, 'status', '--porcelain'), '')
+assert.equal(git(root, 'diff', '--name-only', '3f7e139', '--', 'src', 'public', 'vite.config.ts'), '')
 assert.equal(git(candidate, 'rev-parse', 'HEAD'), '100381eaabe7c54a55cc051a03f9a5499f6fe297')
 assert.equal(git(capacity, 'rev-parse', 'HEAD'), 'd07206aeaefc591f7d4ae35a4b858883c154e53d')
 assert.equal(git(candidate, 'status', '--porcelain'), '')
@@ -34,7 +38,7 @@ const delta = before => Object.entries(backend).flatMap(([path, sha256]) => {
   const oldSha256 = hash(join(before, 'dist-server', path))
   return oldSha256 === sha256 ? [] : [{ path: 'dist-server/' + path, oldSha256, sha256 }]
 })
-const incremental = delta(candidate), sinceCapacity = delta(capacity)
+const incremental = delta(reviewed), sinceOriginal = delta(candidate), sinceCapacity = delta(capacity)
 const names = list => list.map(item => item.path.slice(12)).sort()
 assert.deepEqual(names(incremental), ['orchestration.js', 'orchestration.js.map'])
 assert.deepEqual(names(sinceCapacity), ['http-app.js', 'http-app.js.map', ...names(incremental)].sort())
@@ -48,6 +52,10 @@ for (const name of ['controller', 'http-app', 'orchestration']) {
   const source = readFileSync(join(root, 'server', name + '.ts'), 'utf8')
   const emitted = ts.transpileModule(source, { fileName: name + '.ts', compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022, esModuleInterop: true, sourceMap: true } })
   assert.equal(readFileSync(join(root, 'dist-server', name + '.js'), 'utf8'), emitted.outputText, name + ' source mismatch')
+  const actual = JSON.parse(readFileSync(join(root, 'dist-server', name + '.js.map'), 'utf8'))
+  const expected = JSON.parse(emitted.sourceMapText)
+  assert.deepEqual(actual.sources, ['../server/' + name + '.ts'])
+  assert.deepEqual({ ...actual, sources: expected.sources }, expected, name + ' map emission mismatch')
 }
 const hours = { js: backend['work-hours.js'], map: backend['work-hours.js.map'] }
 assert.equal(hours.js, 'b763a0f7b74c0341684e196855e85b3f5e3b123915a373b27463c17916702e93')
@@ -58,6 +66,7 @@ const hoursSources = Object.fromEntries(['server/work-hours.ts', 'working-hours/
 }))
 for (const name of ['package.json', 'package-lock.json']) assert.equal(hash(join(root, name)), hash(join(security, 'dependencies', name)))
 const client = files(join(root, 'dist')), html = readFileSync(join(root, 'dist/index.html'), 'utf8')
+assert.deepEqual(client, files(join(reviewed, 'dist')), 'unchanged matching client differs')
 const entries = [...html.matchAll(/(?:src|href)="(\/assets\/[^"?#]+)"/g)].map(match => match[1].slice(1))
 assert(entries.some(path => /index-.+\.js$/.test(path)))
 const pending = [...entries], seen = new Set(), checkedSources = new Set()
@@ -88,5 +97,5 @@ for (const name of ['src/ConversationTeam.tsx', 'src/teamTaskSelection.ts', 'src
 assert.equal(client['sw.js'], hash(join(root, 'public/sw.js')))
 console.log(JSON.stringify({ head: git(root, 'rev-parse', 'HEAD'), dirty: git(root, 'status', '--porcelain'), base,
   backendCompared: Object.keys(backend).length, sealedSecurityCompared: inventory.groups.backend.length,
-  incremental, sinceCapacity, combined, backend, clientEntries: entries, clientGraph: [...seen].sort(), checkedSources: [...checkedSources].sort(),
-  completeClient: client, hours, hoursSources, unchangedDependencies: true, sourceEmissionMatch: true, noProductionWrites: true }, null, 2))
+  incremental, sinceOriginal, sinceCapacity, combined, backend, clientEntries: entries, clientGraph: [...seen].sort(), checkedSources: [...checkedSources].sort(),
+  completeClient: client, unchangedClient: true, hours, hoursSources, unchangedDependencies: true, sourceEmissionMatch: true, mapEmissionMatch: true, noProductionWrites: true }, null, 2))

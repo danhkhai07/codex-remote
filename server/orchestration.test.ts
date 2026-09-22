@@ -7,7 +7,8 @@ import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { afterEach, expect, it, vi } from 'vitest'
 import { ContextVault, ContextVaultError } from './context-vault.js'
-import { ConversationOrchestrator, MAX_CONCURRENT_WORKERS, type ConversationTask, type OrchestrationDriver } from './orchestration.js'
+import { ConversationOrchestrator, MAX_CONCURRENT_WORKERS, MAX_TASK_REPORTS, type ConversationTask, type OrchestrationDriver } from './orchestration.js'
+import { selectTeamTasks } from '../src/teamTaskSelection.js'
 import { normalizeThreadName } from './controller.js'
 import { listenOrchestration } from './orchestration-socket.js'
 
@@ -861,7 +862,7 @@ it('L2: the next completion retains fresh recovery and evicts the genuinely olde
   const path = join(f.root, '.state/Orchestration.json'), state = JSON.parse(readFileSync(path, 'utf8'))
   const stale = '2026-01-01T00:00:00.000Z'
   // Normal retention layout: 200 terminal entries followed by unfinished work.
-  state.tasks = Array.from({ length: 200 }, (_, i) => ({ ...task, id: `old-${i}`, status: i ? 'completed' : 'failed', updatedAt: stale, result: 'Original retained result' }))
+  state.tasks = Array.from({ length: 200 }, (_, i) => ({ ...task, id: `old-${i}`, status: i ? 'completed' : 'failed', resultDelivery: 'delivered', updatedAt: stale, result: 'Original retained result' }))
   state.tasks.push({ ...task, id: 'busy', status: 'running', turnId: 'pending-finish' })
   writeFileSync(path, JSON.stringify(state))
   const recovered = new ConversationOrchestrator(f.vault, f.driver)
@@ -880,7 +881,7 @@ it('L2: the next completion retains fresh recovery and evicts the genuinely olde
 it('L2: fresh failures and every unfinished record survive bounded saves with stable legacy time fallbacks', async () => {
   const f = setup(), { task } = await f.delegate(f.token())
   const path = join(f.root, '.state/Orchestration.json'), state = JSON.parse(readFileSync(path, 'utf8'))
-  state.tasks = Array.from({ length: 200 }, (_, i) => ({ ...task, id: `old-${i}`, status: 'completed', createdAt: '2025-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }))
+  state.tasks = Array.from({ length: 200 }, (_, i) => ({ ...task, id: `old-${i}`, status: 'completed', resultDelivery: 'delivered', createdAt: '2025-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }))
   state.tasks[0].updatedAt = ''; state.tasks[0].createdAt = 'invalid' // Oldest, stable fallback zero.
   state.tasks[1].updatedAt = 'invalid'; state.tasks[1].createdAt = '2025-01-01T00:00:00Z'
   state.tasks.push({ ...task, id: 'fresh-failure', status: 'running', turnId: 'original', dispatchPending: true })
@@ -1098,7 +1099,7 @@ it('L1 acceptance: a stopped startup read cannot overwrite recovery written by t
   } finally { release(); await pending; timers.mockRestore() }
 })
 
-it.each([199, 205])('CR2 re-review inverse: %i delivered outcomes can evict an older report still needing review', async delivered => {
+it.each([199, 205])('L3 acceptance: older unreported errors outrank %i delivered outcomes through completion/save/restart', async delivered => {
   const f = setup(), { task } = await f.delegate(f.token())
   const path = join(f.root, '.state/Orchestration.json'), state = JSON.parse(readFileSync(path, 'utf8'))
   state.tasks = [{ ...task, id: 'unreported', status: 'failed', result: 'Lost native leader receipt; no recovery',
@@ -1114,10 +1115,17 @@ it.each([199, 205])('CR2 re-review inverse: %i delivered outcomes can evict an o
   restored.completed('worker', 'fresh-turn', 'failed', 'Fresh error')
   const result = restored.snapshot('leader')
   expect(result.tasks).toHaveLength(200)
-  expect(result.tasks.some(item => item.id === 'unreported')).toBe(false)
+  expect(result.tasks.find(item => item.id === 'unreported')).toMatchObject({ status: 'failed', resultDelivery: 'review', result: 'Lost native leader receipt; no recovery' })
+  expect(result.tasks.some(item => item.id === 'delivered-0')).toBe(false)
   expect(result.tasks.find(item => item.id === 'fresh')?.resultDelivery).toBe('pending')
   expect(result.unconfirmedResults).toBe(1)
-  expect(new ConversationOrchestrator(f.vault, f.driver).snapshot('leader').tasks.some(item => item.id === 'unreported')).toBe(false)
+  expect(selectTeamTasks(result.tasks).current.map(item => item.id)).toEqual(expect.arrayContaining(['unreported', 'fresh']))
+  restored.changed()
+  const restarted = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => restarted.stop())
+  f.threads.get('leader')!.status = { type: 'active' }
+  await restarted.start(); await restarted.pump()
+  expect(restarted.snapshot('leader').tasks).toEqual(result.tasks)
+  expect(restarted.snapshot('leader').unconfirmedResults).toBe(1)
 })
 
 it('CR2 re-review control: durable uncertainty exists before the native effect and known rejection safely releases it', async () => {
@@ -1249,4 +1257,106 @@ it('L1: a create reply arriving in a new generation cannot save, rename or finis
   release(); expect(await command).toMatchObject({ status: 409 })
   expect(readFileSync(path, 'utf8')).toBe(before)
   expect(f.driver.rename).not.toHaveBeenCalled(); expect(f.driver.start).not.toHaveBeenCalled()
+})
+
+it.each([MAX_TASK_REPORTS, MAX_TASK_REPORTS + 5])('L3: preserves %i pre-existing outstanding reports and accepted work, but refuses growth', async count => {
+  const f = setup(), { task } = await f.delegate(f.token())
+  f.threads.get('leader')!.status = { type: 'active' }
+  const path = join(f.root, '.state/Orchestration.json'), state = JSON.parse(readFileSync(path, 'utf8'))
+  const deliveries = ['pending', 'sending', 'review', 'unknown', undefined]
+  state.tasks = Array.from({ length: count }, (_, i) => ({ ...task, id: `outstanding-${i}`, status: i % 2 ? 'interrupted' : 'failed',
+    resultDelivery: deliveries[i % deliveries.length], result: `Original evidence ${i}`, updatedAt: '2026-01-01T00:00:00Z',
+    ...(i === 0 ? { resolution: { summary: 'Prior recovery', evidence: 'Prior check', resolvedBy: 'leader', resolvedAt: '2026-02-01T00:00:00Z', leaderEpoch: task.leaderEpoch } } : {}) }))
+  state.tasks.push(...Array.from({ length: 3 }, (_, i) => ({ ...task, id: `delivered-${i}`, status: 'completed', resultDelivery: 'delivered' })))
+  state.tasks.push({ ...task, id: 'accepted', status: 'running', turnId: 'accepted-turn', dispatchPending: true })
+  state.notices = [] // Unknown legacy records still need accessible per-task evidence.
+  writeFileSync(path, JSON.stringify(state))
+  const restored = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => restored.stop())
+  restored.changed()
+  expect(restored.snapshot('leader').tasks).toHaveLength(count + 1)
+  const cap = restored.context('leader', settings, true).match(/--capability ([\w-]+)/)![1]
+  const before = readFileSync(path, 'utf8')
+  for (let i = 0; i < 5; i++) {
+    for (const action of ['spawn', 'delegate']) await expect(restored.command(cap, { action, requestId: `blocked-${action}-${i}`, threadId: 'worker', title: 'Blocked', text: 'Blocked' }))
+      .rejects.toMatchObject({ status: 409, message: expect.stringContaining('Task report capacity reached') })
+  }
+  expect(readFileSync(path, 'utf8')).toBe(before)
+  expect(restored.snapshot('leader').limits.dispatchesLeft).toBe(20)
+  expect(f.driver.create).not.toHaveBeenCalled(); expect(f.driver.rename).not.toHaveBeenCalled(); expect(f.driver.start).not.toHaveBeenCalled()
+  const otherGroup = f.vault.createGroup('Other folder').groups.find(item => item.name === 'Other folder')!
+  f.add('other-leader'); f.vault.assignThread('other-leader', otherGroup.id); f.vault.setLeader(otherGroup.id, 'other-leader')
+  const otherCap = restored.context('other-leader', settings, true).match(/--capability ([\w-]+)/)![1]
+  await expect(restored.command(otherCap, { action: 'spawn', requestId: 'other-folder-blocked', title: 'Blocked', text: 'Blocked' }))
+    .rejects.toMatchObject({ status: 409, message: expect.stringContaining('Task report capacity reached') })
+  expect(restored.snapshot('other-leader').limits.dispatchesLeft).toBe(20)
+  restored.completed('worker', 'accepted-turn', 'failed', 'New failure from already accepted work')
+  const snapshot = restored.snapshot('leader')
+  expect(snapshot.tasks).toHaveLength(count + 1)
+  expect(snapshot.tasks.find(item => item.id === 'accepted')).toMatchObject({ status: 'failed', resultDelivery: 'pending', result: 'New failure from already accepted work' })
+  expect(snapshot.tasks.find(item => item.id === 'outstanding-0')).toMatchObject({ status: 'failed', result: 'Original evidence 0', resolution: state.tasks[0].resolution })
+  expect(selectTeamTasks(snapshot.tasks).current).toHaveLength(count + 1)
+  restored.changed(); restored.stop()
+  const restarted = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => restarted.stop())
+  await restarted.start(); await restarted.pump()
+  expect(restarted.snapshot('leader').tasks).toEqual(snapshot.tasks)
+  const latest = restarted.context('leader', settings, false).match(/--capability ([\w-]+)/)![1]
+  await expect(restarted.command(latest, { action: 'spawn', requestId: 'still-blocked', title: 'Blocked', text: 'Blocked' })).rejects.toMatchObject({ status: 409 })
+  expect(f.driver.create).not.toHaveBeenCalled(); expect(f.driver.start).not.toHaveBeenCalled()
+})
+
+it('L3: concurrent admissions reserve the last report slot before create and retain that reservation through failure/restart', async () => {
+  const f = setup(), { task } = await f.delegate(f.token())
+  f.threads.get('leader')!.status = { type: 'active' }
+  const path = join(f.root, '.state/Orchestration.json'), state = JSON.parse(readFileSync(path, 'utf8'))
+  state.tasks = Array.from({ length: MAX_TASK_REPORTS - 1 }, (_, i) => ({ ...task, id: `review-${i}`, status: 'failed', resultDelivery: 'review', result: `Retained ${i}` }))
+  writeFileSync(path, JSON.stringify(state))
+  const restored = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => restored.stop())
+  const cap = restored.context('leader', settings, true).match(/--capability ([\w-]+)/)![1], create = f.driver.create
+  f.driver.create = async (...args) => {
+    const saved = JSON.parse(readFileSync(path, 'utf8')).tasks
+    expect(saved).toHaveLength(MAX_TASK_REPORTS)
+    expect(saved.at(-1).status).toBe('creating')
+    return create(...args)
+  }
+  const command = (requestId: string) => ({ action: 'spawn', requestId, title: 'Last slot', text: 'Fake native work' })
+  const results = await Promise.allSettled([restored.command(cap, command('first')), restored.command(cap, command('second'))])
+  expect(results.filter(item => item.status === 'fulfilled')).toHaveLength(1)
+  expect(results.find(item => item.status === 'rejected')).toMatchObject({ reason: { status: 409, message: expect.stringContaining('Task report capacity reached') } })
+  expect(create).toHaveBeenCalledTimes(1)
+  expect(restored.snapshot('leader').limits.dispatchesLeft).toBe(19)
+  const accepted = restored.snapshot('leader').tasks.find(item => item.status === 'queued')!
+  await expect(restored.command(cap, command(accepted.requestId))).resolves.toMatchObject({ duplicate: true, task: { id: accepted.id } })
+  await restored.start(); await restored.pump()
+  const running = restored.snapshot('leader').tasks.find(item => item.id === accepted.id)!
+  expect(running.status).toBe('running'); expect(f.driver.start).toHaveBeenCalledTimes(1)
+  restored.completed(running.threadId, running.turnId!, 'failed', 'Accepted work failed')
+  expect(restored.snapshot('leader').tasks).toHaveLength(MAX_TASK_REPORTS)
+  restored.stop()
+  const restarted = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => restarted.stop())
+  await restarted.start(); await restarted.pump()
+  expect(restarted.snapshot('leader').tasks.find(item => item.id === accepted.id)).toMatchObject({ status: 'failed', result: 'Accepted work failed', resultDelivery: 'pending' })
+  const latest = restarted.context('leader', settings, false).match(/--capability ([\w-]+)/)![1]
+  await expect(restarted.command(latest, command('after-restart'))).rejects.toMatchObject({ status: 409 })
+  expect(create).toHaveBeenCalledTimes(1)
+})
+
+it('L3: only a confirmed report delivery frees capacity; recovery alone does not acknowledge it', async () => {
+  const f = setup(), { task } = await f.delegate(f.token())
+  f.threads.get('leader')!.status = { type: 'active' }
+  const path = join(f.root, '.state/Orchestration.json'), state = JSON.parse(readFileSync(path, 'utf8'))
+  state.tasks = Array.from({ length: MAX_TASK_REPORTS }, (_, i) => ({ ...task, id: `review-${i}`, status: 'failed', resultDelivery: i ? 'review' : 'pending', result: `Evidence ${i}` }))
+  state.notices = [{ id: 'actual-report', taskId: 'review-0', groupId: task.groupId, threadId: task.threadId, text: 'Original failure', status: 'pending' }]
+  writeFileSync(path, JSON.stringify(state))
+  const restored = new ConversationOrchestrator(f.vault, f.driver); cleanups.push(() => restored.stop())
+  const cap = restored.context('leader', settings, true).match(/--capability ([\w-]+)/)![1]
+  restored.resolveTask('leader', f.vault.groupFor('leader')!.leaderEpoch, 'review-0', 'Verified recovery', 'Recorded evidence')
+  const command = { action: 'delegate', requestId: 'after-delivery', threadId: 'worker', title: 'New work', text: 'Fake only' }
+  await expect(restored.command(cap, command)).rejects.toMatchObject({ status: 409 })
+  await restored.start(); await restored.pump()
+  f.threads.get('leader')!.status = { type: 'idle' }; await restored.pump()
+  expect(restored.snapshot('leader').tasks.find(item => item.id === 'review-0')).toMatchObject({ status: 'failed', resultDelivery: 'delivered', result: 'Evidence 0', resolution: { summary: 'Verified recovery' } })
+  expect(f.driver.start).toHaveBeenCalledExactlyOnceWith('leader', expect.any(String), settings, expect.any(Function))
+  await expect(restored.command(cap, command)).resolves.toMatchObject({ task: { requestId: 'after-delivery' } })
+  await expect(restored.command(cap, { ...command, requestId: 'over-capacity' })).rejects.toMatchObject({ status: 409 })
+  expect(restored.snapshot('leader').tasks.filter(item => item.resultDelivery !== 'delivered')).toHaveLength(MAX_TASK_REPORTS)
 })

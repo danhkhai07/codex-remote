@@ -157,7 +157,14 @@ the native leader turn accepted the report, not recovery or human acknowledgemen
 does not resolve, acknowledge, archive or delete anything. Recovery summaries stay
 visible; evidence and the original attempt are expandable. History remains bounded
 by the existing server retention (200 inactive tasks plus all unfinished work),
-not an unlimited audit archive. Error reports still use the existing result flow.
+not an unlimited audit archive. Outstanding reports take priority over delivered
+history. Each accepted unfinished task reserves space for its result: new
+spawn/delegate commands fail409 before creation or dispatch when the global total
+of outstanding reports and unfinished tasks reaches200. Delivery, not resolution,
+releases that reservation. Pre-existing excess stays fully accessible; admissions
+remain blocked until capacity is available, so later completions cannot lose old
+unreported evidence. No unknown delivery is automatically acknowledged or replayed.
+Error reports still use the existing result flow and wakeup/notice budgets.
 
 Use the same `requestId` to retry an archive. `status` includes archive receipts:
 100 recent completions are retained; the total is capped at 200 including uncertain
