@@ -1,0 +1,11 @@
+# STAGED ONLY: original Hours timer/cron must remain unchanged.
+[Unit]
+Description=Refresh isolated remote instance Working Hours
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+Unit=codex-remote-secure-hours.service
+
+[Install]
+WantedBy=timers.target

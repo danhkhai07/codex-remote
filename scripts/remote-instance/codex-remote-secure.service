@@ -1,0 +1,22 @@
+# STAGED ONLY: install/start only after the legacy API/key boundary is independently accepted.
+[Unit]
+Description=Codex Remote Secure (independent remote.danhkhai.io.vn instance)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/RUNNING-SERVICES/codex-remote-secure
+Environment=NODE_ENV=production
+Environment=PATH=/root/.codex/packages/standalone/current/bin:/usr/local/bin:/usr/bin:/bin
+ExecStartPre=/usr/local/bin/node --env-file=/root/.local/state/codex-remote-secure/instance.env scripts/remote-instance/prestart.mjs
+ExecStart=/usr/local/bin/node --env-file=/root/.local/state/codex-remote-secure/instance.env dist-server/index.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+LimitCORE=0
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

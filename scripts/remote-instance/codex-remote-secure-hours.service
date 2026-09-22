@@ -1,0 +1,10 @@
+# STAGED ONLY: never operates on the old Working-Hours tree.
+[Unit]
+Description=Generate isolated remote instance Working Hours
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/RUNNING-SERVICES/codex-remote-secure
+ExecStart=/usr/local/bin/codex-heavy --label remote-hours -- python3 -B scripts/remote-instance/hours-update.py --generator working-hours/update.py --native /root/.local/state/codex-remote-secure/native --hours /root/.local/state/codex-remote-secure/hours
+UMask=0077
