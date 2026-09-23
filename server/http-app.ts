@@ -1,3 +1,4 @@
+import { fileAccessMode } from './file-policy.js'
 import { assertRequestLive, bindRequestLifetime, requestLifetime } from './request-lifetime.js'
 import { SECURE_VIEWER_CSP, SECURE_VIEWER_HTML } from './secure-viewer.js'
 import { SecureApi } from './secure-api.js'
@@ -198,6 +199,7 @@ export function createRemoteHttpServer(
   readState = new ReadStateStore(),
   services?: ServicesStore,
 ) {
+  const fileAccess = fileAccessMode(config)
   const fileRoots = [...new Set([...(config.fileRoots ?? config.workspaceRoots), ...(controller.contextVault ? [controller.contextVault.root] : [])])]
   const pptxPreviews = new PptxPreviewCache()
   const loginRateLimiter = new LoginRateLimiter()
@@ -405,18 +407,20 @@ export function createRemoteHttpServer(
       }
       if (url.pathname === '/api/files/roots' && method === 'GET') { json(res, 200, { roots: fileRoots }); return }
       if (url.pathname === '/api/files/list' && method === 'GET') {
-        json(res, 200, await listDirectory(url.searchParams, fileRoots))
+        const listing = await listDirectory(url.searchParams, fileRoots, fileAccess); live()
+        json(res, 200, listing)
         return
       }
       if (url.pathname === '/api/files/info' && method === 'GET') {
-        json(res, 200, await inspectServerFile(url.searchParams.get('path'), fileRoots))
+        const file = await inspectServerFile(url.searchParams.get('path'), fileRoots, fileAccess); live()
+        json(res, 200, file)
         return
       }
       if (url.pathname === '/api/files/html-preview' && method === 'GET') {
-        const file = await inspectServerFile(url.searchParams.get('path'), fileRoots); live()
+        const file = await inspectServerFile(url.searchParams.get('path'), fileRoots, fileAccess); live()
         if (file.kind !== 'text' || !['.html', '.htm'].includes(file.extension)) throw new HttpError(415, 'Use an HTML file for this preview')
         if (!file.previewable) throw new HttpError(413, `HTML preview is limited to ${MAX_TEXT_PREVIEW_BYTES / 1024 / 1024} MB; download the file instead`)
-        const html = await readInspectedFile(file); live()
+        const html = await readInspectedFile(file, MAX_TEXT_PREVIEW_BYTES, live); live()
         res.setHeader('Content-Type', 'text/html; charset=utf-8')
         res.setHeader('Cache-Control', 'private, no-store')
         // Keep scripts interactive without granting the document access to the app origin.
@@ -427,7 +431,7 @@ export function createRemoteHttpServer(
         return
       }
       if (url.pathname === '/api/files/pptx-preview' && method === 'GET') {
-        const file = await inspectServerFile(url.searchParams.get('path'), fileRoots); live()
+        const file = await inspectServerFile(url.searchParams.get('path'), fileRoots, fileAccess); live()
         const pdf = await pptxPreviews.get(file, live)
         res.setHeader('Content-Type', 'application/pdf')
         res.setHeader('Cache-Control', 'private, no-store')
@@ -437,8 +441,8 @@ export function createRemoteHttpServer(
         return
       }
       if (url.pathname === '/api/files/content' && (method === 'GET' || method === 'HEAD')) {
-        const file = await inspectServerFile(url.searchParams.get('path'), fileRoots); live()
-        await serveServerFile(req, res, file, url.searchParams.get('download') === '1')
+        const file = await inspectServerFile(url.searchParams.get('path'), fileRoots, fileAccess); live()
+        await serveServerFile(req, res, file, url.searchParams.get('download') === '1', live)
         return
       }
       if (url.pathname === '/api/attachments' && method === 'POST') {

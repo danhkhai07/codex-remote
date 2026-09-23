@@ -1,3 +1,4 @@
+import { fileAccessMode } from './file-policy.js'
 import { bindRequestLifetime } from './request-lifetime.js'
 import { LoginRateLimiter } from './login-rate-limit.js'
 import { requestIp } from './request-ip.js'
@@ -38,11 +39,11 @@ export class SecureApi {
   #bytes = 0
   #timer: NodeJS.Timeout
   constructor(readonly config: RemoteConfig, readonly sessions: SessionRegistry, readonly roots: string[]) {
-    this.#material = readOwnerKey(config.secureKeyFile!, roots); this.#owner = importOwner(this.#material.key)
+    this.#material = readOwnerKey(config.secureKeyFile!, roots, fileAccessMode(config)); this.#owner = importOwner(this.#material.key)
     this.#timer = setInterval(() => { try { this.#refresh(); this.#prune() } catch { this.closeChannels() } }, 1000); this.#timer.unref()
   }
   #refresh() {
-    const next = readOwnerKey(this.config.secureKeyFile!, this.roots)
+    const next = readOwnerKey(this.config.secureKeyFile!, this.roots, fileAccessMode(this.config))
     if (JSON.stringify(next) !== JSON.stringify(this.#material)) {
       this.closeChannels(); this.#pending.clear()
       if (next.generation === this.#material.generation) throw Error('Rotate key generation too')

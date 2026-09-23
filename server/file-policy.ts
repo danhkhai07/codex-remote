@@ -1,7 +1,16 @@
 import { isAbsolute, resolve, sep } from 'node:path'
 
+export type FileAccess = 'restricted' | 'owner-full'
+/** Full Files requires the owner-proof tunnel, including programmatic configs. */
+export function fileAccessMode(config: { fileAccess?: FileAccess; secureApiRequired?: boolean }): FileAccess {
+  const mode = config.fileAccess ?? 'restricted'
+  if (!['restricted', 'owner-full'].includes(mode)) throw Error('Invalid Files access mode')
+  if (mode === 'owner-full' && !config.secureApiRequired) throw Error('Owner-full Files requires the encrypted owner API')
+  return mode
+}
+
 const systemRoots = ['/etc', '/proc', '/sys', '/dev', '/boot', '/run', '/var/lib', '/var/log', '/usr', '/bin', '/sbin', '/lib', '/lib64']
-const inside = (path: string, root: string) => path === root || path.startsWith(root + sep)
+const inside = (path: string, root: string) => root === sep || path === root || path.startsWith(root + sep)
 const privateDirectories = new Set(['.ssh', '.gnupg', '.aws', '.azure', '.config', '.local', '.codex', '.docker', '.kube', '.state', '.orchestration', '.git'])
 const privateNames = /^(?:\.env(?:\..*)?|\.npmrc|\.netrc|\.pypirc|auth\.json|credentials(?:\..*)?|secrets?(?:\..*)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:\..*)?|authorized_keys|known_hosts|shadow|gshadow)$/i
 export function deniedFilePath(input: string): boolean {
@@ -14,7 +23,8 @@ export function deniedFilePath(input: string): boolean {
 export function validFileRoot(root: string): boolean {
   return isAbsolute(root) && !['/', '/root', '/home', '/var', '/opt'].includes(resolve(root)) && !deniedFilePath(root)
 }
-export function allowedFilePath(input: string, roots: string[]): boolean {
+export function allowedFilePath(input: string, roots: string[], mode: FileAccess = 'restricted'): boolean {
+  if (mode === 'owner-full') return !input.includes('\0') && isAbsolute(input)
   return !input.includes('\0') && isAbsolute(input) && !deniedFilePath(input)
     && roots.some(root => validFileRoot(root) && inside(resolve(input), resolve(root)))
 }

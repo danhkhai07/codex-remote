@@ -1,3 +1,4 @@
+import { fileAccessMode } from '../dist-server/file-policy.js'
 import { SecureTransport } from '../dist-server/secure-client.js'
 import { readOwnerKey } from '../dist-server/secure-key.js'
 import { createSession } from '../dist-server/auth.js'
@@ -13,7 +14,7 @@ export async function maintenanceClient(config, issueSession = createSession) {
   const setup = await transport.setup()
   const required = config.secureApiRequired || setup.required
   if (config.secureApiRequired && !setup.required) throw Error('Required secure API is unavailable; use a matching release')
-  if (required) await transport.unlock(readOwnerKey(config.secureKeyFile, [...(config.fileRoots ?? config.workspaceRoots), ...(config.contextVaultPath ? [config.contextVaultPath] : [])]).key)
+  if (required) await transport.unlock(readOwnerKey(config.secureKeyFile, [...(config.fileRoots ?? config.workspaceRoots), ...(config.contextVaultPath ? [config.contextVaultPath] : [])], fileAccessMode(config)).key)
   return {
     async fetch(path, init = {}) {
       const privateHeaders = new Headers(init.headers)

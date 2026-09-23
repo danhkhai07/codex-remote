@@ -1,3 +1,4 @@
+import { fileAccessMode } from '../dist-server/file-policy.js'
 // Local operator only. Never prints key material. No gateway or model calls.
 import { constants, closeSync, fstatSync, fsyncSync, mkdirSync, openSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { basename, dirname, resolve } from 'node:path'
@@ -8,13 +9,13 @@ const [command, destination] = process.argv.slice(2)
 if (!['init', 'rotate'].includes(command) || !destination) throw Error('Usage: node scripts/secure-key.mjs init|rotate /private/path/owner-key.json')
 const path = resolve(destination), config = loadConfig()
 const roots = [...(config.fileRoots ?? config.workspaceRoots), ...(config.contextVaultPath ? [config.contextVaultPath] : [])]
-assertKeyLocation(path, roots)
-const old = command === 'rotate' ? readOwnerKey(path, roots) : null
+assertKeyLocation(path, roots, fileAccessMode(config))
+const old = command === 'rotate' ? readOwnerKey(path, roots, fileAccessMode(config)) : null
 mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
 const directory = openSync(dirname(path), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
 try {
   const info = fstatSync(directory), anchored = `/proc/self/fd/${directory}`
-  assertKeyLocation(resolve(realpathSync(anchored), basename(path)), roots)
+  assertKeyLocation(resolve(realpathSync(anchored), basename(path)), roots, fileAccessMode(config))
   if ((info.mode & 0o077) !== 0 || info.uid !== process.getuid?.()) throw Error('Key directory requires owner-only permissions')
   const value = { version: 1, app: old?.app ?? randomBytes(18).toString('base64url'), generation: randomBytes(18).toString('base64url'), key: randomBytes(32).toString('base64url') }
   const destination = anchored + '/' + basename(path), target = old ? destination + '.' + randomBytes(12).toString('hex') + '.tmp' : destination
