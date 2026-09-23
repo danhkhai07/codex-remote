@@ -7,7 +7,7 @@ import { WorkHoursStore } from '../dist-server/work-hours.js'
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
 const browser = await chromium.launch({headless: true})
 const root = mkdtempSync('/tmp/hours-pause-browser-')
-const dashboardPath = '/root/VAULTS/Flint-Software/Working-Hours/index.html'
+const dashboardPath = '/root/.local/state/codex-remote-secure/hours/index.html'
 const shots = process.env.HOURS_SCREENSHOTS
 if (shots) mkdirSync(shots, {recursive: true})
 try {
@@ -39,6 +39,7 @@ try {
     }
     return json(store.read())
    }
+   if (['/api/files/html-preview', '/api/files/content', '/api/files/info'].includes(path)) assert.equal(url.searchParams.get('path'), dashboardPath, 'Only the NEW configured dashboard may be served')
    if (path === '/api/files/html-preview' || path === '/api/files/content') return route.fulfill({contentType: 'text/html', body: html})
    if (path === '/api/files/roots') return json({roots: ['/tmp']})
    if (path === '/api/files/list') return json({path: '/tmp', parentPath: null, total: 1, offset: 0, limit: 100, entries: [{name: 'index.html', path: dashboardPath, kind: 'file', symlink: false, size: html.length, modifiedAt: new Date(now).toISOString()}]})
