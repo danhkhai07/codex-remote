@@ -13,6 +13,7 @@ import { settingsForModel, useConversationSettings } from './useConversationSett
 import { useThreadState } from './useThreadState'
 import { useUnreadMessages } from './useUnreadMessages'
 import { RenameConversation } from './RenameConversation'
+import { dismissActionMenus } from './ActionMenu'
 import { ConversationActions } from './ConversationActions'
 import { ConversationFolders } from './ConversationFolders'
 import { ConversationTeam } from './ConversationTeam'
@@ -195,6 +196,7 @@ function ThreadSidebar({
 
   useEffect(() => {
     actionsRef.current?.removeAttribute('open')
+    dismissActionMenus()
   }, [open, selectedId])
 
   useEffect(() => {
