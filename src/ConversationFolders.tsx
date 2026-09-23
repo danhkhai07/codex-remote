@@ -1,3 +1,4 @@
+import { ActionMenu } from './ActionMenu'
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { groupConversations, type ConversationGroup, type GroupSnapshot } from './conversationGroups'
 import { threadTitle } from './model'
@@ -23,36 +24,12 @@ function FolderActions({ group, disabled, createDisabled, onCreate, onContext, o
   onContext: () => void
   onEdit: (kind: 'rename' | 'delete') => void
 }) {
-  const id = useId()
-  const panel = useRef<HTMLDivElement>(null)
-  const [open, setOpen] = useState(false)
-  const [position, setPosition] = useState({ top: 0, left: 0 })
-  useEffect(() => {
-    if (!open) return
-    const close = () => panel.current?.hidePopover()
-    window.addEventListener('resize', close)
-    document.addEventListener('scroll', close, true)
-    return () => {
-      window.removeEventListener('resize', close)
-      document.removeEventListener('scroll', close, true)
-    }
-  }, [open])
-  const choose = (action: () => void) => { panel.current?.hidePopover(); action() }
-  return <>
-    <button type="button" className="thread-actions-button" popoverTarget={id}
-      aria-label={`Folder actions for ${group.name}`} title="Folder actions" onClick={event => {
-        const rect = event.currentTarget.getBoundingClientRect()
-        setPosition({ left: Math.max(8, Math.min(rect.right - 208, window.innerWidth - 216)),
-          top: rect.bottom + 194 <= window.innerHeight ? rect.bottom + 4 : Math.max(8, rect.top - 194) })
-      }}>⋯</button>
-    <div id={id} ref={panel} popover="auto" role="group" aria-label={`Folder actions for ${group.name}`}
-      className="thread-actions-popover folder-actions-popover" style={position} onToggle={event => setOpen(event.newState === 'open')}>
+  return <ActionMenu label={`Folder actions for ${group.name}`} title="Folder actions" className="folder-actions-popover">{choose => <>
       <button type="button" disabled={disabled || createDisabled} onClick={() => choose(onCreate)}>New conversation here</button>
       <button type="button" title={group.contextPath} onClick={() => choose(onContext)}>Open folder context</button>
       <button type="button" disabled={disabled} onClick={() => choose(() => onEdit('rename'))}>Rename folder</button>
       <button type="button" disabled={disabled} onClick={() => choose(() => onEdit('delete'))}>Delete folder</button>
-    </div>
-  </>
+  </>}</ActionMenu>
 }
 
 function FolderDialog({ state, snapshot, operations, disabled, onClose }: {

@@ -561,6 +561,11 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
 .thread-actions-button:hover { color: var(--text); background: var(--panel-raised); }
 .thread-actions-popover {
   position: fixed;
+  z-index: 110;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   inset: auto;
   margin: 0;
   width: 176px;
@@ -3046,3 +3051,6 @@ html.browser-scroll-locked, html.browser-scroll-locked body { overflow: hidden; 
 .plan-implementation { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 8px 0; }
 
 .secure-lock-button { position: fixed; right: 12px; bottom: 12px; z-index: 80; background: var(--panel, #fff); box-shadow: 0 2px 10px #0002; }
+
+/* Explicitly hide closed details content in WebKit as well as other engines. */
+.sidebar-actions:not([open]) > .sidebar-actions-popover { display: none; }
