@@ -167,6 +167,14 @@ export function FileViewer({ reference, onClose, onOpenFile, onOpenLink }: {
   const [text, setText] = useState<string | null>(null)
   const [docxBlob, setDocxBlob] = useState<Blob | null>(null)
   const [error, setError] = useState('')
+  // Only authenticated metadata supplies a filename. Cleanup also runs when
+  // SecureGate locks/unmounts the viewer, so private names do not linger.
+  useEffect(() => {
+    const previous = document.title
+    const title = info && !error ? `${info.name} · Codex Remote` : 'Files · Codex Remote'
+    document.title = title
+    return () => { if (document.title === title) document.title = previous }
+  }, [info, error])
   const [retryable, setRetryable] = useState(false)
   const [metadataOpen, setMetadataOpen] = useScreenState(`file:${reference.path}:metadata`, false)
   const [shareFile, setShareFile] = useState<File | null>(null)
