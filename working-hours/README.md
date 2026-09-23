@@ -46,10 +46,13 @@ Run it through `codex-heavy`. It covers the actual built `/working-hours` and
 FileViewer bridges at desktop, 390 px and 320 px, including pending/double-click,
 failed saves, conflicts/reload, and pause of a running manual timer.
 
-The compact `Hôm nay` total is presentation-only. It reads the same merged daily
-row as the cards and timer, remains visible while another date or chart range is
-selected, and follows the Asia/Ho_Chi_Minh day boundary. A running timer updates
-it from the existing split totals; pause freezes it and resume never backfills.
+User correction (2026-09-23): the requested today total belongs in the existing
+Daily activity chart, not a header chip. The chip design is superseded/removed.
+Chart ranges 7/30 include today, with today's duration in its existing axis label.
+All history includes today even when zero or unknown; unknown is never coerced
+to zero. Previous calendar month remains strictly historical. Average cards and
+recent completed-day tables still exclude today. Chart values use the same shared
+totals/timer and +07 midnight refresh; no accounting changes or sticky overlay.
 
 Rollback limitation: old continuous code does not understand pause/epoch state.
 Once a user has paused or resumed, never restore the old backend/generator or an
