@@ -33,7 +33,8 @@ HTML remains sandboxed. Download uses the existing encrypted stream/save flow.
 
 ## Validation commands — NOT recorded as passed
 
-Run from this worktree, with no production credentials inherited. All checks
+Run from this worktree, with the accepted dependency installation linked as
+node_modules and no production credentials inherited. All checks
 remain serialized and use one worker via codex-heavy:
 
 ```sh
@@ -125,5 +126,7 @@ NEW encrypted knowledge CLI failed `connect EPERM 127.0.0.1:5174`.
 `systemctl show` failed `Failed to connect to bus: Operation not permitted`.
 No permission bypass attempted. Full tests/build/browser have **not run**; no
 release payload/seal, arm/restart, live file smoke, Services or Vault write.
-Only source, fixtures and this exact rollout contract are prepared. The current
+Git push is also blocked: `Could not resolve hostname github.com: Temporary
+failure in name resolution`. Only source, fixtures and this exact rollout
+contract are prepared. The current
 native receipt reports `gpt-6-astra` / `xhigh`; do not label it max.
