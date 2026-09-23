@@ -1,3 +1,4 @@
+import { fileViewerReference, fileViewerUrl, regularLinkClick } from './fileViewerLink'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -6,6 +7,8 @@ export type WebLinkReference = { url: string; label?: string }
 
 export function parseLocalFileReference(href: string | undefined): LocalFileReference | null {
   if (!href) return null
+  const viewer = fileViewerReference(href)
+  if (viewer) return viewer
   let value: string
   try {
     if (href.startsWith('file://')) {
@@ -77,13 +80,14 @@ export function MarkdownMessage({ children, streaming = false, onOpenFile, onOpe
             const label = typeof linkChildren === 'string' ? linkChildren : undefined
             return (
               <a
-                href={href}
+                href={localFile ? fileViewerUrl(localFile) : href}
                 title={title}
                 target={external ? '_blank' : undefined}
                 rel={external ? 'noreferrer' : undefined}
                 data-local-file={localFile ? 'true' : undefined}
                 onClick={localFile && onOpenFile
                   ? (event) => {
+                    if (!regularLinkClick(event)) return
                     event.preventDefault()
                     onOpenFile(localFile)
                   }

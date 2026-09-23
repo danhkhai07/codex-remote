@@ -1,3 +1,4 @@
+import { fileViewerUrl, regularLinkClick } from './fileViewerLink'
 import { SecureHtml, SecureMedia, downloadSecureFile } from './SecureFiles'
 import { secureRequired } from './secureApi'
 import { attachWorkTimerStorage, WORK_TIMER_PATH } from './workTimerStorage'
@@ -127,12 +128,13 @@ function MarkdownPreview({ text, currentPath, onOpenFile, onOpenLink }: {
           const localFile = resolveMarkdownFileReference(href, currentPath)
           const external = Boolean(href?.startsWith('https://') || href?.startsWith('http://'))
           return <a
-            href={href}
+            href={localFile ? fileViewerUrl(localFile) : href}
             title={title}
             target={external ? '_blank' : undefined}
             rel={external ? 'noreferrer' : undefined}
             onClick={localFile && onOpenFile
               ? event => {
+                if (!regularLinkClick(event)) return
                 event.preventDefault()
                 onOpenFile(localFile)
               }
@@ -309,6 +311,7 @@ export function FileViewer({ reference, onClose, onOpenFile, onOpenLink }: {
         </button>
         <div className="file-viewer-actions">
           {info && <button type="button" className="file-pin-button" aria-label={pinned ? 'Bỏ ghim file' : 'Ghim file'} aria-pressed={pinned} onClick={() => togglePin({ path: info.path, kind: 'file' })}>{pinned ? '★' : '☆'}</button>}
+          {secureRequired() && info && <a className="quiet-button" href={fileViewerUrl(reference)} target="_blank" rel="noopener noreferrer">Open</a>}
           {!secureRequired() && info?.previewable && !svg && !['docx', 'pptx'].includes(info.kind) && <a className="quiet-button" href={html ? htmlPreviewUrl : previewUrl} target="_blank" rel="noreferrer">Open</a>}
           {info && <button className="primary-button" type="button" onClick={saveFile} disabled={nativeShare && sharePreparing}>
             {nativeShare ? (sharePreparing ? 'Preparing…' : 'Save / Share') : 'Download'}
@@ -317,6 +320,7 @@ export function FileViewer({ reference, onClose, onOpenFile, onOpenLink }: {
         </div>
       </header>
       <div className="file-viewer-information">
+        {saveError && <p className="file-viewer-save-error" role="alert">{saveError}</p>}
         {storageError && <p role="status">Không lưu được danh sách ghim trên trình duyệt. Các thay đổi chỉ giữ trong phiên này.</p>}
         <div className="file-viewer-meta">
           {info ? <><span>{formatFileSize(info.size)}</span><span>{formatFileType(info)}</span></> : <span>Loading file…</span>}
@@ -371,9 +375,8 @@ export function FileViewer({ reference, onClose, onOpenFile, onOpenLink }: {
             <button className="primary-button" type="button" onClick={saveFile} disabled={nativeShare && sharePreparing}>
               {nativeShare ? (sharePreparing ? 'Preparing file…' : 'Save / Share') : `Download ${info.name}`}
             </button>
-            <a className="quiet-button" href={secureRequired() ? undefined : downloadUrl} onClick={event => { if (secureRequired()) { event.preventDefault(); saveFile() } }} target="_blank" rel="noreferrer">Open copy</a>
+            <a className="quiet-button" href={secureRequired() ? fileViewerUrl(reference) : downloadUrl} target="_blank" rel="noreferrer">Open copy</a>
           </div>
-          {saveError && <p className="file-viewer-save-error" role="alert">{saveError}</p>}
         </div>}
       </div>
     </section>

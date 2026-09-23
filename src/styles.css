@@ -2838,6 +2838,24 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
     display: none;
   }
 
+  .file-viewer-header:has(> .file-viewer-identity) {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .file-viewer-header > .file-viewer-identity {
+    flex-basis: 100%;
+  }
+
+  .file-viewer-header > .file-viewer-identity + .file-viewer-actions {
+    margin-left: auto;
+  }
+
+  /* Keep the authenticated Open link available on narrow screens. */
+  .file-viewer-actions a.quiet-button {
+    display: inline-flex;
+  }
+
   .file-viewer-actions a {
     min-height: 42px;
     padding-inline: 11px;
