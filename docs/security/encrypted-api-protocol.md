@@ -102,7 +102,11 @@ uses the pause-aware 783b1e3 source and matching generator/template. Its parent-
 get/start/stop/pause/resume/replace-totals adapter uses secure transport. Preserve
 the new approved runtime hash below; do not reinstall the superseded estimator.
 Maintenance knowledge/services/restart watcher use the same authenticated protocol
-adapter, no localhost exception. Push payloads are generic, not chat excerpts.
+adapter, no localhost exception. Push payloads contain only approved bounded
+group/conversation names, role at completion, outcome and the thread ID, never
+chat excerpts. Notification clicks carry an ID through the URL fragment or a
+same-origin service-worker message; the owner gate and encrypted thread API
+remain mandatory. Legacy pending deliveries retain a generic fallback.
 
 ## Validation and release
 

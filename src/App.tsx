@@ -2,6 +2,7 @@ import { secureRequired, secureIntent } from './secureApi'
 import { SecureEvents } from './secureEvents'
 import { QuestionRequest } from './QuestionRequest'
 import { PendingRequests } from './pendingRequests'
+import { consumeNotificationTarget, pendingNotificationTarget, subscribeNotificationTarget } from './notificationNavigation'
 import { useCollaborationMode, type CollaborationMode } from './useCollaborationMode'
 import { LocalhostPreview } from './LocalhostPreview'
 import { EMPTY_NEW_CONVERSATION, NEW_CONVERSATION_KEY, prepareNewConversation, type NewConversation } from './newConversation'
@@ -570,6 +571,8 @@ export function App() {
   const [authLoading, setAuthLoading] = useState(true)
   const [threads, setThreads] = useState<Thread[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [notificationTarget, setNotificationTarget] = useState(pendingNotificationTarget)
+  useEffect(() => subscribeNotificationTarget(setNotificationTarget), [])
   const [newConversation, setNewConversation] = useScreenState<NewConversation>('new-conversation', EMPTY_NEW_CONVERSATION)
   const [draftOpen, setDraftOpen] = useScreenState('new-conversation-open', false)
   const draftOpenRef = useRef(draftOpen)
@@ -936,13 +939,43 @@ export function App() {
         setPending(pendingRequests.current.snapshot(pendingResponse))
         setModels(modelResponse.data)
         const preferred = items.find((item) => item.id === cached?.selectedId) ?? items[0]
-        if (!draftOpenRef.current && preferred && (!selectedRef.current || selectedRef.current === cached?.selectedId)) await openThread(preferred, session.csrf, preferred.id === cached?.selectedId)
+        if (!pendingNotificationTarget() && !draftOpenRef.current && preferred && (!selectedRef.current || selectedRef.current === cached?.selectedId)) await openThread(preferred, session.csrf, preferred.id === cached?.selectedId)
       } catch (requestError) {
         if (!cancelled && !cached) setError(errorMessage(requestError))
       }
     })()
     return () => { cancelled = true }
   }, [session, refreshThreads, openThread, setThreadTurn, migrateLegacy])
+
+  useEffect(() => {
+    if (!notificationTarget || !session?.csrf || !cacheReady || !online) return
+    let cancelled = false
+    const epoch = sessionEpoch.current
+    const target = notificationTarget
+    const selection = openSequence.current
+    void (async () => {
+      try {
+        // Read through the existing encrypted API before changing the view.
+        // IDs older than the first thread-list page can still be opened.
+        const { thread: destination } = await api.thread(target.threadId)
+        if (cancelled || epoch !== sessionEpoch.current) return
+        if (selection !== openSequence.current) { consumeNotificationTarget(target); return }
+        if (destination.id !== target.threadId || (destination as Thread & { archived?: boolean }).archived) throw new Error('Unavailable notification target')
+        setLeaderViewId(null)
+        setFileViewer(null)
+        setFileBrowserPath(null)
+        setBrowserTargets(current => ({ ...current, [target.threadId]: null }))
+        if (selectedRef.current !== target.threadId || draftOpenRef.current) await openThread(destination)
+        if (!cancelled && epoch === sessionEpoch.current) consumeNotificationTarget(target)
+      } catch {
+        if (!cancelled && epoch === sessionEpoch.current) {
+          setError('Cuộc hội thoại trong thông báo không còn khả dụng. Bạn có thể chọn cuộc hội thoại khác.')
+          consumeNotificationTarget(target)
+        }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [notificationTarget, session?.csrf, cacheReady, online, openThread])
 
   useEffect(() => {
     if (!session || !cacheReady || !historyReady || (thread && thread.id !== selectedId)) return

@@ -231,11 +231,21 @@ allowed, loaded thread completes, even with no browser event stream connected.
 While enabled, a visible app sends a short-lived per-device heartbeat so the
 gateway does not send that subscription a completion push. The service worker
 also suppresses an accepted push when any local Codex Remote window is visible
-or focused. Otherwise it displays the first non-empty line of the final agent
-message, capped at 180 characters, with a generic completion fallback;
-tapping it focuses the app without reloading an existing draft. This preview
-passes through the browser's push provider. The gateway must remain running, and
-the device must eventually have network access.
+or focused. Otherwise it displays the group and conversation names, with a
+**Leader** label only when that conversation is the group's leader at completion.
+Names are bounded (60/80 characters), and failed/interrupted turns are identified.
+Ungrouped/unnamed conversations have explicit fallbacks. No answer excerpt or
+transcript is sent. The approved names, role and thread ID travel in the encrypted
+Web Push payload; the operating system may display those names on the lock screen.
+Retries retain a single completion's metadata snapshot rather than mixing later
+renames or role changes with an older completion.
+
+Tapping opens the matching conversation through the normal authenticated API.
+An existing app routes in place, preserving per-conversation drafts and running
+turns. A locked app keeps only the target ID in its URL fragment until unlock.
+Files/Hours editors are left open; older app clients that cannot acknowledge the
+route open a new app window. Missing targets show a recoverable error. The gateway
+must remain running, and the device must eventually have network access.
 
 Subscriptions, stable VAPID keys, recent completion IDs and pending deliveries
 are stored in `.remote-push.json` with owner-only permissions.

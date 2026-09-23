@@ -10,6 +10,7 @@ import { jsonBytes, limitConversation, MAX_CONVERSATION_BYTES } from './conversa
 import { ConversationOrchestrator, type TurnSettings } from './orchestration.js'
 import { listenOrchestration } from './orchestration-socket.js'
 import type { Server } from 'node:http'
+import type { CompletionContext } from './push.js'
 
 type PendingRequest = {
   key: string
@@ -64,7 +65,7 @@ export class RemoteController {
   readonly orchestration?: ConversationOrchestrator
   #orchestrationSocket?: Server
   onReplyCompleted?: (threadId: string, ids: string[]) => void
-  onTurnCompleted?: (threadId: string, turnId: string, answer: string) => void
+  onTurnCompleted?: (threadId: string, turnId: string, answer: string, context: CompletionContext) => void
 
   constructor(config: RemoteConfig, appServer = new CodexAppServer(config.codexBin), readonly contextVault?: ContextVault) {
     this.#config = config
@@ -91,6 +92,12 @@ export class RemoteController {
 
     appServer.on('message', (message: AppServerMessage) => this.events.publish('codex', message))
     appServer.on('notification', (message: AppServerMessage) => {
+      if (message.method === 'thread/name/updated') {
+        const params = asObject(message.params), cached = this.#loadedThreads.get(String(params.threadId))
+        if (cached && (typeof params.threadName === 'string' || params.threadName === null)) {
+          this.#loadedThreads.set(String(params.threadId), { ...cached, name: params.threadName })
+        }
+      }
       this.#captureAgentMessage(message)
       this.#exportContextEvent(message)
       if (message.method === 'serverRequest/resolved') this.#resolvePendingFromNotification(message.params)
@@ -117,7 +124,13 @@ export class RemoteController {
           const answer = this.#completedAnswer(params.threadId, turn.id, turn)
           this.orchestration?.completed(params.threadId, turn.id, String(turn.status ?? 'completed'), answer)
           if (this.#loadedThreads.has(params.threadId)) {
-            try { this.onTurnCompleted?.(params.threadId, turn.id, answer) }
+            try {
+              const group = this.contextVault?.groupFor(params.threadId)
+              this.onTurnCompleted?.(params.threadId, turn.id, answer, {
+                threadName: this.#loadedThreads.get(params.threadId)?.name,
+                groupName: group?.name, isLeader: group?.leaderThreadId === params.threadId, outcome: turn.status,
+              })
+            }
             catch { console.error('Unable to queue completion notification') }
           }
         }

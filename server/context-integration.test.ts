@@ -120,3 +120,35 @@ it('shares folder state between authenticated sessions, protects mutations, and 
   expect((await removed.json()).assignments).toEqual({})
   expect(readFileSync(group.contextPath, 'utf8')).toBe('Preserve decisions')
 })
+
+it('captures current folder, explicit name and current leader at completion without transcript previews', async () => {
+  const { vault, controller, app } = setup()
+  const first = vault.createGroup('Group A').groups[0]
+  await controller.createThread('0', false, first.id)
+  await controller.renameThread('new-chat', 'Named leader')
+  vault.setLeader(first.id, 'new-chat')
+  controller.onTurnCompleted = vi.fn()
+  const complete = (turnId: string) => app.emit('notification', { method: 'turn/completed', params: {
+    threadId: 'new-chat', turn: { id: turnId, status: 'completed', items: [{ type: 'agentMessage', text: 'PRIVATE ANSWER' }] },
+  } })
+  complete('leader-turn')
+  expect(controller.onTurnCompleted).toHaveBeenLastCalledWith('new-chat', 'leader-turn', 'PRIVATE ANSWER', {
+    threadName: 'Named leader', groupName: 'Group A', isLeader: true, outcome: 'completed',
+  })
+  vault.setLeader(first.id, null)
+  app.emit('notification', { method: 'thread/name/updated', params: { threadId: 'new-chat', threadName: 'Renamed worker' } })
+  complete('worker-turn')
+  expect(controller.onTurnCompleted).toHaveBeenLastCalledWith('new-chat', 'worker-turn', 'PRIVATE ANSWER', {
+    threadName: 'Renamed worker', groupName: 'Group A', isLeader: false, outcome: 'completed',
+  })
+  vault.assignThread('new-chat', null)
+  app.emit('notification', { method: 'thread/name/updated', params: { threadId: 'new-chat', threadName: null } })
+  complete('solo-turn')
+  expect(controller.onTurnCompleted).toHaveBeenLastCalledWith('new-chat', 'solo-turn', 'PRIVATE ANSWER', {
+    threadName: null, groupName: undefined, isLeader: false, outcome: 'completed',
+  })
+  await controller.archiveThread('new-chat')
+  const calls = vi.mocked(controller.onTurnCompleted!).mock.calls.length
+  complete('archived-turn')
+  expect(controller.onTurnCompleted).toHaveBeenCalledTimes(calls)
+})

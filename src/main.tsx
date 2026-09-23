@@ -10,12 +10,17 @@ import { AppRecovery } from './AppRecovery'
 import { flushScreenState } from './screenState'
 import { installPwaZoomLock } from './pwaZoom'
 import { installControllerReload } from './pwaController'
+import { installNotificationNavigation } from './notificationNavigation'
 import './styles.css'
 
 const KnowledgePage = lazy(() => import('./KnowledgePage').then(module => ({ default: module.KnowledgePage })))
 const isKnowledgePath = (path: string) => path === '/knowledge' || path === '/knowledge/'
 
 const removeZoomLock = installPwaZoomLock()
+// Listen outside SecureGate so a tap survives locking/unlocking without API
+// access or storing a key. Existing clients route without reloading drafts.
+const removeNotificationNavigation = installNotificationNavigation()
+if (import.meta.hot) import.meta.hot.dispose(removeNotificationNavigation)
 if (import.meta.hot) import.meta.hot.dispose(removeZoomLock)
 
 createRoot(document.getElementById('root')!).render(

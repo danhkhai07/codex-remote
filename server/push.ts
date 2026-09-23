@@ -4,13 +4,25 @@ import webpush, { type PushSubscription } from 'web-push'
 
 type Owner = { nonce: string; expiresAt: number }
 type Device = { subscription: PushSubscription; owner: Owner; visibleUntil?: number }
-type Delivery = { endpoint: string; nonce: string; tag: string; body?: string; attempts: number; nextAt: number }
+export type CompletionContext = { threadName?: unknown; groupName?: unknown; isLeader?: boolean; outcome?: unknown }
+type NotificationContext = { threadId: string; threadName: string; groupName: string; isLeader: boolean; outcome: string }
+type Delivery = { endpoint: string; nonce: string; tag: string; notification?: NotificationContext; attempts: number; nextAt: number }
 type State = { fingerprint: string; keys: { publicKey: string; privateKey: string }; devices: Device[]; deliveries: Delivery[]; seen: string[] }
 const hash = (text: string) => createHash('sha256').update(text).digest('base64url')
 const DEFAULT_BODY = 'Your Codex turn is complete.'
 const FOREGROUND_TTL_MS = 40_000
 
 export function notificationBody(_answer: unknown): string { return DEFAULT_BODY }
+
+export function notificationContext(threadId: unknown, context?: CompletionContext): NotificationContext | undefined {
+  if (typeof threadId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(threadId)) return undefined
+  const label = (value: unknown, limit: number) => typeof value === 'string'
+    ? [...value.replace(/[\p{Cc}\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, ' ').replace(/\s+/g, ' ').trim()].slice(0, limit).join('') : ''
+  const groupName = label(context?.groupName, 60)
+  return { threadId, threadName: label(context?.threadName, 80), groupName,
+    isLeader: Boolean(groupName && context?.isLeader === true),
+    outcome: context?.outcome === 'failed' || context?.outcome === 'interrupted' ? context.outcome : 'completed' }
+}
 
 export function validateSubscription(value: unknown): PushSubscription {
   const input = value as PushSubscription | undefined
@@ -97,9 +109,10 @@ export class PushService {
     this.#prune()
     this.#save()
   }
-  completed(threadId: string, turnId: string, answer: unknown = '') {
+  completed(threadId: string, turnId: string, context?: CompletionContext) {
     const tag = hash(`${threadId}:${turnId}`).slice(0, 32)
-    const body = notificationBody(answer)
+    // Snapshot only approved metadata at completion, never a transcript/preview.
+    const notification = notificationContext(threadId, context)
     if (this.#state.seen.includes(tag)) return
     this.#prune()
     this.#state.seen = [...this.#state.seen, tag].slice(-1000)
@@ -107,7 +120,7 @@ export class PushService {
       if (this.#visible(device)) continue
       // Coalesce a device's outstanding alerts into its latest completion.
       this.#state.deliveries = this.#state.deliveries.filter(job => job.endpoint !== device.subscription.endpoint)
-      this.#state.deliveries.push({ endpoint: device.subscription.endpoint, nonce: device.owner.nonce, tag, body, attempts: 0, nextAt: Date.now() })
+      this.#state.deliveries.push({ endpoint: device.subscription.endpoint, nonce: device.owner.nonce, tag, notification, attempts: 0, nextAt: Date.now() })
     }
     this.#save()
     this.start()
@@ -133,7 +146,9 @@ export class PushService {
           continue
         }
         try {
-          await this.send(device.subscription, JSON.stringify({ tag: job.tag, body: notificationBody(job.body) }), {
+          // Validate again after disk restore; old deliveries remain generic.
+          const notification = notificationContext(job.notification?.threadId, job.notification)
+          await this.send(device.subscription, JSON.stringify({ tag: job.tag, body: DEFAULT_BODY, ...(notification ? { notification } : {}) }), {
             vapidDetails: { subject: this.subject, ...this.#state.keys }, timeout: 10000,
             TTL: Math.max(0, Math.min(3600, device.owner.expiresAt - Math.floor(Date.now() / 1000))), urgency: 'high', topic: job.tag,
           })

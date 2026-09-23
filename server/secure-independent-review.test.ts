@@ -275,7 +275,9 @@ it.each(['logout', 'lock'] as const)('R3 accepted RPC bookkeeping and background
  expect(calls.filter(method => method === 'turn/start')).toHaveLength(1)
  expect(calls).not.toContain('turn/interrupt')
  f.appServer.emit('notification', { method: 'turn/completed', params: { threadId: 'worker', turn: { id: 'ACCEPTED-FAKE-TURN', status: 'completed', items: [] } } })
- expect(completed).toHaveBeenCalledWith('worker', 'ACCEPTED-FAKE-TURN', '')
+ expect(completed).toHaveBeenCalledWith('worker', 'ACCEPTED-FAKE-TURN', '', {
+  threadName: undefined, groupName: undefined, isLeader: false, outcome: 'completed',
+ })
  // An independent scheduler/native intent has no HTTP lifetime argument. It
  // can continue after the browser lifetime closes, including fullAccess.
  expect(await f.controller.createThread('0', true)).toMatchObject({ thread: { id: 'FAKE-BACKGROUND' } })

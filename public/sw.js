@@ -42,38 +42,72 @@ self.addEventListener('message', (event) => {
 
 self.addEventListener('push', (event) => {
   let tag = 'complete'
+  let title = 'Codex finished'
   let body = 'Your Codex turn is complete.'
+  let threadId = null
   try {
     const data = event.data?.json()
     if (typeof data?.tag === 'string' && /^[A-Za-z0-9_-]{1,32}$/.test(data.tag)) tag = data.tag
-    if (typeof data?.body === 'string' && data.body.trim()) body = data.body.trim().slice(0, 180)
+    const context = data?.notification
+    threadId = validThreadId(context?.threadId)
+    if (threadId) {
+      const group = notificationLabel(context.groupName, 60)
+      const name = notificationLabel(context.threadName, 80) || 'Cuộc hội thoại'
+      title = group ? `${group}${context.isLeader === true ? ' · Leader' : ''}` : 'Codex · Chưa phân nhóm'
+      body = context.outcome === 'failed' ? `${name}: lượt chat bị lỗi.`
+        : context.outcome === 'interrupted' ? `${name}: lượt chat đã dừng.` : `${name} đã trả lời.`
+    }
   } catch { /* Still display a generic alert for malformed payloads. */ }
   event.waitUntil((async () => {
     const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
-    if (windows.some(client => client.visibilityState === 'visible' || client.focused === true)) return
-    await self.registration.showNotification('Codex finished', {
+    if (windows.some(client => sameOrigin(client.url) && (client.visibilityState === 'visible' || client.focused === true))) return
+    await self.registration.showNotification(title, {
       body,
       icon: '/icon-192.png',
       badge: '/icon-192.png',
       tag: `codex-turn-${tag}`,
-      data: { url: '/' },
+      data: { threadId },
     })
   })())
 })
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
-  const target = '/'
+  const threadId = validThreadId(event.notification.data?.threadId)
+  const target = threadId ? `/#thread=${encodeURIComponent(threadId)}` : '/'
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
-      const existing = clients.find((client) => new URL(client.url).origin === self.location.origin)
-      if (existing) {
-        return existing.focus()
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (clients) => {
+      // Never reload an existing draft, Files page or Hours editor. A current
+      // app acknowledges in-place routing even while its owner gate is locked.
+      for (const existing of clients.filter(client => client.frameType !== 'nested' && sameOrigin(client.url) && new URL(client.url).pathname === '/')) {
+        if (!threadId || await requestConversation(existing, threadId)) {
+          try { return await existing.focus() } catch { /* Try opening the app. */ }
+        }
       }
       return self.clients.openWindow(target)
     }),
   )
 })
+
+function validThreadId(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value) ? value : null
+}
+function notificationLabel(value, limit) {
+  return typeof value === 'string' ? [...value.replace(/[\p{Cc}\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, ' ').replace(/\s+/g, ' ').trim()].slice(0, limit).join('') : ''
+}
+function sameOrigin(value) {
+  try { return new URL(value).origin === self.location.origin } catch { return false }
+}
+function requestConversation(client, threadId) {
+  return new Promise(resolve => {
+    const channel = new MessageChannel()
+    const finish = accepted => { clearTimeout(timer); channel.port1.close(); channel.port2.close(); resolve(accepted) }
+    const timer = setTimeout(() => finish(false), 1000)
+    channel.port1.onmessage = event => finish(event.data?.accepted === true)
+    try { client.postMessage({ type: 'CODEX_OPEN_THREAD', threadId }, [channel.port2]) }
+    catch { finish(false) }
+  })
+}
 
 async function networkFirst(request, fallbackPath) {
   const cache = await caches.open(CACHE_NAME)

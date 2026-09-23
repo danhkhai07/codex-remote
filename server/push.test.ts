@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { notificationBody, PushService, validateSubscription } from './push.js'
+import { notificationBody, notificationContext, PushService, validateSubscription } from './push.js'
 
 const subscription = {
   endpoint: 'https://fcm.googleapis.com/fcm/send/test-device',
@@ -30,7 +30,7 @@ afterEach(() => {
 })
 
 describe('Web Push delivery without an SSE client', () => {
-  it('delivers a response preview once and preserves keys/subscriptions across restart', async () => {
+  it('delivers approved completion metadata once and preserves keys/subscriptions across restart', async () => {
     const first = setup()
     const session = owner()
     first.service.subscribe(subscription, session)
@@ -39,10 +39,10 @@ describe('Web Push delivery without an SSE client', () => {
     expect(next.service.publicKey).toBe(first.service.publicKey)
     expect(next.service.enabled(subscription.endpoint, session)).toBe(true)
     expect(statSync(first.path).mode & 0o777).toBe(0o600)
-    next.service.completed('private-thread', 'private-turn', '**Finished successfully.**\nMore detail.')
+    next.service.completed('private-thread', 'private-turn', { threadName: 'Sửa CR 1', groupName: 'Codex Remote', isLeader: true })
     await vi.waitFor(() => expect(next.send).toHaveBeenCalledTimes(1))
-    expect(JSON.parse(next.send.mock.calls[0][1])).toEqual({ tag: expect.any(String), body: 'Your Codex turn is complete.' })
-    expect(next.send.mock.calls[0][1]).not.toContain('private')
+    expect(JSON.parse(next.send.mock.calls[0][1])).toEqual({ tag: expect.any(String), body: 'Your Codex turn is complete.', notification: { threadId: 'private-thread', threadName: 'Sửa CR 1', groupName: 'Codex Remote', isLeader: true, outcome: 'completed' } })
+    expect(next.send.mock.calls[0][1]).not.toContain('private-turn')
     expect(next.send.mock.calls[0][2]).toMatchObject({ TTL: expect.any(Number), urgency: 'high', timeout: 10000 })
     next.service.completed('private-thread', 'private-turn')
     expect(next.send).toHaveBeenCalledTimes(1)
@@ -64,11 +64,11 @@ describe('Web Push delivery without an SSE client', () => {
     const session = owner()
     service.subscribe(subscription, session)
     expect(service.visibility(subscription.endpoint, true, session)).toBe(true)
-    service.completed('thread', 'visible-turn', 'Visible response')
+    service.completed('thread', 'visible-turn', { threadName: 'Visible' })
     await service.flush()
     expect(send).not.toHaveBeenCalled()
     expect(service.visibility(subscription.endpoint, false, session)).toBe(true)
-    service.completed('thread', 'hidden-turn', 'Hidden response')
+    service.completed('thread', 'hidden-turn', { threadName: 'Hidden' })
     await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1))
     expect(JSON.parse(send.mock.calls[0][1])).toMatchObject({ body: 'Your Codex turn is complete.' })
   })
@@ -125,5 +125,74 @@ describe('Web Push delivery without an SSE client', () => {
     for (const host of ['web.push.apple.com', 'updates.push.services.mozilla.com', 'updates-autopush.push.services.mozilla.com']) {
       expect(validateSubscription({ ...subscription, endpoint: `https://${host}/test` }).endpoint).toContain(host)
     }
+  })
+})
+
+describe('bounded contextual completion metadata', () => {
+  it('allows only bounded names and identifiers, never answer/preview fields', () => {
+    const context = notificationContext('thread-1', { threadName: '😀'.repeat(200), groupName: ' Group\n\u202eName ', isLeader: true })!
+    expect([...context.threadName]).toHaveLength(80)
+    expect(context.groupName).toBe('Group Name')
+    expect(Buffer.byteLength(JSON.stringify(context))).toBeLessThan(1500)
+    expect(notificationContext('//evil.test')).toBeUndefined()
+    expect(notificationContext('x'.repeat(129))).toBeUndefined()
+    expect(notificationContext('t', { isLeader: true })).toMatchObject({ groupName: '', isLeader: false })
+  })
+
+  it('persists a snapshot across retry/restart and coalesces all fields together', async () => {
+    vi.useFakeTimers()
+    const first = setup(vi.fn().mockRejectedValue({ statusCode: 503 }))
+    first.service.subscribe(subscription, owner())
+    const context = { threadName: 'Leader old name', groupName: 'Group A', isLeader: true }
+    first.service.completed('leader', 'turn-1', context)
+    context.threadName = 'Later rename'; context.isLeader = false
+    await vi.advanceTimersByTimeAsync(0)
+    first.service.stop()
+    const next = setup(undefined, first.path)
+    next.service.start()
+    await vi.advanceTimersByTimeAsync(2100)
+    expect(JSON.parse(next.send.mock.calls[0][1]).notification).toMatchObject({ threadId: 'leader', threadName: 'Leader old name', groupName: 'Group A', isLeader: true })
+    next.service.stop()
+    next.service.completed('worker', 'turn-2', { threadName: 'Worker B', groupName: 'Group B', isLeader: false })
+    next.service.completed('solo', 'turn-3', { threadName: 'Solo', outcome: 'failed' })
+    const last = setup(undefined, first.path)
+    last.service.start(); await vi.advanceTimersByTimeAsync(0)
+    expect(last.send).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(last.send.mock.calls[0][1]).notification).toEqual({ threadId: 'solo', threadName: 'Solo', groupName: '', isLeader: false, outcome: 'failed' })
+  })
+
+  it('does not resurrect metadata after ownership changes, expiry, or foreground suppression', async () => {
+    vi.useFakeTimers()
+    const { service, send } = setup(vi.fn().mockRejectedValue({ statusCode: 503 }))
+    const original = owner()
+    service.subscribe(subscription, original)
+    service.completed('secret-old-target', 'turn', { groupName: 'Old group', isLeader: true })
+    await vi.advanceTimersByTimeAsync(0)
+    service.subscribe(subscription, { ...original, nonce: 'new-session' })
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(send).toHaveBeenCalledTimes(1)
+    service.completed('new-target', 'next', { groupName: 'New group' })
+    await vi.advanceTimersByTimeAsync(0)
+    service.visibility(subscription.endpoint, true, { ...original, nonce: 'new-session' })
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(send).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps the next completion intact when an older delivery is already in flight', async () => {
+    vi.useFakeTimers()
+    let finish!: (value: typeof response) => void
+    const send = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve })).mockResolvedValue(response)
+    const { service } = setup(send)
+    service.subscribe(subscription, owner())
+    service.completed('leader-a', 'turn-a', { threadName: 'Leader A', groupName: 'A', isLeader: true })
+    await vi.advanceTimersByTimeAsync(0)
+    service.completed('worker-b', 'turn-b', { threadName: 'Worker B', groupName: 'B', isLeader: false })
+    finish(response)
+    await vi.advanceTimersByTimeAsync(150)
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(send.mock.calls.map(call => JSON.parse(call[1]).notification)).toEqual([
+      { threadId: 'leader-a', threadName: 'Leader A', groupName: 'A', isLeader: true, outcome: 'completed' },
+      { threadId: 'worker-b', threadName: 'Worker B', groupName: 'B', isLeader: false, outcome: 'completed' },
+    ])
   })
 })

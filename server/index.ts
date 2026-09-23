@@ -57,9 +57,9 @@ controller.appServer.on('notification', (message) => {
 const pushState = process.env.CODEX_REMOTE_PUSH_STATE?.trim() || resolve(packageRoot, '.remote-push.json')
 const push = new PushService(pushState, config.sessionSecret, config.publicOrigin.origin)
 const attachments = new AttachmentStore()
-controller.onTurnCompleted = (threadId, turnId, answer) => {
+controller.onTurnCompleted = (threadId, turnId, _answer, context) => {
   attachments.completeTurn(turnId)
-  push.completed(threadId, turnId, answer)
+  push.completed(threadId, turnId, context)
 }
 await controller.start()
 push.start()
