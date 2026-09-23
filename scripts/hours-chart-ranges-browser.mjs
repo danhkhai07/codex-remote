@@ -15,6 +15,7 @@ try {
     await page.locator('#range').selectOption(range)
     assert.equal(await page.locator('.bar-column').count(), range === 'all' ? 1 : Number(range))
     assert.equal(await page.locator('.bar-column').last().getAttribute('data-date'), '2026-09-23')
+    assert.equal(await page.locator('#chart').evaluate(chart => chart.lastElementChild.getBoundingClientRect().right <= chart.getBoundingClientRect().right + 1), true)
     assert.match(await page.locator('.bar-column').last().getAttribute('aria-label'), hours === null ? /Unknown/ : hours === 0 ? /0h 00m/ : /2h 15m/)
    }
    await page.locator('#range').selectOption('month')
