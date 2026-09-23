@@ -75,7 +75,6 @@ export function LinkViewer({ reference, onClose }: {
             referrerPolicy="no-referrer"
             onLoad={() => setLoaded(true)}
           />
-          <p className="link-viewer-hint">If this website blocks embedded preview, use Open browser. Closing that window returns you here.</p>
         </>}
       </div>
     </section>

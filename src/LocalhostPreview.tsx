@@ -210,7 +210,6 @@ export function LocalhostPreview({ csrf, onClose, initialUrl, scope = 'services'
         {error && <p className="localhost-preview-error" role="alert">{error}</p>}
       </div>
       <div className="localhost-preview-content">
-        {preview && new URL(preview.viewUrl).origin !== window.location.origin && <p className="browser-frame-help">Nếu trang không cho hiển thị ở đây, chọn <button type="button" onClick={() => void launch(preview.address, true)}>Mở tab ngoài ↗</button>.</p>}
         {!preview && <div className="file-viewer-empty"><strong>Mở một trang để bắt đầu</strong><p>Web, app localhost và các trang Codex Remote đều mở ở đây.</p></div>}
         {preview && <>
           {!loaded && <div className="localhost-preview-loading" role="status"><span className="spinner" aria-hidden="true" />{slow ? 'Trang tải lâu hoặc không cho nhúng. Thử Mở tab ngoài.' : 'Đang tải ứng dụng…'}</div>}
