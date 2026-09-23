@@ -162,7 +162,7 @@ results were reused by byte hashes, not rerun as another security audit.
 
 Actual live evidence includes:
 
--22 normal-trust origin/public checks, plus8 final old/new health and complete
+- 22 normal-trust origin/public checks, plus8 final old/new health and complete
   index-body hash checks. All7 preview hosts deny unauthenticated401/no-store;
   legacy private API on new instance returns403. New encrypted session, Files,
   Services, Hours, native account rate limits, threads/pending and SSE work.
