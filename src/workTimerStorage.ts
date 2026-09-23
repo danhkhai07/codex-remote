@@ -1,6 +1,8 @@
 import { secureIntent } from './secureApi'
 import { api } from './api'
-export const WORK_TIMER_PATH = '/root/VAULTS/Flint-Software/Working-Hours/index.html'
+// NEW instance generator ROOT; shared by the Hours page and Files bridge.
+// Keep aligned with scripts/remote-instance/hours-update.py's --hours argument.
+export const WORK_TIMER_PATH = '/root/.local/state/codex-remote-secure/hours/index.html'
 export const WORK_TIMER_CHANNEL = 'flint-work-timer-storage'
 /** Only a fixed dashboard frame can access the authenticated shared hours API. */
 export function attachWorkTimerStorage(frame: () => Window | null) {
