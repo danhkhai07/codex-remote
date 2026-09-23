@@ -24,7 +24,8 @@ try {
     const request = route.request(), path = new URL(request.url()).pathname
     if (request.method() !== 'GET') mutations.push(path)
     let data = {}
-    if (path === '/api/session') data = { csrf: 'fixture', expiresAt: 9999999999, workspaces: [{ id: '0', label: 'Fixture', path: '/tmp' }] }
+    if (path === '/api/secure/setup') data = { version: 1, required: false }
+    else if (path === '/api/session') data = { csrf: 'fixture', expiresAt: 9999999999, workspaces: [{ id: '0', label: 'Fixture', path: '/tmp' }] }
     else if (path === '/api/threads') data = { data: [thread('a'), thread('b')] }
     else if (path === '/api/models') data = { data: [{ id: 'fixture', model: 'fixture', isDefault: true, defaultReasoningEffort: 'high', supportedReasoningEfforts: [] }] }
     else if (path === '/api/pending') data = { data: [], epoch: 'fixture', cursor: 0 }
@@ -57,6 +58,7 @@ try {
   await page.evaluate(() => localStorage.setItem('reload-fixture-retained', 'keep'))
   await logo.focus()
   await logo.press('Enter')
+  await page.waitForFunction(() => document.querySelector('[aria-label="App menu"]')?.getAttribute('aria-expanded') === 'true')
   assert.equal(await logo.getAttribute('aria-expanded'), 'true')
   assert.equal(await reload.evaluate(el => document.activeElement === el), true)
   await reload.press('Escape')
