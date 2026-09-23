@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from './api'
+import { navigateReservedBrowserTab, reserveBrowserTab } from './browserExternalTab'
 import { parseBrowserAddress } from './browserAddress'
 import { useScreenState } from './screenState'
 
@@ -103,21 +104,24 @@ export function LocalhostPreview({ csrf, onClose, initialUrl, scope = 'services'
       setError('Nhập URL http://, https://, đường dẫn như /working-hours hoặc port localhost.')
       return
     }
-    // Open synchronously during the click so mobile browsers allow the new tab.
-    const opened = inBrowser ? window.open('about:blank', '_blank') : null
-    if (inBrowser && !opened) {
-      setError('Trình duyệt đã chặn tab mới. Cho phép popup rồi thử lại.')
+    let reserved
+    try {
+      reserved = inBrowser ? reserveBrowserTab(value) : null
+    } catch (reason) {
+      setError(errorMessage(reason))
       return
     }
-    if (opened) {
-      opened.opener = null
-      popup.current = opened
-    }
+    if (reserved) popup.current = reserved.tab
     const controller = new AbortController()
     request.current = controller
     setBusy(true)
     setError('')
     try {
+      if (reserved) {
+        await navigateReservedBrowserTab(reserved, csrf, controller.signal)
+        popup.current = null
+        return
+      }
       const result = parsed.kind === 'localhost'
         ? await api.launchLocalhostPreview(parsed.local.port, parsed.local.path, csrf, controller.signal)
         : { url: parsed.url, viewUrl: parsed.url }
@@ -128,23 +132,17 @@ export function LocalhostPreview({ csrf, onClose, initialUrl, scope = 'services'
       if (parsed.kind === 'localhost' && (!allowedProtocol || url.origin === window.location.origin || viewUrl.origin !== url.origin)) {
         throw new Error('Địa chỉ preview không hợp lệ.')
       }
-      if (opened) {
-        if (opened.closed) throw new Error('Tab preview đã đóng. Hãy mở lại.')
-        opened.location.replace(result.url)
-        popup.current = null
-      } else {
-        setLoaded(false)
-        setSlow(false)
-        setPreview(current => ({ ...result, address: value, loadId: (current?.loadId ?? 0) + 1 }))
-        // Move focus before hiding the address form, also dismissing mobile keyboards.
-        if (controls.current?.contains(document.activeElement)) closeButton.current?.focus()
-        setControlsOpen(false)
-        setLastUrl(value)
-        autoOpened.current = value
-        navigate.current?.(value)
-      }
+      setLoaded(false)
+      setSlow(false)
+      setPreview(current => ({ ...result, address: value, loadId: (current?.loadId ?? 0) + 1 }))
+      // Move focus before hiding the address form, also dismissing mobile keyboards.
+      if (controls.current?.contains(document.activeElement)) closeButton.current?.focus()
+      setControlsOpen(false)
+      setLastUrl(value)
+      autoOpened.current = value
+      navigate.current?.(value)
     } catch (reason) {
-      opened?.close()
+      reserved?.tab.close()
       if (!controller.signal.aborted) setError(errorMessage(reason))
     } finally {
       if (request.current === controller) {

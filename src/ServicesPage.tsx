@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent, type MouseEvent } from 'react'
 import { secureIntent } from './secureApi'
 import { api, ApiError } from './api'
+import { navigateReservedBrowserTab, reserveBrowserTab } from './browserExternalTab'
 import { Login } from './App'
 import { LocalhostPreview } from './LocalhostPreview'
 import type { ServiceInput, ServicesSnapshot } from '../server/services'
@@ -11,6 +12,7 @@ export function isServicesPath(path: string) { return path === '/services' || pa
 const blank: ServiceInput = { port: 3000, name: '', summary: '', prLabel: '', prUrl: '', branch: '', directory: '', path: '/', kind: 'app' }
 const message = (error: unknown) => error instanceof Error ? error.message : 'Không kết nối được máy chủ'
 const keyOf = (service: ServiceInput) => service.port === null ? `path:${service.path}` : `port:${service.port}`
+type ServiceView = ServicesSnapshot['services'][number]
 
 function ServiceEditor({ initial, existing, csrf, onClose, onSaved }: {
   initial: ServiceInput; existing: boolean; csrf: string; onClose: () => void; onSaved: () => void
@@ -62,13 +64,15 @@ export function ServicesPage() {
   const [browser, setBrowser] = useState<string | null>(null)
   const [removing, setRemoving] = useState('')
   const inFlight = useRef(false)
+  const externalRequest = useRef<AbortController | null>(null)
+  const externalTab = useRef<Window | null>(null)
   useEffect(() => {
     document.title = 'Services · Codex Remote'
     let active = true
     api.session().then(value => { if (active) setSession(value) }).catch(reason => {
       if (active && !(reason instanceof ApiError && reason.status === 401)) setError(message(reason))
     }).finally(() => { if (active) setLoading(false) })
-    return () => { active = false }
+    return () => { active = false; externalRequest.current?.abort(); externalTab.current?.close() }
   }, [])
   const refresh = useCallback(async () => {
     if (inFlight.current) return
@@ -101,6 +105,27 @@ export function ServicesPage() {
     catch (reason) { setError(message(reason)) }
     finally { setRemoving('') }
   }
+  const serviceAddress = (service: ServiceInput) => service.port === null ? service.path : `http://localhost:${service.port}${service.path}`
+  const openServiceInTab = async (event: MouseEvent<HTMLButtonElement>, service: ServiceView) => {
+    if (event.button !== 1 || service.running === false) return
+    event.preventDefault()
+    if (externalRequest.current) return
+    let reserved
+    try { reserved = reserveBrowserTab(serviceAddress(service)) }
+    catch (reason) { setError(message(reason)); return }
+    const controller = new AbortController()
+    externalRequest.current = controller
+    externalTab.current = reserved.tab
+    setError('')
+    try { await navigateReservedBrowserTab(reserved, session.csrf, controller.signal) }
+    catch (reason) { if (!controller.signal.aborted) setError(message(reason)) }
+    finally {
+      if (externalRequest.current === controller) {
+        externalRequest.current = null
+        externalTab.current = null
+      }
+    }
+  }
   return <main className="services-page">
     <div className="services-container">
       <nav className="services-nav"><a href="/">← Codex Remote</a><button className="quiet-button" onClick={() => setBrowser('')}>Browser ↗</button></nav>
@@ -114,7 +139,7 @@ export function ServicesPage() {
           <h2>{service.name}</h2><p className="service-summary">{service.summary}</p>
           <p className="service-pr">{service.prUrl ? <a href={service.prUrl} onClick={event => { event.preventDefault(); setBrowser(service.prUrl) }}>{service.prLabel} ↗</a> : service.prLabel}</p>
           {(service.branch || service.directory) && <details><summary>Chi tiết triển khai</summary>{service.branch && <p>Branch: <code>{service.branch}</code></p>}{service.directory && <p>Thư mục: <code>{service.directory}</code></p>}<p>Cập nhật: {new Date(service.updatedAt).toLocaleString('vi-VN')}</p></details>}
-          <div className="service-card-actions"><button className="primary-button" disabled={service.running === false} onClick={() => setBrowser(service.port === null ? service.path : `http://localhost:${service.port}${service.path}`)}>Mở trong Browser</button><button className="quiet-button" onClick={() => setEditing({ value: service, existing: true })}>Sửa</button><button className="quiet-button service-remove" disabled={Boolean(removing)} onClick={() => void remove(service)}>Xóa</button></div>
+          <div className="service-card-actions"><button className="primary-button" disabled={service.running === false} onClick={() => setBrowser(serviceAddress(service))} onAuxClick={event => void openServiceInTab(event, service)}>Mở trong Browser</button><button className="quiet-button" onClick={() => setEditing({ value: service, existing: true })}>Sửa</button><button className="quiet-button service-remove" disabled={Boolean(removing)} onClick={() => void remove(service)}>Xóa</button></div>
         </article>)}
       </div>
       {!visible.length && <p className="services-empty">{snapshot ? services.length ? 'Không có dịch vụ phù hợp.' : 'Chưa có dịch vụ. Thêm app hoặc đường dẫn đầu tiên.' : 'Đang tải danh sách…'}</p>}
