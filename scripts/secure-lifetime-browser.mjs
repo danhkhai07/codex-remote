@@ -31,7 +31,7 @@ import {importOwner} from ${modulePath('server/secure-wire.ts')};
 window.fixtureSecure={...secure,CipherCache,downloadSecureFile,importOwner};
 const root=createRoot(document.getElementById('root'));
 window.unmountGate=()=>root.unmount();
-root.render(React.createElement(SecureGate,null,React.createElement('p',{id:'private-ui'},'Private content authorized')));`)
+root.render(React.createElement(SecureGate,null,React.createElement('div',{id:'private-ui'},React.createElement('p',null,'Private content authorized'),React.createElement('button',{onClick:()=>secure.lockSecure()},'Fixture lock'))));`)
   await build({ configFile: false, logLevel: 'error', define: { 'process.env.NODE_ENV': JSON.stringify('production') }, build: { outDir: dist, emptyOutDir: false, lib: { entry, formats: ['es'], fileName: () => 'lifetime.js' } } })
   await writeFile(join(dist, 'index.html'), '<html><body><div id="root"></div><script type="module" src="/lifetime.js"></script></body></html>')
   const config = { host: '127.0.0.1', port: 0, publicOrigin: new URL('http://127.0.0.1'), password: 'FAKE lifetime password', sessionSecret: 'fake-lifetime-secret'.repeat(3), sessionTtlSeconds: 600, codexBin: 'UNUSED', production: true, workspaceRoots: [files], fileRoots: [files], secureApiRequired: true, secureKeyFile: join(root, 'key.json'), sessionStateFile: join(root, 'sessions.json') }
@@ -57,7 +57,7 @@ root.render(React.createElement(SecureGate,null,React.createElement('p',{id:'pri
     await b.route('**/api/secure/' + endpoint, route)
     await b.getByLabel('Khóa mã hóa riêng', { exact: true }).fill(material.key)
     await b.getByRole('button', { name: 'Mở khóa', exact: true }).click(); await at
-    await a.getByRole('button', { name: 'Khóa', exact: true }).click()
+    await a.getByRole('button', { name: 'Fixture lock', exact: true }).click()
     await b.waitForFunction(() => !window.fixtureSecure.secureUnlocked() && !document.querySelector('#unlock-key')?.disabled)
     if (stage === 'proof') await unlock(b) // New proof while old proof response is held.
     const delivered = b.waitForResponse(r => r.url().endsWith('/api/secure/' + endpoint))
@@ -65,7 +65,7 @@ root.render(React.createElement(SecureGate,null,React.createElement('p',{id:'pri
     assert.equal(await b.locator('#private-ui').count(), stage === 'proof' ? 1 : 0)
     assert.equal(await b.evaluate(() => window.fixtureSecure.secureUnlocked()), stage === 'proof')
     await b.unroute('**/api/secure/' + endpoint, route)
-    if (stage === 'proof') { await b.getByRole('button', { name: 'Khóa', exact: true }).click(); await settle(a) }
+    if (stage === 'proof') { await b.getByRole('button', { name: 'Fixture lock', exact: true }).click(); await settle(a) }
   }
   // Same gate with a delayed migration barrier, invalidated by unmount.
   await b.evaluate(key => {
@@ -83,7 +83,7 @@ root.render(React.createElement(SecureGate,null,React.createElement('p',{id:'pri
     m.CipherCache.prototype.identify = async function (...args) { m.CipherCache.prototype.identify = original; await new Promise(r => { window.releaseIdentify = r }); return original.apply(this,args) }
     window.oldMutation = m.secureFetch('/api/attachments?name=old.txt', { method: 'POST', headers: { 'x-csrf-token': csrf }, body: 'OLD INTENT' }).then(() => 'BAD', () => 'cancelled')
   }, session.csrf)
-  await b.waitForFunction(() => Boolean(window.releaseIdentify)); await b.getByRole('button', { name: 'Khóa', exact: true }).click(); await unlock(b)
+  await b.waitForFunction(() => Boolean(window.releaseIdentify)); await b.getByRole('button', { name: 'Fixture lock', exact: true }).click(); await unlock(b)
   assert.equal(await b.evaluate(async () => { window.releaseIdentify(); return window.oldMutation }), 'cancelled'); assert.equal(effects,0)
   const beforePicker = []
   b.on('request', req => { if (req.url().endsWith('/api/secure/request')) beforePicker.push(req) })
@@ -92,7 +92,7 @@ root.render(React.createElement(SecureGate,null,React.createElement('p',{id:'pri
     window.showSaveFilePicker = () => new Promise(resolve => { window.releasePicker = () => resolve({ createWritable() { window.writes++; return Promise.resolve(new WritableStream()) } }) })
     window.oldDownload = window.fixtureSecure.downloadSecureFile(path, 'note.txt', 23).then(() => 'BAD', () => 'cancelled')
   }, note)
-  await b.waitForFunction(() => Boolean(window.releasePicker)); await b.getByRole('button', { name: 'Khóa', exact: true }).click(); await unlock(b)
+  await b.waitForFunction(() => Boolean(window.releasePicker)); await b.getByRole('button', { name: 'Fixture lock', exact: true }).click(); await unlock(b)
   const dispatched = beforePicker.length
   assert.equal(await b.evaluate(async () => { window.releasePicker(); return window.oldDownload }), 'cancelled')
   assert.equal(beforePicker.length, dispatched); assert.equal(await b.evaluate(() => window.writes),0)
@@ -102,7 +102,7 @@ root.render(React.createElement(SecureGate,null,React.createElement('p',{id:'pri
     window.showSaveFilePicker = async () => ({ createWritable: () => new Promise(resolve => { window.releaseWritable = () => resolve(new WritableStream({ write() { window.writes++ }, abort() { window.abortedSink = true } })) }) })
     window.oldDownload = window.fixtureSecure.downloadSecureFile(path, 'note.txt', 23).then(() => 'BAD', () => 'cancelled')
   }, note)
-  await b.waitForFunction(() => Boolean(window.releaseWritable)); await b.getByRole('button', { name: 'Khóa', exact: true }).click(); await unlock(b)
+  await b.waitForFunction(() => Boolean(window.releaseWritable)); await b.getByRole('button', { name: 'Fixture lock', exact: true }).click(); await unlock(b)
   assert.equal(await b.evaluate(async () => { window.releaseWritable(); return window.oldDownload }), 'cancelled')
   assert.equal(await b.evaluate(() => window.writes),0); assert.equal(await b.evaluate(() => window.abortedSink),true)
   // Real IDB corruption: reject accounting, no getAll, bounded cursor pruning.

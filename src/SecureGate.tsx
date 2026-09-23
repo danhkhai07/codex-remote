@@ -29,17 +29,23 @@ export function SecureGate({ children }: { children: ReactNode }) {
     } catch (reason) { if (current()) setError(reason instanceof Error ? reason.message : 'Không mở khóa được') }
     finally { if (current()) setBusy(false) }
   }
-  if (phase === 'legacy') return children
-  if (phase === 'ready') return <><button className="secure-lock-button quiet-button" type="button" onClick={() => lockSecure()}>Khóa</button>{children}</>
-  return <main className="login-shell"><form className="login-card" onSubmit={submit}>
-    <h1>{phase === 'login' ? 'Đăng nhập Codex Remote' : 'Mở khóa Codex Remote'}</h1>
-    {phase === 'loading' ? <p role="status">Đang kiểm tra kết nối bảo mật…</p> : <>
-      <label htmlFor={phase === 'login' ? 'login-password' : 'unlock-key'}>{phase === 'login' ? 'Mật khẩu đăng nhập' : 'Khóa mã hóa riêng'}</label>
-      <input id={phase === 'login' ? 'login-password' : 'unlock-key'} name={phase === 'login' ? 'login-password' : 'encryption-key'} type="password" autoComplete="current-password" value={value} onChange={event => setValue(event.target.value)} required autoFocus spellCheck={false} disabled={busy} />
-      <p>{phase === 'login' ? 'Sau đăng nhập, dùng khóa mã hóa riêng để mở dữ liệu.' : 'Khóa riêng được giữ trong bộ nhớ đến khi khóa hoặc tải lại trang.'}</p>
-      <button className="primary-button" disabled={busy}>{busy ? 'Đang kiểm tra…' : phase === 'login' ? 'Đăng nhập' : 'Mở khóa'}</button>
-      <button className="quiet-button" type="button" disabled={busy} onClick={() => { setPhase(phase === 'login' ? 'unlock' : 'login'); setValue(''); setError('') }}>{phase === 'login' ? 'Đã đăng nhập · Mở khóa' : 'Đăng nhập lại'}</button>
-    </>}
-    {error && <p role="alert">{error}</p>}
-  </form></main>
+  if (phase === 'legacy' || phase === 'ready') return children
+  const login = phase === 'login'
+  return <main className="login-shell"><section className="login-card secure-gate" aria-labelledby="secure-gate-title">
+    <div className="brand-lockup">
+      <div className="brand-mark" aria-hidden="true">&gt;_</div>
+      <div><p className="eyebrow">Secure remote access</p><p className="brand-name">Codex Remote</p></div>
+    </div>
+    <h1 id="secure-gate-title">{login ? 'Chào mừng trở lại.' : 'Mở khóa không gian của bạn.'}</h1>
+    <p className="muted">{login ? 'Đăng nhập để tiếp tục cuộc trò chuyện của bạn.' : 'Nhập khóa mã hóa riêng để mở các cuộc trò chuyện trên thiết bị này.'}</p>
+    {phase === 'loading' ? <p role="status">Đang kiểm tra kết nối bảo mật…</p> : <form className="login-form" onSubmit={submit} aria-busy={busy}>
+      <label htmlFor={login ? 'login-password' : 'unlock-key'}>{login ? 'Mật khẩu đăng nhập' : 'Khóa mã hóa riêng'}</label>
+      <input key={phase} id={login ? 'login-password' : 'unlock-key'} name={login ? 'login-password' : 'encryption-key'} type="password" autoComplete="current-password" value={value} onChange={event => setValue(event.target.value)} required autoFocus spellCheck={false} disabled={busy} aria-describedby="secure-gate-help" aria-invalid={error ? true : undefined} />
+      <p className="secure-gate-help muted" id="secure-gate-help">{login ? 'Sau đăng nhập, dùng khóa riêng để mở dữ liệu.' : 'Khóa chỉ được giữ trong bộ nhớ đến khi khóa hoặc tải lại trang.'}</p>
+      {error && <p className="error-banner" role="alert">{error}</p>}
+      <button className="primary-button login-button" type="submit" disabled={busy}>{busy ? 'Đang kiểm tra…' : login ? 'Đăng nhập' : 'Mở khóa'}</button>
+      <button className="quiet-button secure-gate-switch" type="button" disabled={busy} onClick={() => { setPhase(login ? 'unlock' : 'login'); setValue(''); setError('') }}>{login ? 'Đã đăng nhập · Mở khóa' : 'Đăng nhập lại'}</button>
+    </form>}
+    {phase === 'loading' && error && <p className="error-banner" role="alert">{error}</p>}
+  </section></main>
 }

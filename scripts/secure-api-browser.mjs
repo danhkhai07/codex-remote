@@ -177,7 +177,7 @@ try {
   assert(cacheBounds.total <= 64 * 1024 * 1024); assert(cacheBounds.lru); assert(cacheBounds.wrongKeyDenied)
   // Lock broadcasts across two unlocked tabs, without logging out or stopping jobs.
   const other = await context.newPage(); await other.goto(config.publicOrigin.origin); await unlock(other)
-  await page.getByRole('button', { name: 'Khóa', exact: true }).click()
+  await page.evaluate(() => window.fixtureSecure.lockSecure())
   await other.getByLabel('Khóa mã hóa riêng', { exact: true }).waitFor()
   assert.equal(await other.locator('#instruction').count(), 0)
   assert(await page.evaluate(async () => { for (const url of window.privateObjectUrls) { try { await fetch(url); return false } catch { /* revoked */ } } return window.privateObjectUrls.length > 0 }))
