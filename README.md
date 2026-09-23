@@ -53,9 +53,9 @@ Server files: click an absolute file link in a Codex response to open the
 authenticated in-app viewer. Text/source files, Word DOCX, PowerPoint PPTX, PDF, PNG, JPEG, WebP and GIF can
 be previewed. In encrypted mode, large downloads stream to a file in browsers
 with File System Access; other browsers have an explicit 64 MiB download/preview
-limit. Paths are canonicalized and must stay inside `CODEX_REMOTE_FILE_ROOTS`
-(workspace roots by default), including
-after symlink resolution. Text preview is capped at 10 MB; larger or unsupported
+limit. Restricted mode canonicalizes paths and keeps them inside
+`CODEX_REMOTE_FILE_ROOTS` (workspace roots by default), including symlinks.
+Explicit owner-full mode permits every ordinary filesystem file; see configuration below. Text preview is capped at 10 MB; larger or unsupported
 files remain download-only. Markdown files open as rendered documents by default
 with a Preview/Raw toggle; line-target links open in Raw mode so the requested
 line remains highlighted.
@@ -244,11 +244,25 @@ appear in the collapsible “Đã ghim” section across conversations. The
 file viewer also has a pin button. Pins persist on the current browser/device;
 ★ removes a pin. Opening a pin uses the usual workspace access checks.
 
-File browsing, previews and downloads use `CODEX_REMOTE_FILE_ROOTS` (comma-separated
-absolute directories). It defaults to `CODEX_REMOTE_WORKSPACE_ROOTS`; setting it
-to `/` enables browsing outside home, including `/tmp`, `/etc` and `/var`. The
-Up button can then reach `/`. Existing authentication and OS file permissions
-still apply. Workspace selection continues to use `CODEX_REMOTE_WORKSPACE_ROOTS`.
+File browsing defaults to `CODEX_REMOTE_FILE_ACCESS=restricted`: explicit project/data
+`CODEX_REMOTE_FILE_ROOTS`, with private/system name exclusions. For an installation
+whose owner is authorized to read the entire filesystem, set both
+`CODEX_REMOTE_FILE_ACCESS=owner-full` and `CODEX_REMOTE_SECURE_API=required`.
+This exposes `/` (including `/root`, hidden files, credentials and owner-key files)
+to an authenticated, unlocked owner through the encrypted API. It cannot be
+combined with plaintext API mode. There are no secret-name/root exclusions in
+owner-full mode; OS permissions still apply. Existing keys retain their 0600,
+owner and regular-file checks, without the outside-Files-roots requirement.
+Workspace/native root/fullAccess settings are independent and unchanged.
+Devices, FIFOs and kernel virtual-file streams are not ordinary downloadable
+files. Buffered previews and downloads remain bounded; symlinks to ordinary
+files work, with opened-descriptor validation and stale-file checks.
+
+**Open** uses `/files?path=…` in a new tab in encrypted mode. The tab goes through
+login/unlock before loading the viewer, and a reload requires unlock again.
+Conversation and Markdown file links support normal in-app opening, modified
+clicks, and copying/bookmarking this app URL. No key, cookie or plaintext content
+is embedded in the URL; raw `/api/files/*` navigation still requires the tunnel.
 
 SVG files (up to the 10 MB text-preview limit) support Preview / Raw modes.
 Preview uses an image element, so embedded scripts do not execute and external

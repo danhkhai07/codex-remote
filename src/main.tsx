@@ -1,3 +1,4 @@
+import { FilePage } from './FilePage'
 import { SecureGate } from './SecureGate'
 import { PreviewMigrationGate } from './PreviewMigrationGate'
 import { WorkingHoursPage, isWorkingHoursPath } from './WorkingHoursPage'
@@ -18,7 +19,7 @@ if (import.meta.hot) import.meta.hot.dispose(removeZoomLock)
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <AppRecovery><PreviewMigrationGate><SecureGate>{isKnowledgePath(window.location.pathname) ? <Suspense fallback={<main className="login-shell"><p role="status">Đang mở Knowledge…</p></main>}><KnowledgePage /></Suspense> : isServicesPath(window.location.pathname) ? <ServicesPage /> : isWorkingHoursPath(window.location.pathname) ? <WorkingHoursPage /> : <App />}</SecureGate></PreviewMigrationGate></AppRecovery>
+    <AppRecovery><PreviewMigrationGate><SecureGate>{['/files', '/files/'].includes(window.location.pathname) ? <FilePage /> : isKnowledgePath(window.location.pathname) ? <Suspense fallback={<main className="login-shell"><p role="status">Đang mở Knowledge…</p></main>}><KnowledgePage /></Suspense> : isServicesPath(window.location.pathname) ? <ServicesPage /> : isWorkingHoursPath(window.location.pathname) ? <WorkingHoursPage /> : <App />}</SecureGate></PreviewMigrationGate></AppRecovery>
   </StrictMode>,
 )
 
