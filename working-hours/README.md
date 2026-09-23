@@ -45,6 +45,11 @@ Run it through `codex-heavy`. It covers the actual built `/working-hours` and
 FileViewer bridges at desktop, 390 px and 320 px, including pending/double-click,
 failed saves, conflicts/reload, and pause of a running manual timer.
 
+The compact `Hôm nay` total is presentation-only. It reads the same merged daily
+row as the cards and timer, remains visible while another date or chart range is
+selected, and follows the Asia/Ho_Chi_Minh day boundary. A running timer updates
+it from the existing split totals; pause freezes it and resume never backfills.
+
 Rollback limitation: old continuous code does not understand pause/epoch state.
 Once a user has paused or resumed, never restore the old backend/generator or an
 old state backup blindly; that can add paused time and discard later edits. Prefer
