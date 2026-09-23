@@ -1,6 +1,6 @@
 import { constants } from 'node:fs'
-import { allowedFilePath } from './file-policy.js'
-import { open, realpath, type FileHandle } from 'node:fs/promises'
+import { allowedFilePath, type FileAccess } from './file-policy.js'
+import { open, realpath, stat, statfs, type FileHandle } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { basename, extname, isAbsolute, resolve } from 'node:path'
 
@@ -29,7 +29,7 @@ export class ServerFileError extends Error {
 }
 
 const TEXT_EXTENSIONS = new Set([
-  '.c', '.cc', '.cjs', '.conf', '.cpp', '.cs', '.css', '.csv', '.env.example',
+  '.env', '.pem', '.key', '.pub', '.c', '.cc', '.cjs', '.conf', '.cpp', '.cs', '.css', '.csv', '.env.example',
   '.fish', '.go', '.graphql', '.h', '.hpp', '.htm', '.html', '.ini', '.java', '.js',
   '.json', '.jsx', '.log', '.lua', '.md', '.markdown', '.mjs', '.properties', '.py',
   '.rb', '.rs', '.scss', '.sh', '.sql', '.svg', '.toml', '.ts', '.tsx', '.txt', '.xml',
@@ -38,12 +38,14 @@ const TEXT_EXTENSIONS = new Set([
 
 const TEXT_FILENAMES = new Set([
   'AGENTS.md', 'CHANGELOG', 'CODEOWNERS', 'Dockerfile', 'LICENSE', 'Makefile',
-  'README', 'SECURITY',
+  'README', 'SECURITY', '.env', '.npmrc', '.netrc', '.gitignore', '.bashrc', '.profile', 'authorized_keys', 'known_hosts',
 ])
 
-const inspected = new WeakMap<ServerFileInfo, { roots: string[]; dev: number; ino: number }>()
-async function policyOpen(path: string, roots: string[]): Promise<FileHandle> {
-  if (!allowedFilePath(path, roots)) throw new ServerFileError(403, 'File access is not allowed')
+const inspected = new WeakMap<ServerFileInfo, { roots: string[]; mode: FileAccess; dev: number; ino: number }>()
+async function policyOpen(path: string, roots: string[], mode: FileAccess): Promise<FileHandle> {
+  if (!allowedFilePath(path, roots, mode)) throw new ServerFileError(403, 'File access is not allowed')
+  // Do not open devices/FIFOs for metadata. Recheck the actual opened descriptor too.
+  if (!(await stat(path)).isFile()) throw new ServerFileError(415, 'Only regular files can be opened')
   let handle: FileHandle
   try { handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK) }
   catch (error) {
@@ -54,23 +56,49 @@ async function policyOpen(path: string, roots: string[]): Promise<FileHandle> {
     // Verify the opened descriptor, not just the earlier pathname: parent
     // directories can be replaced with symlinks between realpath and open.
     const openedPath = await realpath(`/proc/self/fd/${handle.fd}`)
-    if (!allowedFilePath(openedPath, roots) || !(await handle.stat()).isFile()) throw new ServerFileError(403, 'File access is not allowed')
+    if (!allowedFilePath(openedPath, roots, mode) || !(await handle.stat()).isFile()) throw new ServerFileError(403, 'File access is not allowed')
+    // proc/sys/debug/trace/security/cgroup regular-looking nodes are kernel interfaces,
+    // not ordinary files. Reject before the first read, including aliases/symlinks.
+    const filesystem = await statfs(`/proc/self/fd/${handle.fd}`)
+    if ([0x9fa0, 0x62656572, 0x64626720, 0x74726163, 0x73636673, 0x27e0eb, 0x63677270].includes(filesystem.type)) throw new ServerFileError(415, 'Virtual kernel files cannot be streamed')
     return handle
   } catch (error) { await handle.close(); throw error }
 }
 export async function openInspectedFile(file: ServerFileInfo): Promise<FileHandle> {
   const policy = inspected.get(file)
   if (!policy) throw new ServerFileError(403, 'File must be inspected before reading')
-  const handle = await policyOpen(file.path, policy.roots)
-  const metadata = await handle.stat()
-  if (metadata.dev !== policy.dev || metadata.ino !== policy.ino || metadata.size !== file.size || metadata.mtime.toISOString() !== file.modifiedAt) {
-    await handle.close(); throw new ServerFileError(409, 'File changed; open it again')
+  let handle: FileHandle | undefined
+  try {
+    handle = await policyOpen(file.path, policy.roots, policy.mode)
+    const metadata = await handle.stat()
+    if (metadata.dev !== policy.dev || metadata.ino !== policy.ino || metadata.size !== file.size || metadata.mtime.toISOString() !== file.modifiedAt) {
+      throw new ServerFileError(409, 'File changed; open it again')
+    }
+    return handle
+  } catch (error) {
+    await handle?.close()
+    if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) throw new ServerFileError(409, 'File changed; open it again')
+    if (['EACCES', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) throw new ServerFileError(403, 'File is not readable')
+    throw error
   }
-  return handle
 }
-export async function readInspectedFile(file: ServerFileInfo): Promise<Buffer> {
+export async function readInspectedFile(file: ServerFileInfo, limit = MAX_PPTX_PREVIEW_BYTES, live?: () => void): Promise<Buffer> {
   const handle = await openInspectedFile(file)
-  try { return await handle.readFile() } finally { await handle.close() }
+  try {
+    live?.()
+    if (file.size > limit) throw new ServerFileError(413, 'File exceeds the buffered preview limit')
+    // Read exactly the inspected size: a concurrent append cannot grow memory use.
+    const bytes = Buffer.alloc(file.size)
+    let offset = 0
+    while (offset < bytes.length) {
+      live?.()
+      const read = await handle.read(bytes, offset, Math.min(64 * 1024, bytes.length - offset), offset)
+      live?.()
+      if (!read.bytesRead) throw new ServerFileError(409, 'File changed; open it again')
+      offset += read.bytesRead
+    }
+    return bytes
+  } finally { await handle.close() }
 }
 
 function binaryKind(extension: string, bytes: Buffer): Pick<ServerFileInfo, 'kind' | 'contentType'> | null {
@@ -100,15 +128,16 @@ function binaryKind(extension: string, bytes: Buffer): Pick<ServerFileInfo, 'kin
 function textExtension(name: string): string {
   const lower = name.toLowerCase()
   if (lower.endsWith('.env.example')) return '.env.example'
+  if (lower === '.env' || lower.startsWith('.env.')) return '.env'
   return extname(lower)
 }
 
-export async function inspectServerFile(input: unknown, workspaceRoots: string[]): Promise<ServerFileInfo> {
+export async function inspectServerFile(input: unknown, workspaceRoots: string[], mode: FileAccess = 'restricted'): Promise<ServerFileInfo> {
   if (typeof input !== 'string' || input.length === 0 || input.length > 4096 || !isAbsolute(input)) {
     throw new ServerFileError(400, 'File path must be an absolute path')
   }
 
-  if (!allowedFilePath(input, workspaceRoots)) throw new ServerFileError(403, 'File access is not allowed')
+  if (!allowedFilePath(input, workspaceRoots, mode)) throw new ServerFileError(403, 'File access is not allowed')
   let path: string
   try {
     path = await realpath(resolve(input))
@@ -119,14 +148,14 @@ export async function inspectServerFile(input: unknown, workspaceRoots: string[]
     throw error
   }
 
-  if (!allowedFilePath(path, workspaceRoots)) {
+  if (!allowedFilePath(path, workspaceRoots, mode)) {
     throw new ServerFileError(403, 'File is outside the configured file roots')
   }
 
   let metadata
   let leadingBytes: Buffer
   try {
-    const handle = await policyOpen(path, workspaceRoots)
+    const handle = await policyOpen(path, workspaceRoots, mode)
     try {
       metadata = await handle.stat()
       const buffer = Buffer.alloc(16)
@@ -140,7 +169,7 @@ export async function inspectServerFile(input: unknown, workspaceRoots: string[]
     if (code === 'EACCES' || code === 'EPERM') throw new ServerFileError(403, 'File is not readable')
     throw error
   }
-  const remember = (file: ServerFileInfo) => { inspected.set(file, { roots: [...workspaceRoots], dev: metadata.dev, ino: metadata.ino }); return file }
+  const remember = (file: ServerFileInfo) => { inspected.set(file, { roots: [...workspaceRoots], mode, dev: metadata.dev, ino: metadata.ino }); return file }
   const name = basename(path)
   const extension = textExtension(name)
   const detected = binaryKind(extension, leadingBytes)
@@ -160,7 +189,9 @@ export async function inspectServerFile(input: unknown, workspaceRoots: string[]
     })
   }
 
+  const plainLeadingBytes = !leadingBytes.some(byte => byte === 0 || (byte < 32 && ![9, 10, 13].includes(byte)))
   const text = TEXT_EXTENSIONS.has(extension) || TEXT_FILENAMES.has(name)
+    || (mode === 'owner-full' && (name.startsWith('.') || !extension) && plainLeadingBytes)
   if (text) {
     return remember({
       path,
@@ -222,6 +253,7 @@ export async function serveServerFile(
   res: ServerResponse,
   file: ServerFileInfo,
   download: boolean,
+  live?: () => void,
 ): Promise<void> {
   if (!download && !file.previewable) {
     throw new ServerFileError(file.kind === 'text' ? 413 : 415, file.kind === 'text'
@@ -240,6 +272,7 @@ export async function serveServerFile(
   }
 
   const handle = await openInspectedFile(file)
+  try { live?.() } catch (error) { await handle.close(); throw error }
   const start = range?.start ?? 0
   const end = range?.end ?? Math.max(0, file.size - 1)
   const contentLength = file.size === 0 ? 0 : end - start + 1

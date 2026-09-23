@@ -3,7 +3,7 @@ import { chown, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { MAX_PPTX_PREVIEW_BYTES, openInspectedFile, ServerFileError, type ServerFileInfo } from './server-files.js'
+import { MAX_PPTX_PREVIEW_BYTES, readInspectedFile, ServerFileError, type ServerFileInfo } from './server-files.js'
 
 const exec = promisify(execFile)
 const MAX_PDF_BYTES = 32 * 1024 * 1024
@@ -15,14 +15,8 @@ export async function convertPptx(file: ServerFileInfo, live?: () => void): Prom
   const directory = await mkdtemp(join(tmpdir(), 'codex-pptx-'))
   try {
     live?.()
-    const source = await openInspectedFile(file)
-    try {
-      const metadata = await source.stat()
-      if (!metadata.isFile() || metadata.size > MAX_PPTX_PREVIEW_BYTES) throw new ServerFileError(413, 'PPTX quá lớn để xem trước (tối đa 20 MB).')
-      if (metadata.size !== file.size || metadata.mtime.toISOString() !== file.modifiedAt) throw new ServerFileError(409, 'Tệp vừa thay đổi. Hãy mở lại bản xem trước.')
-      const bytes = await source.readFile(); live?.()
-      await writeFile(join(directory, 'slides.pptx'), bytes, { mode: 0o644 })
-    } finally { await source.close() }
+    const bytes = await readInspectedFile(file, MAX_PPTX_PREVIEW_BYTES, live); live?.()
+    await writeFile(join(directory, 'slides.pptx'), bytes, { mode: 0o644 })
     live?.()
     await chown(join(directory, 'slides.pptx'), 65534, 65534)
     live?.()
