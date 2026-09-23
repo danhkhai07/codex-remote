@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Run the unchanged Hours generator against this instance's own native logs/state.
 
-Only the two native input paths and output ROOT are rebound. The accepted generator
-functions, pause handling, template and backend remain byte-for-byte unchanged.
+The native paths/output ROOT are isolated. An optional timestamp-only aggregate
+baseline preserves historical estimates after an authorized archive purge. The
+accepted generator file, pause handling, template and backend stay unchanged.
 """
 import argparse
 import hashlib
 import importlib.util
+import json
+import math
 from pathlib import Path
 import sys
 import types
@@ -38,6 +41,26 @@ def load(generator, native, hours):
     original = module.read_activity
     scope = dict(original.__globals__, Path=input_path)
     module.read_activity = types.FunctionType(original.__code__, scope, original.__name__, original.__defaults__, original.__closure__)
+    baseline = hours / 'activity-baseline.json'
+    if baseline.exists():
+        saved = json.loads(baseline.read_text())
+        pairs = saved['activityIntervals']
+        if saved.get('version') != 1 or len(pairs) > 100_000:
+            raise ValueError('Invalid aggregate Hours baseline')
+        for pair in pairs:
+            if len(pair) != 2 or any(type(v) not in (int, float) or not math.isfinite(v) or v < 0 for v in pair) or pair[1] < pair[0]:
+                raise ValueError('Invalid aggregate Hours interval')
+        original_read = module.read_activity
+
+        def read_with_baseline(now, idle_minutes=module.DEFAULT_IDLE_MINUTES):
+            intervals, observed, count = original_read(now, idle_minutes)
+            historical = [(module.datetime.fromtimestamp(a / 1000, module.TZ), module.datetime.fromtimestamp(b / 1000, module.TZ)) for a, b in pairs]
+            if any(b > now for _a, b in historical):
+                raise ValueError('Future aggregate Hours baseline')
+            observed |= {module.date.fromisoformat(day) for day in saved['observedDays']}
+            return module.merge(historical + intervals), observed, count
+
+        module.read_activity = read_with_baseline
     return module
 
 
