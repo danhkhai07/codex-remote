@@ -32,7 +32,7 @@ async function fixture(realRouter = false, nativeFixture = false) {
  cleanups.push(()=>appServer.stop())
  const controller=new RemoteController(config,appServer,vault)
  let effects=0
- const server:Server=realRouter?createRemoteHttpServer(config,controller,files,null):createServer((req,res)=>{void secure.handle(req,res,async (inside,result)=>{if(inside.method==='POST')effects++;result.setHeader('Content-Type','application/json');result.end(JSON.stringify({canary:'REVIEW ONLY',effects}))})})
+ const server:Server=realRouter?createRemoteHttpServer(config,controller,files,null):createServer((req,res)=>{void secure.handle(req,res,async (inside,result)=>{if(inside.method==='POST')effects++;result.setHeader('Content-Type','application/json');result.end(JSON.stringify(inside.url==='/api/session'?{csrf:issued.payload.csrf,expiresAt:issued.payload.expiresAt}:{canary:'REVIEW ONLY',effects}))})})
  await new Promise<void>(ok=>server.listen(0,'127.0.0.1',ok));config.port=(server.address() as AddressInfo).port;config.publicOrigin=new URL('http://127.0.0.1:'+config.port)
  cleanups.push(async()=>{server.closeAllConnections();await new Promise<void>(ok=>server.close(()=>ok()))})
  const headers={Origin:config.publicOrigin.origin,Cookie:'codex_remote_session='+issued.token},nativeFetch=globalThis.fetch
@@ -126,10 +126,11 @@ it.each(['get', 'body'] as const)('R2 does not refetch after Lock while awaiting
  vi.spyOn(CipherCache.prototype,'body').mockImplementation(async()=>{entered.resolve();await gate.promise;throw Error('storage/decryption failed')})
  const spy=vi.spyOn(api.secureTransport,'request')
  const pending=api.secureFetch('/api/read');await entered.promise
- const dispatched=spy.mock.calls.length
+ const reads=()=>spy.mock.calls.filter(([path])=>path==='/api/read').length
+ const dispatched=reads()
  api.lockSecure(false,false);await api.unlockSecure(f.material.key);gate.resolve()
  await expect(pending).rejects.toThrow(/cancel/i)
- expect(spy.mock.calls.length).toBe(dispatched)
+ expect(reads()).toBe(dispatched) // Fresh unlock authorizes /api/session, never replays the stale /api/read.
  expect(api.secureUnlocked()).toBe(true)
 })
 it.each(['rename', 'archive', 'resume', 'interrupt', 'turn', 'skills'] as const)('R3 controller %s never dispatches a new native effect after an awaited precondition', async action => {

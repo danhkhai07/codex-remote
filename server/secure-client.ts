@@ -3,16 +3,19 @@ import { decodeProtectedHeader } from 'jose'
 import { channelKey, context, FRAME_BYTES, frameBytes, importOwner, jsonBytes, MAX_REQUEST_BYTES, randomId, seal, text, unseal, webBytes, wireLines, type Challenge, type SecureMetadata } from './secure-wire.js'
 import type { ResponseMeta } from './secure-response.js'
 export class SecureTransportError extends Error { constructor(readonly status: number, message: string) { super(message) } }
-type Ready = { id: string; request: SecureKey; response: SecureKey; expires: number }
+export type SecureIdentity = { app: string; generation: string; binding: string }
+type Ready = { id: string; request: SecureKey; response: SecureKey; expires: number; identity: SecureIdentity }
 export class SecureTransport {
   #owner?: SecureKey
   #channel?: Ready
   #connecting?: Promise<void>
+  #identity?: SecureIdentity
   #epoch = 0
   #requests = new Set<AbortController>()
   constructor(readonly fetcher: typeof fetch = globalThis.fetch.bind(globalThis), readonly origin = '', readonly publicHeaders: ConstructorParameters<typeof Headers>[0] = {}) {}
   get unlocked() { return Boolean(this.#owner) }
   get owner() { return this.#owner }
+  get identity() { return this.#channel?.identity }
   async setup(): Promise<SecureMetadata> {
     const res = await this.#public('/api/secure/setup')
     if (!res.ok) throw new SecureTransportError(res.status, 'Secure setup unavailable')
@@ -24,13 +27,15 @@ export class SecureTransport {
     const headers = new Headers(this.publicHeaders); new Headers(init.headers).forEach((v, k) => headers.set(k, v))
     return this.fetcher(this.origin + path, { ...init, headers, credentials: 'same-origin', cache: 'no-store' })
   }
-  async unlock(value: string) {
-    this.lock(); const epoch = this.#epoch, owner = await importOwner(value)
+  async unlock(value: string | SecureKey, expected?: SecureIdentity) {
+    this.lock(); const epoch = this.#epoch, owner = typeof value === 'string' ? await importOwner(value) : value
     if (epoch !== this.#epoch) throw Error('Unlock cancelled')
+    if (!(owner instanceof CryptoKey) || owner.extractable || owner.type !== 'secret' || owner.algorithm.name !== 'HKDF' || owner.usages.join(',') !== 'deriveKey') throw Error('Invalid owner capability')
     this.#owner = owner
+    this.#identity = expected
     try { await this.connect(); if (epoch !== this.#epoch) throw Error('Unlock cancelled') } catch (error) { if (epoch === this.#epoch) this.lock(); throw error }
   }
-  lock() { this.#epoch++; this.#owner = undefined; this.#channel = undefined; this.#connecting = undefined; for (const controller of this.#requests) controller.abort(); this.#requests.clear() }
+  lock() { this.#epoch++; this.#owner = undefined; this.#channel = undefined; this.#identity = undefined; this.#connecting = undefined; for (const controller of this.#requests) controller.abort(); this.#requests.clear() }
   async connect() {
     if (this.#channel && this.#channel.expires > Date.now() + 5000) return
     if (this.#connecting) return this.#connecting
@@ -44,6 +49,8 @@ export class SecureTransport {
       if (!result.ok) throw new SecureTransportError(result.status, 'Sign in before unlocking')
       const challenge = await result.json() as Challenge; assertLive()
       if (challenge.v !== 1 || challenge.expiresAt <= Date.now()) throw Error('Invalid challenge')
+      const identity = { app: challenge.app, generation: challenge.generation, binding: challenge.binding }
+      if (this.#identity && (Object.keys(identity) as (keyof SecureIdentity)[]).some(key => identity[key] !== this.#identity![key])) throw new SecureTransportError(401, 'Remembered device belongs to another session or key')
       const proof = await seal(await channelKey(owner, challenge, 'proof'), context(challenge.channel, 'proof', challenge.id, 0, 'proof'), jsonBytes({ challenge: challenge.id }))
       assertLive()
       const response = await this.#public('/api/secure/handshake', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: challenge.id, proof }) })
@@ -54,7 +61,8 @@ export class SecureTransport {
       const ack = JSON.parse(text.decode(await unseal(responseKey, context(challenge.channel, 'response', challenge.id, 0, 'ready'), ready.proof)))
       const requestKey = await channelKey(owner, challenge, 'request')
       if (ready.channel !== challenge.channel || ack.ready !== true || !Number.isFinite(ack.expiresAt) || epoch !== this.#epoch) throw Error('Stale handshake')
-      this.#channel = { id: ready.channel, request: requestKey, response: responseKey, expires: ack.expiresAt }
+      this.#identity = identity
+      this.#channel = { id: ready.channel, request: requestKey, response: responseKey, expires: ack.expiresAt, identity }
     })()
     this.#connecting = operation
     try { await operation } finally { if (this.#connecting === operation) this.#connecting = undefined }
