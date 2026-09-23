@@ -45,7 +45,7 @@ try {
     page.on('pageerror', error => errors.push(error.message))
     page.on('request', req => { if (req.url().includes('/api/')) network.push({ path: new URL(req.url()).pathname, body: req.postData() || '' }) })
     await page.goto(config.publicOrigin.origin)
-    await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller) && performance.getEntriesByType('navigation')[0]?.type === 'reload')
+    await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller))
     await page.getByRole('button', { name: 'Đăng nhập lại', exact: true }).click()
     await page.getByLabel('Mật khẩu đăng nhập', { exact: true }).fill(config.password)
     await page.getByRole('button', { name: 'Đăng nhập', exact: true }).click()

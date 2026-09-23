@@ -8,6 +8,7 @@ import { App } from './App'
 import { AppRecovery } from './AppRecovery'
 import { flushScreenState } from './screenState'
 import { installPwaZoomLock } from './pwaZoom'
+import { installControllerReload } from './pwaController'
 import './styles.css'
 
 const KnowledgePage = lazy(() => import('./KnowledgePage').then(module => ({ default: module.KnowledgePage })))
@@ -41,10 +42,7 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
       window.setInterval(() => void registration.update(), 60 * 60 * 1_000)
     }).catch(() => undefined)
 
-    let refreshing = false
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (refreshing) return
-      refreshing = true
+    installControllerReload(navigator.serviceWorker, () => {
       flushScreenState()
       window.location.reload()
     })

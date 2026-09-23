@@ -48,8 +48,8 @@ try {
   page.on('request', req => { if (req.url().includes('/api/')) requests.push({ url: req.url(), body: req.postData() ?? '' }) })
   const errors = []; page.on('pageerror', error => { errors.push(error.message); console.error(error.stack) })
   await page.goto(config.publicOrigin.origin)
-  // First activation claims the page and the existing PWA handler reloads it.
-  await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller) && performance.getEntriesByType('navigation')[0]?.type === 'reload')
+  // First activation claims the current page without discarding its RAM key.
+  await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller))
   try { await page.getByRole('button', { name: 'Đăng nhập lại', exact: true }).click() }
   catch (error) { console.error(JSON.stringify({ errors, text: await page.locator('body').innerText(), setup: await page.evaluate(async () => (await fetch('/api/secure/setup')).json()) })); throw error }
   await page.getByLabel('Mật khẩu đăng nhập', { exact: true }).fill(config.password)
