@@ -75,7 +75,8 @@ try {
     await unlock()
     const verify = async () => {
       const frame = page.frameLocator('iframe')
-      await frame.locator('#today-worked').filter({ hasText: '2 giờ 15 phút' }).waitFor()
+      await frame.locator('.bar-column').last().filter({ hasText: '2h 15m' }).waitFor()
+      assert.equal(await frame.locator('#today-worked').count(), 0)
       await frame.getByRole('button', { name: 'Tiếp tục', exact: true }).waitFor()
       assert.equal(await frame.locator('body').evaluate(body => body.scrollWidth > innerWidth), false)
     }
