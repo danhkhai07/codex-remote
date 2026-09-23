@@ -3061,3 +3061,6 @@ html.browser-scroll-locked, html.browser-scroll-locked body { overflow: hidden; 
 .secure-gate-switch { min-height: 44px; justify-content: center; }
 .secure-gate input { min-width: 0; font-size: 16px; }
 .secure-gate .error-banner { overflow-wrap: anywhere; }
+.trusted-device-choice { display: flex; align-items: flex-start; gap: 10px; min-height: 44px; cursor: pointer; }
+.trusted-device-choice input[type='checkbox'] { width: 20px; height: 20px; min-height: 20px; margin: 2px 0 0; padding: 0; flex-shrink: 0; accent-color: var(--accent); }
+.trusted-device-choice small { display: block; margin-top: 5px; font-weight: normal; line-height: 1.45; color: var(--muted); }
