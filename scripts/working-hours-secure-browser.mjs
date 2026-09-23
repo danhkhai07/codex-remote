@@ -80,9 +80,11 @@ try {
       assert.equal(await frame.locator('body').evaluate(body => body.scrollWidth > innerWidth), false)
     }
     await verify()
+    assert.equal(await page.title(), 'Working hours · Flint Software')
     const reads = hoursReads
     await page.goto(config.publicOrigin.origin + '/files?' + new URLSearchParams({ path: dashboard }))
     await unlock(); await verify()
+    await page.waitForFunction(() => document.title === 'index.html · Codex Remote')
     assert.ok(hoursReads > reads, 'Files NEW dashboard attaches shared API bridge')
     now += 60000
     assert.equal(readFileSync(join(files, 'working-hours-state.json'), 'utf8'), stateBefore)

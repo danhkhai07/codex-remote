@@ -23,16 +23,22 @@ helper; Hours modifies the template and shared timer path. No competing product
 hunks or package/lock changes. Live owner Files, remembered device, mobile login
 and PWA source remain inherited. No backend Hours or generator changes.
 
-**Files browser-title task `fb24d24d` is not included.** At integration,
-`fix/files-browser-title` still pointed to its Services base `44dd726`; no product
-commit had been handed over. Do not copy its dirty checkout or wait/poll for it.
-Leader can add the eventual reviewed commit and rerun affected checks/build to
-produce a new matching client/manifest. This candidate must not be described as
-including that feature.
+Files browser-title `51ad6daa6be4bb975c75851930694ce4922106d7` is now
+included once as `deaebfb` (follow-up task `b77a7dd6`). It contributes only the
+shared FileViewer title effect, fake browser fixture and documentation; no
+backend was copied from CR2's frontend branch. Hours fixture now explicitly
+checks the standalone page title and authenticated `index.html` Files title.
 
-CR4 owns Hours publication task `c9f7285e`. Its frontend/template release is
-independent of this preparation. Do not compete for publication or use an older
-frontend baseline to roll it back.
+CR4 completed Hours publication task `c9f7285e`: immutable receipt
+`/root/.local/state/codex-remote-secure/releases/hours-c9f7285e/LIVE.json`,
+2026-09-23 20:53:14 +07. Frontend source `7b8fd6b`, live entry
+`index-0ryuT-KQ.js`, HTML SHA256
+`d9cf905637c8b9ffb8971a0431b65fddbd92acc246e51800033a5189ec07c6ab`;
+template SHA256 `b2b5f55f45f151391e274cc8b3f20c62eab025b9bc22f094b4ec470422537b81`.
+Its verified receipt covers local/public assets and encrypted Hours/Files at
+1280/390/320, without gateway restart. Preserve that publication. The final
+inventory captures a fresh post-Hours code baseline and checks these hashes;
+activation still requires drift revalidation under the shared publication lock.
 
 ## Checks and evidence
 
@@ -86,8 +92,7 @@ regenerate Hours. If either is different, stop and reconcile with CR4/root.
 
 ## NEW-only ALL-idle runbook for the subsequent activation stage
 
-1. Obtain CR4's completed publication/live verification receipt, and leader's
-   decision to include or explicitly defer Files title. Verify exact remote
+1. Revalidate the captured CR4 live receipt and included Files title source. Verify exact remote
    source commit, clean checkout, candidate checks and hashes. If adding source,
    rebuild the matching client and replace the inventory before proceeding.
 2. Create a new private immutable release directory under
@@ -149,6 +154,20 @@ regenerate Hours. If either is different, stop and reconcile with CR4/root.
    mutable state, rotate keys or resurrect OLD. If the API is unavailable and
    idle cannot be established, stop for leader recovery rather than infer idle.
 
-Remaining activation gates are concrete: CR4 live receipt/fresh baseline, Files
-title scope resolution, exact reviewed release runner/seal and ALL-idle. This
+Remaining activation gates are concrete: revalidation of the post-Hours baseline,
+exact reviewed release runner/seal and ALL-idle. CR4 receipt and Files title
+integration are now complete. This
 preparation neither arms a watcher nor requests new user authorization.
+
+## Files-title follow-up validation and final inventory
+
+Use `/tmp/push-services-hours-title-check.log` and
+`/tmp/push-services-hours-title-evidence/candidate-manifest.json` for the final
+candidate, superseding the earlier inventory. No backend source changed after
+the 588+11 full check. Incremental checks cover lint/typecheck, FileViewer/Hours/
+timer/notification unit tests, matched client build/PWA, owner Files title with
+App close/navigation/Lock at 1280/390/320, Push at 1280/390 and encrypted Hours/
+Files title at 1280/390/320. All passed, including 21 focused unit tests and zero
+lint warnings. All use disposable fake data and native RPCs.
+The manifest is still an inventory, not an armed release or executable deploy
+runner. No activation, publication or production mutation was performed here.
