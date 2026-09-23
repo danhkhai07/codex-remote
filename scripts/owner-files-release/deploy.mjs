@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import { parseEnv } from 'node:util'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { hash, sha, tree, same, identity, atomic, ownerEnv, workflow, idle, publicationLock } from './core.mjs'
+import { hash, sha, tree, same, identity, atomic, ownerEnv, workflow, idle, publicationLock, backendDelta } from './core.mjs'
 const RUNTIME = '/root/RUNNING-SERVICES/codex-remote-secure', OLD = '/root/RUNNING-SERVICES/codex-remote'
 const STATE = '/root/.local/state/codex-remote-secure', ENV = STATE + '/instance.env', KEY = STATE + '/secure-owner/owner-key.json'
 const SERVICE = 'codex-remote-secure.service', OLD_SERVICE = 'codex-remote.service', ORIGIN = 'https://remote.danhkhai.io.vn'
@@ -43,7 +43,8 @@ async function prepare(release, evidenceFile) {
   same(hash(worktree + '/package.json'), base.dependencies.package, 'Package source')
   same(hash(worktree + '/package-lock.json'), base.dependencies.lock, 'Dependency lock')
   const compiled = tree(worktree + '/dist-server')
-  const changed = [...new Set([...Object.keys(base.backend), ...Object.keys(compiled)])].filter(p => base.backend[p] !== compiled[p]).map(p => 'dist-server/' + p).sort()
+  const { changed, preserved } = backendDelta(base.backend, compiled)
+  assert(!git('diff', '10f52e9410dd593e9182483701f043b43338ccf1', '--', 'server/event-hub.ts'), 'Unrelated EventHub source changed')
   same(changed, [...backend].sort(), 'Compiled backend allowlist')
   mkdirSync(release, { recursive: true, mode: 0o700 })
   const payload = {}
@@ -56,7 +57,7 @@ async function prepare(release, evidenceFile) {
   for (const path of [...backend, ...maintenance]) atomic(release + '/validation/' + path, readFileSync(release + '/payload/' + path))
   symlinkSync(base.dependencies.path, release + '/validation/node_modules')
   for (const path of ['deploy.mjs', 'core.mjs']) copyFileSync(join(worktree, 'scripts/owner-files-release', path), join(release, path))
-  const manifest = { version: 1, source: git('rev-parse', 'HEAD'), worktree, at: new Date().toISOString(), base, payload, frozen, validation: { 'package.json': hash(release + '/validation/package.json'), ...Object.fromEntries(Object.entries(tree(release + '/validation/dist-server')).map(([p, h]) => ['dist-server/' + p, h])), ...Object.fromEntries(Object.entries(tree(release + '/validation/scripts')).map(([p, h]) => ['scripts/' + p, h])) }, evidence, runner: { 'deploy.mjs': hash(release + '/deploy.mjs'), 'core.mjs': hash(release + '/core.mjs') } }
+  const manifest = { version: 1, source: git('rev-parse', 'HEAD'), worktree, at: new Date().toISOString(), base, payload, frozen, preservedBuildDifferences: preserved, validation: { 'package.json': hash(release + '/validation/package.json'), ...Object.fromEntries(Object.entries(tree(release + '/validation/dist-server')).map(([p, h]) => ['dist-server/' + p, h])), ...Object.fromEntries(Object.entries(tree(release + '/validation/scripts')).map(([p, h]) => ['scripts/' + p, h])) }, evidence, runner: { 'deploy.mjs': hash(release + '/deploy.mjs'), 'core.mjs': hash(release + '/core.mjs') } }
   atomic(release + '/manifest.json', JSON.stringify(manifest, null, 2) + '\n')
   atomic(release + '/seal.json', JSON.stringify({ manifestSHA256: hash(release + '/manifest.json') }) + '\n')
   console.log(JSON.stringify({ status: 'prepared-not-armed', release, source: manifest.source, backend: changed.length, client: Object.keys(payload).filter(p => p.startsWith('dist/')).length, seal: hash(release + '/seal.json') }))

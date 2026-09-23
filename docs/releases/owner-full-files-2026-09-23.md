@@ -79,7 +79,11 @@ Publish the complete matching client, retaining old hashed assets; index.html
 last. Matching maintenance scripts: `scripts/secure-maintenance.mjs`,
 `scripts/secure-key.mjs`, `scripts/remote-instance/prestart.mjs` only.
 The key CLI is published for compatibility; **do not invoke init/rotate**.
-No dependency change or full dist-server copy.
+No dependency change or full dist-server copy. The installed EventHub source map
+has a pre-existing mismatch (installed a9f820a3 / rebuilt ad743999); EventHub JS
+and TS source are unchanged. The builder permits only those exact map hashes,
+records them in `preservedBuildDifferences`, and preserves the installed map.
+No EventHub artifact enters this release. Any other extra delta aborts.
 
 Only two env fields change in the NEW private instance.env, with all other
 values preserved in memory and no secret logging:

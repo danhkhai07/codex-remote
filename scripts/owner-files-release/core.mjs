@@ -90,3 +90,18 @@ export async function workflow(ops) {
     throw error
   } finally { ops.releasePublication?.() }
 }
+
+// Installed baseline carries an older EventHub debug map, while its JS is exactly
+// the current source output. Preserve this excluded runtime file, never publish it.
+export function backendDelta(base, compiled) {
+  const changes = [...new Set([...Object.keys(base), ...Object.keys(compiled)])].filter(p => base[p] !== compiled[p])
+  const preserved = {}
+  const path = 'event-hub.js.map'
+  if (changes.includes(path)) {
+    same(base[path], 'a9f820a365e6cca09a1cbce123381795f1eba328b6f5572b70a6503c64f08c33', 'Excluded EventHub installed map')
+    same(compiled[path], 'ad743999f176f42d0277b3122bcc17ad0f1d51f60831468c1fed9bf024747fa2', 'Excluded EventHub build map')
+    assert(base['event-hub.js'] && base['event-hub.js'] === compiled['event-hub.js'], 'EventHub executable must be byte-identical')
+    preserved[path] = { installed: base[path], compiled: compiled[path], reason: 'Known pre-existing debug-map-only discrepancy; installed bytes preserved' }
+  }
+  return { changed: changes.filter(p => !Object.hasOwn(preserved, p)).map(p => 'dist-server/' + p).sort(), preserved }
+}

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { atomic, ownerEnv, workflow, hash, same, identity, publicationLock } from './core.mjs'
+import { atomic, ownerEnv, workflow, hash, same, identity, publicationLock, backendDelta } from './core.mjs'
 const yes = { ready: true, busy: 0, pending: 0, incomplete: false }, no = { ...yes, ready: false, busy: 1 }
 function fixture(checks = [yes, yes, yes, yes, yes, yes]) {
   const root = mkdtempSync(join(tmpdir(), 'owner-rollout-')), target = join(root, 'module.js'), calls = [], states = []
@@ -99,4 +99,14 @@ test('shared publication lock refuses another deployment and never reclaims a ch
     const second = publicationLock(path, { task: 'SECOND' }); atomic(join(path, 'owner.json'), Buffer.from('FOREIGN RECEIPT'))
     assert.throws(second); assert.equal(readFileSync(join(path, 'owner.json'), 'utf8'), 'FOREIGN RECEIPT')
   } finally { f.close() }
+})
+
+test('only the known pre-existing EventHub map discrepancy is excluded; executable or new map drift fails', () => {
+  const base = { 'event-hub.js': 'SAME EXECUTABLE', 'event-hub.js.map': 'a9f820a365e6cca09a1cbce123381795f1eba328b6f5572b70a6503c64f08c33', 'config.js': 'OLD' }
+  const compiled = { ...base, 'event-hub.js.map': 'ad743999f176f42d0277b3122bcc17ad0f1d51f60831468c1fed9bf024747fa2', 'config.js': 'NEW' }
+  const result = backendDelta(base, compiled); assert.deepEqual(result.changed, ['dist-server/config.js']); assert.equal(result.preserved['event-hub.js.map'].installed, base['event-hub.js.map'])
+  assert.throws(() => backendDelta(base, { ...compiled, 'event-hub.js': 'CHANGED' }))
+  assert.throws(() => backendDelta(base, { ...compiled, 'event-hub.js.map': 'UNKNOWN' }))
+  assert.throws(() => backendDelta({ ...base, 'event-hub.js.map': 'UNEXPECTED BASE' }, compiled))
+  assert(backendDelta(base, { ...compiled, 'unrelated.js': 'NEW' }).changed.includes('dist-server/unrelated.js'))
 })
