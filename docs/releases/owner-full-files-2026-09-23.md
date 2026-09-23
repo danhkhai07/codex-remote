@@ -31,7 +31,7 @@ The missing Open action and raw conversation/new-tab URLs now use the app viewer
 in the current unlocked viewer; modified clicks retain browser link behavior.
 HTML remains sandboxed. Download uses the existing encrypted stream/save flow.
 
-## Validation commands — NOT recorded as passed
+## Validation commands
 
 Run from this worktree, with the accepted dependency installation linked as
 node_modules and no production credentials inherited. All checks
@@ -97,8 +97,9 @@ helper identity. Back up artifact/env preimages privately; no database restore.
 Hours JS must remain
 `b763a0f7b74c0341684e196855e85b3f5e3b123915a373b27463c17916702e93`, map
 `6a76da381331d7a802da5d844d341da742f0bfc3809f0cfe3b74370d55c42fb8`.
-No Vault/native/history/session/Hours data mutation, Nginx/preview changes or
-old-instance artifact replacement. Preserve the existing key identity.
+Publication never replaces Vault/native/history/session/Hours data; postverify
+updates only the named task/project notes and Services through the API. No
+Nginx/preview changes or old-instance artifact replacement. Preserve the existing key identity.
 
 The watcher must be scoped to **codex-remote-secure.service**, port **5174**,
 origin **https://remote.danhkhai.io.vn**, NEW instance.env and NEW marker.
@@ -108,8 +109,12 @@ zero-pending checks five seconds apart, plus a fresh check immediately before
 mutation/restart. Freeze/load the old maintenance/config import closure and
 old config before replacing files; it must still authenticate the current
 required-encrypted gateway while waiting. If drift, abort without overwriting.
-A tested new-service-specific watcher/runner and built/sealed manifest remain a
-prerequisite, not an artifact fabricated in this blocked environment.
+The NEW-only runner is `scripts/owner-files-release/deploy.mjs`, using the frozen
+original `restartReadiness`/maintenance/config closure. Apply, recovery verify
+and explicit code-only rollback share a private deployment lock. Actual
+publication/verification also acquires the existing host-wide cooperative
+`/root/.local/state/codex-remote/deployment.lock`; a foreign/stale owner is
+never reclaimed automatically.
 
 Only after fresh PID, unchanged old PID/runtime/config, both Hours hashes,
 unchanged key identity, local/public health + HTML + entry asset bytes,
@@ -118,15 +123,83 @@ and cookie-only denial pass may a NEW deployment marker say complete. Avoid any
 smoke of actual secrets. Update NEW Services metadata and Vault through NEW CLI.
 Existing tabs need Reload for the Open/link UI.
 
-## Current execution limitation
+## Current continuation (task 17468a2b)
 
-Sandbox is workspace-write/network-restricted with approval never.
-`codex-heavy` failed before execution: read-only `/var/log/codex-heavy`.
-NEW encrypted knowledge CLI failed `connect EPERM 127.0.0.1:5174`.
-`systemctl show` failed `Failed to connect to bus: Operation not permitted`.
-No permission bypass attempted. Full tests/build/browser have **not run**; no
-release payload/seal, arm/restart, live file smoke, Services or Vault write.
-Git push is also blocked: `Could not resolve hostname github.com: Temporary
-failure in name resolution`. Only source, fixtures and this exact rollout
-contract are prepared. The current
-native receipt reports `gpt-6-astra` / `xhigh`; do not label it max.
+Full Access/network are now available. Native receipt at 2026-09-23T10:27:05.885Z:
+`gpt-6-astra / xhigh`, sandbox `danger-full-access`, approval `never`.
+The previous workspace-write/network blocker is historical and superseded.
+
+The candidate also incorporates the two already-live menu/login commits
+0b6c787/1424647 (cherry-picked as 072d003/f19bda3), preserving the current UI. It also retains the live PWA first-controller-claim
+fix aed96d8 (022071e here); first claim does not reload away the RAM unlock.
+Browser acceptance caught a mobile CSS rule hiding Open; the narrow-screen
+link is now visible. Fixtures use disposable credentials/files/native messages,
+never a model turn or production file payload. Hours acceptance is read-only;
+its fixture rewrites only the dashboard path in a separate temporary build,
+never in the release client. Actual Hours JS/map/source/template remain intact.
+
+See the current private delivery/checks JSON for exact executed commands,
+counts, screenshot hashes and outcome. Do not interpret an earlier failed log
+as the latest receipt, or a prepared release as live. Actual Safari/iOS hardware
+is not covered by Chromium viewport tests.
+
+## NEW-only release commands and recovery
+
+Run all preparation/check scans through codex-heavy. Use a fresh immutable
+release directory after committing/pushing the final source; do not reuse an
+old seal. The helper requires a clean tracked tree and exactly the 16 compiled
+backend files listed above; matching dependency lock/package must be unchanged.
+
+```sh
+# From the task worktree; checks.json contains verified test receipts only.
+RELEASE=/root/.local/state/codex-remote-secure/releases/owner-files-COMMIT
+codex-heavy --label owner-files-stage -- /usr/local/bin/node \
+  scripts/owner-files-release/deploy.mjs prepare "$RELEASE" /PRIVATE/checks.json
+codex-heavy --label owner-files-preflight -- /usr/local/bin/node \
+  "$RELEASE/deploy.mjs" check "$RELEASE"
+# check validates bytes/config/startup and reports readiness; it never restarts.
+systemd-run --unit=codex-remote-secure-owner-files-COMMIT --collect \
+  --property=UMask=0077 --property=MemoryMax=512M --property=RuntimeMaxSec=14h \
+  --property=WorkingDirectory="$RELEASE" \
+  /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin \
+  /usr/local/bin/node "$RELEASE/deploy.mjs" apply "$RELEASE"
+```
+
+The runner performs complete/zero-pending readiness twice five seconds apart
+and again immediately before publication and ordinary NEW-only restart. Any
+turn arriving during publication must finish before restart. Source/config/
+key/process/excluded-byte drift aborts. OLD is inspected only, never targeted.
+The operator must end their active NEW turn after arming so it can become idle.
+No stock watcher command targeting codex-remote.service is invoked.
+
+The private backup contains code/client/config preimages only, never database,
+native/Vault/history/Hours data or a key copy. Publication writes only the exact
+allowlist, retains previous hashed assets, changes the two Files env fields and
+publishes index last. Frozen original maintenance still works while the old
+NEW-instance process is running. Ordinary future restart retains the key.
+
+Marker: `/root/.local/state/codex-remote-secure/owner-files-deploy.json`.
+`complete` requires fresh NEW PID; excluded bytes, OLD, key and Hours preserved;
+local/public health, HTML and entry asset SHA; encrypted harmless `/etc/hosts`
+read and cookie-only403; NEW Services and checked-revision knowledge updates.
+No actual secret payload is used as a file smoke.
+
+If postverification failed after publication/restart, inspect marker/evidence
+and service lifetime; do not rerun apply or restore state. A scoped retry is:
+
+```sh
+/usr/local/bin/node "$RELEASE/deploy.mjs" verify "$RELEASE"
+```
+
+For a reviewed code regression, explicit `rollback "$RELEASE"` validates sealed
+preimages and old/new-only installed bytes, waits for ALL NEW turns idle again,
+restores only code/client/env and restarts only NEW. It never restores data or
+regenerates a key. It is not automatic. A SIGKILL may leave the lock directory;
+verify its owning unit/process is gone before removing that exact empty lock.
+Unknown mutation outcomes require inspecting marker/runtime before choosing
+verify or rollback. Keep the worktree while the source baseline is guarded.
+
+Existing tabs need Reload to receive Open/link changes. No provision/rotation,
+old-instance retirement, Nginx/preview changes, or model turn is part of this
+release. Full owner Files deliberately lets an unlocked owner read secret files;
+login, proof, encryption and preview boundaries still apply.
