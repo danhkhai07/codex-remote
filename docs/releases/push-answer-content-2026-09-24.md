@@ -12,13 +12,15 @@ Source baseline b67d1dc817658b36102c156694b2eeb98e1626e3 (ec8638f lineage). Dedi
 - SW title is sanitized convo name only. Body uses authorized payload with bounded defensive validation. Click target, gate/unlock, draft handling, foreground suppression, ownership/expiry/revocation and native scheduling are unchanged.
 - No literal “From Codex Remote” exists in the notification formatter. Previous app-controlled group/Leader title is removed. Manifest still identifies the app (`Codex Remote Control`, short name `Codex Remote`). A separate source/app label displayed by the OS/browser is not a title/body field controlled by this formatter; physical-device attribution has not been inspected or tested. Do not rename the entire installed app to hide it.
 
-## Verification status: BLOCKED, not passed
+## Verification and rollout — 24/09/2026
 
-`git diff --check` passed. Authored regression coverage for exact-turn/final-only extraction, empty/malformed content, UTF-8/JSON size, retry/restart/coalesced answer snapshots and SW title/body, while retaining navigation/ownership tests. Browser fixture additionally intercepts actual worker display for leader/nonleader; all credentials/native RPCs are fake and no OS push is sent.
+Follow-up task 05f00d85-e207-49ff-85ff-11c2dfe788d6 authorizes arming the established NEW-only ALL-idle watcher after checks. Earlier sandbox blockers are resolved; the previous candidate-only handoff is superseded.
 
-Attempted `codex-heavy --label push-answer-full-check -- env TMPDIR=/tmp npm run check`; the sandbox rejected the runner's `/var/log/codex-heavy/...service.json` write with EROFS before tests/build. Do not run heavy commands outside that required runner as a workaround. No current app/build/browser/runner checks are claimed passed. No candidate dist, deployable package, fresh seal, screenshots or runtime changes were produced.
+At app/runner source47b4ecaa158ba75d150b525edc61b312b3472ae2, one sequential codex-heavy job passed: full npm check (589 Vitest tests/85 files, 11 restart-readiness checks, lint0, typecheck/client/server builds/PWA), real encrypted fake browser1280/390, 11 runner tests and runner syntax. The existing Vite large-chunk advisory remains. Evidence/logs/screenshots: `/tmp/push-answer-evidence`. No real push, model turn or user conversation mutation. A subsequent documentation-only commit reuses these exact checked artifacts with source-diff and hash verification.
 
-Knowledge revision-checked CLI read failed `connect EPERM 127.0.0.1:5174`, so the maintained Vault correction remains pending. A draft outside Vault is retained for leader to merge with a fresh CLI revision. This session does not expose a trustworthy actual model/effort receipt; no model/effort claim is inferred from prior task instructions.
+The actual previous LIVE payload still matches b67d1dc's completed release manifest, NEW PID2069608, OLD inactive/disabled. Preserve corrected Hours703ad317. This task prepares and arms one detached watcher, then ends without waiting for its own idle. Arming is NOT evidence of publication: the durable package status/verified.json is authoritative. Leader postverifies after all actual turns/reports settle. No current thread/task exemptions.
+
+Fresh revision-checked Vault writes record the user correction and previous verified LIVE status, preserving historical references. This session does not expose a trustworthy actual model/effort receipt; no model/effort claim is inferred from prior task instructions.
 
 ## Complete checks and prepare (leader environment)
 
@@ -30,7 +32,7 @@ codex-heavy --label push-answer-candidate -- env TMPDIR=/tmp /usr/local/bin/node
 
 This sequential job runs full npm check, real fake-HTTP/encrypted browser fixture (desktop/mobile), existing fake deployment/readiness tests and runner syntax. Only on success does it write hash-bound `candidate.json`. It also checks the previous LIVE payload has not drifted. No publication is performed. Screenshots and logs remain in the supplied evidence directory. Dependency links must not be committed.
 
-Then prepare a fresh private package (these commands do not arm/apply):
+Prepare a fresh private package (these commands do not arm/apply):
 
 ```sh
 node scripts/push-release/deploy.mjs prepare /root/.local/state/codex-remote-secure/releases/push-browser-answer-378b37ef /root/WORKTREES/cr-push-answer-content /tmp/push-answer-evidence/candidate.json
@@ -38,4 +40,4 @@ node /root/.local/state/codex-remote-secure/releases/push-browser-answer-378b37e
 node /root/.local/state/codex-remote-secure/releases/push-browser-answer-378b37ef/deploy.mjs check /root/.local/state/codex-remote-secure/releases/push-browser-answer-378b37ef
 ```
 
-Leader reviews candidate checks, manifest/seal and current baseline before separately activating. Runner still allows only controller/index/push JS/maps plus matching complete client/SW; it preserves Hours backend/template/state and all other runtime modules. Publication keeps the established lock/drift/code-only backup/encrypted ALL-idle (including queued own tasks)/single NEW restart/health and Files/Hours verification. No mutable state/key/VAPID/subscription restore. OLD remains disabled. Never reuse the completed prior release directory. A backend restart and client SW activation will be required eventually; this task has done neither.
+Review candidate checks, manifest/seal and fresh baseline before activating the user-authorized separate watcher using the established systemd pattern in push-browser-runner-2026-09-23.md. Runner still allows only controller/index/push JS/maps plus matching complete client/SW; it preserves Hours backend/template/state and all other runtime modules. Publication keeps the established lock/drift/code-only backup/encrypted ALL-idle (including queued own tasks)/single NEW restart/health and Files/Hours verification. No mutable state/key/VAPID/subscription restore. OLD remains disabled. Never reuse the completed prior release directory. A backend restart and client SW activation will be required eventually; the watcher may do these only after ALL-idle; do not claim them done merely from its launch.
