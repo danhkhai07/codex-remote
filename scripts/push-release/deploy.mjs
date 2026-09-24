@@ -68,7 +68,11 @@ function prepare(release, artifacts, evidencePath) {
   const worktree = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
   assert.equal(git(worktree, 'status', '--porcelain', '--untracked-files=no'), '', 'Dirty source')
   const evidence = json(evidencePath)
-  assert.equal(evidence.source, 'ec8638ff96c2266ca6cece6a6d48a49fc148aa5f', 'Expected reviewed combined build')
+  assert.equal(evidence.source, git(worktree, 'rev-parse', 'HEAD'), 'Evidence must match this candidate')
+  assert.equal(evidence.liveSource, 'b67d1dc817658b36102c156694b2eeb98e1626e3', 'Expected previously verified LIVE release')
+  assert.equal(evidence.checks?.status, 'passed', 'Build/check/browser evidence required before packaging')
+  for (const log of evidence.checks.logs ?? []) same(hash(log.path), log.sha256, 'Check log')
+  assert((evidence.checks.logs?.length ?? 0) >= 2, 'Require app and browser check logs')
   assert.equal(git(artifacts, 'rev-parse', 'HEAD'), evidence.source)
   // Reuse verified app artifacts only if runtime code/source remains identical.
   assert.equal(git(worktree, 'diff', evidence.source, '--', 'src', 'public', 'server', 'package.json', 'package-lock.json', 'vite.config.ts', 'index.html'), '')
@@ -82,11 +86,11 @@ function prepare(release, artifacts, evidencePath) {
   }
   const frozen = freeze(release + '/frozen'), runner = {}
   for (const p of runnerNames) { const bytes = readFileSync(dirname(fileURLToPath(import.meta.url)) + '/' + p); atomic(release + '/' + p, bytes); runner[p] = sha(bytes) }
-  const manifest = { version: 1, status: 'prepared-pending-corrected-Hours-baseline-and-review', source: git(worktree, 'rev-parse', 'HEAD'), worktree,
+  const manifest = { version: 1, status: 'prepared-pending-fresh-baseline-and-review', source: git(worktree, 'rev-parse', 'HEAD'), worktree,
     appSource: evidence.source, sourceTemplate: hash(worktree + '/working-hours/dashboard.template.html'), payload, frozen, runner,
     expectedBackendBaseline: evidence.observedRuntimeBackend,
     dependencies: realpathSync(R + '/node_modules'), artifactEvidence: { path: evidencePath, sha256: hash(evidencePath) },
-    pending: ['CR4 corrected chart/no-chip LIVE receipt + source integration + fresh baseline', 'Independent Push review + leader runner review', 'ALL-idle; no own-task exemptions'] }
+    pending: ['Fresh NEW baseline preserving corrected Hours LIVE receipt', 'Leader review of answer-content delta and runner', 'ALL-idle; no own-task exemptions'] }
   exclusive(release + '/manifest.json', manifest)
   console.log(JSON.stringify({ status: manifest.status, release, manifest: hash(release + '/manifest.json'), source: manifest.source, armed: false }))
 }
