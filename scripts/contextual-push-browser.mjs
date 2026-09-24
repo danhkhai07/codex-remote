@@ -69,6 +69,24 @@ try {
     // privileged focus operation; matchAll/postMessage/ACK and app routing stay
     // real. Any fallback openWindow remains an error in this existing-app test.
     await worker.evaluate(() => { WindowClient.prototype.focus = async function () { return this } })
+    // Exercise actual SW formatting without an OS alert or a real subscription.
+    const display = await worker.evaluate(async () => {
+      const originalShow = self.registration.showNotification.bind(self.registration)
+      const originalClients = self.clients.matchAll.bind(self.clients)
+      const shown = []
+      self.registration.showNotification = async (title, options) => { shown.push({ title, body: options.body, threadId: options.data.threadId }) }
+      self.clients.matchAll = async () => []
+      try {
+        for (const isLeader of [true, false]) {
+          let task
+          const event = new Event('push')
+          Object.assign(event, { data: { json: () => ({ body: 'Đã sửa xong. Kết quả kiểm tra đạt.', notification: { threadId: 'thread-b', threadName: 'Convo B', groupName: 'Fixture group', isLeader } }) }, waitUntil(promise) { task = promise } })
+          self.dispatchEvent(event); await task
+        }
+        return shown
+      } finally { self.registration.showNotification = originalShow; self.clients.matchAll = originalClients }
+    })
+    assert.deepEqual(display, [true, false].map(() => ({ title: 'Convo B', body: 'Đã sửa xong. Kết quả kiểm tra đạt.', threadId: 'thread-b' })))
     const click = async threadId => worker.evaluate(async id => {
       let task
       const event = new Event('notificationclick')

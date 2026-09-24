@@ -129,7 +129,7 @@ it('captures current folder, explicit name and current leader at completion with
   vault.setLeader(first.id, 'new-chat')
   controller.onTurnCompleted = vi.fn()
   const complete = (turnId: string) => app.emit('notification', { method: 'turn/completed', params: {
-    threadId: 'new-chat', turn: { id: turnId, status: 'completed', items: [{ type: 'agentMessage', text: 'PRIVATE ANSWER' }] },
+    threadId: 'new-chat', turn: { id: turnId, status: 'completed', items: [{ type: 'agentMessage', phase: 'final_answer', text: 'PRIVATE ANSWER' }] },
   } })
   complete('leader-turn')
   expect(controller.onTurnCompleted).toHaveBeenLastCalledWith('new-chat', 'leader-turn', 'PRIVATE ANSWER', {
@@ -151,4 +151,30 @@ it('captures current folder, explicit name and current leader at completion with
   const calls = vi.mocked(controller.onTurnCompleted!).mock.calls.length
   complete('archived-turn')
   expect(controller.onTurnCompleted).toHaveBeenCalledTimes(calls)
+})
+
+
+it('notifies only a completed final answer from the exact thread and turn', async () => {
+  const { controller, app } = setup()
+  await controller.createThread('0')
+  const callback = vi.fn(); controller.onTurnCompleted = callback
+  const item = (threadId: string, turnId: string, phase: string, text: string) => app.emit('notification', {
+    method: 'item/completed', params: { threadId, turnId, item: { id: phase, type: 'agentMessage', phase, text } },
+  })
+  const complete = (id: string, items: unknown[] = []) => app.emit('notification', {
+    method: 'turn/completed', params: { threadId: 'new-chat', turn: { id, status: 'completed', items } },
+  })
+  item('new-chat', 'older', 'final_answer', 'STALE')
+  item('other-chat', 'current', 'final_answer', 'OTHER THREAD')
+  item('new-chat', 'current', 'final_answer', 'CORRECT')
+  item('new-chat', 'current', 'commentary', 'PROGRESS')
+  complete('current', [{ type: 'commandExecution', text: 'TOOL LOG' }])
+  expect(callback.mock.lastCall?.[2]).toBe('CORRECT')
+  complete('no-final', [{ type: 'agentMessage', phase: 'commentary', text: 'PROGRESS' }, { type: 'plan', text: 'PLAN' }, { type: 'agentMessage', text: 'UNCLASSIFIED' }])
+  expect(callback.mock.lastCall?.[2]).toBe('')
+  app.emit('notification', { method: 'item/agentMessage/delta', params: { threadId: 'new-chat', turnId: 'delta-only', itemId: 'unknown', delta: 'UNFINISHED' } })
+  complete('delta-only')
+  expect(callback.mock.lastCall?.[2]).toBe('')
+  complete('inline', [{ type: 'agentMessage', phase: 'final_answer', text: 'INLINE' }, { type: 'agentMessage', phase: 'commentary', text: 'LATE PROGRESS' }])
+  expect(callback.mock.lastCall?.[2]).toBe('INLINE')
 })

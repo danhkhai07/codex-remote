@@ -121,12 +121,17 @@ export class RemoteController {
             try { this.onReplyCompleted?.(params.threadId, ids) }
             catch { console.error('Unable to persist completed reply state') }
           }
+          // Never send progress, tool output or an unclassified delta to Web Push.
+          const notificationItems = [...(captured?.completed.values() ?? []),
+            ...(Array.isArray(turn.items) ? turn.items.map(asObject) : [])]
+          const finalAnswer = notificationItems.reverse().find(item => item.type === 'agentMessage' &&
+            item.phase === 'final_answer' && typeof item.text === 'string' && item.text.trim())?.text
           const answer = this.#completedAnswer(params.threadId, turn.id, turn)
           this.orchestration?.completed(params.threadId, turn.id, String(turn.status ?? 'completed'), answer)
           if (this.#loadedThreads.has(params.threadId)) {
             try {
               const group = this.contextVault?.groupFor(params.threadId)
-              this.onTurnCompleted?.(params.threadId, turn.id, answer, {
+              this.onTurnCompleted?.(params.threadId, turn.id, typeof finalAnswer === 'string' ? finalAnswer : '', {
                 threadName: this.#loadedThreads.get(params.threadId)?.name,
                 groupName: group?.name, isLeader: group?.leaderThreadId === params.threadId, outcome: turn.status,
               })

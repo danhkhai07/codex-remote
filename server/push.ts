@@ -6,13 +6,38 @@ type Owner = { nonce: string; expiresAt: number }
 type Device = { subscription: PushSubscription; owner: Owner; visibleUntil?: number }
 export type CompletionContext = { threadName?: unknown; groupName?: unknown; isLeader?: boolean; outcome?: unknown }
 type NotificationContext = { threadId: string; threadName: string; groupName: string; isLeader: boolean; outcome: string }
-type Delivery = { endpoint: string; nonce: string; tag: string; notification?: NotificationContext; attempts: number; nextAt: number }
+type Delivery = { endpoint: string; nonce: string; tag: string; notification?: NotificationContext; body?: string; attempts: number; nextAt: number }
 type State = { fingerprint: string; keys: { publicKey: string; privateKey: string }; devices: Device[]; deliveries: Delivery[]; seen: string[] }
 const hash = (text: string) => createHash('sha256').update(text).digest('base64url')
-const DEFAULT_BODY = 'Your Codex turn is complete.'
+const DEFAULT_BODY = 'Lượt trả lời đã kết thúc.'
 const FOREGROUND_TTL_MS = 40_000
 
-export function notificationBody(_answer: unknown): string { return DEFAULT_BODY }
+/** Plain-text final answer only; reserve room for metadata and Web Push encryption.
+ * Budget JSON-escaped UTF-8 bytes, not JS characters (quotes/emoji cost more).
+ */
+export function notificationBody(answer: unknown): string {
+  if (typeof answer !== 'string') return DEFAULT_BODY
+  return boundedBody(answer.slice(0, 64_000)
+    .replace(/^\s*(```|~~~)[^\n]*$/gm, '')
+    .replace(/!?\[([^\]\n]+)\]\([^\n)]*\)/g, '$1')
+    .replace(/^\s{0,3}(?:#{1,6}\s+|>\s?)/gm, '')
+    .replace(/\*\*([^*]+)\*\*|__([^_]+)__/g, (_match, a, b) => a ?? b)
+    .replace(/`([^`]+)`/g, '$1') + (answer.length > 64_000 ? '…' : ''))
+}
+function boundedBody(answer: unknown): string {
+  if (typeof answer !== 'string') return DEFAULT_BODY
+  const text = answer.slice(0, 64_000)
+    .replace(/[\p{Cc}\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, ' ')
+    .replace(/\s+/g, ' ').trim()
+  if (!text) return DEFAULT_BODY
+  let result = '', bytes = 0
+  for (const char of text) {
+    const size = Buffer.byteLength(JSON.stringify(char)) - 2
+    if (bytes + size > 2200) return result.trimEnd() + '…'
+    result += char; bytes += size
+  }
+  return result + (answer.length > 64_000 ? '…' : '')
+}
 
 export function notificationContext(threadId: unknown, context?: CompletionContext): NotificationContext | undefined {
   if (typeof threadId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(threadId)) return undefined
@@ -109,10 +134,11 @@ export class PushService {
     this.#prune()
     this.#save()
   }
-  completed(threadId: string, turnId: string, context?: CompletionContext) {
+  completed(threadId: string, turnId: string, context?: CompletionContext, answer?: unknown) {
     const tag = hash(`${threadId}:${turnId}`).slice(0, 32)
-    // Snapshot only approved metadata at completion, never a transcript/preview.
+    // Snapshot the authorized final answer together with its completion metadata.
     const notification = notificationContext(threadId, context)
+    const body = notificationBody(answer)
     if (this.#state.seen.includes(tag)) return
     this.#prune()
     this.#state.seen = [...this.#state.seen, tag].slice(-1000)
@@ -120,7 +146,7 @@ export class PushService {
       if (this.#visible(device)) continue
       // Coalesce a device's outstanding alerts into its latest completion.
       this.#state.deliveries = this.#state.deliveries.filter(job => job.endpoint !== device.subscription.endpoint)
-      this.#state.deliveries.push({ endpoint: device.subscription.endpoint, nonce: device.owner.nonce, tag, notification, attempts: 0, nextAt: Date.now() })
+      this.#state.deliveries.push({ endpoint: device.subscription.endpoint, nonce: device.owner.nonce, tag, notification, body, attempts: 0, nextAt: Date.now() })
     }
     this.#save()
     this.start()
@@ -148,7 +174,7 @@ export class PushService {
         try {
           // Validate again after disk restore; old deliveries remain generic.
           const notification = notificationContext(job.notification?.threadId, job.notification)
-          await this.send(device.subscription, JSON.stringify({ tag: job.tag, body: DEFAULT_BODY, ...(notification ? { notification } : {}) }), {
+          await this.send(device.subscription, JSON.stringify({ tag: job.tag, body: boundedBody(job.body), ...(notification ? { notification } : {}) }), {
             vapidDetails: { subject: this.subject, ...this.#state.keys }, timeout: 10000,
             TTL: Math.max(0, Math.min(3600, device.owner.expiresAt - Math.floor(Date.now() / 1000))), urgency: 'high', topic: job.tag,
           })

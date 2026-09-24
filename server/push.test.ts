@@ -41,7 +41,7 @@ describe('Web Push delivery without an SSE client', () => {
     expect(statSync(first.path).mode & 0o777).toBe(0o600)
     next.service.completed('private-thread', 'private-turn', { threadName: 'Sửa CR 1', groupName: 'Codex Remote', isLeader: true })
     await vi.waitFor(() => expect(next.send).toHaveBeenCalledTimes(1))
-    expect(JSON.parse(next.send.mock.calls[0][1])).toEqual({ tag: expect.any(String), body: 'Your Codex turn is complete.', notification: { threadId: 'private-thread', threadName: 'Sửa CR 1', groupName: 'Codex Remote', isLeader: true, outcome: 'completed' } })
+    expect(JSON.parse(next.send.mock.calls[0][1])).toEqual({ tag: expect.any(String), body: 'Lượt trả lời đã kết thúc.', notification: { threadId: 'private-thread', threadName: 'Sửa CR 1', groupName: 'Codex Remote', isLeader: true, outcome: 'completed' } })
     expect(next.send.mock.calls[0][1]).not.toContain('private-turn')
     expect(next.send.mock.calls[0][2]).toMatchObject({ TTL: expect.any(Number), urgency: 'high', timeout: 10000 })
     next.service.completed('private-thread', 'private-turn')
@@ -52,11 +52,20 @@ describe('Web Push delivery without an SSE client', () => {
     expect(restarted.send).not.toHaveBeenCalled()
   })
 
-  it('uses generic notification text without including an answer excerpt', () => {
-    expect(notificationBody('\n## Completed **cleanly**\nInternal detail')).toBe('Your Codex turn is complete.')
-    expect(notificationBody('')).toBe('Your Codex turn is complete.')
-    expect(notificationBody('x'.repeat(220))).toBe('Your Codex turn is complete.')
-    expect(notificationBody('PRIVATE CANARY')).not.toContain('PRIVATE CANARY')
+  it('renders a bounded plain-text answer, including JSON escapes and Unicode', async () => {
+    expect(notificationBody('\n## Completed **cleanly**\n[Result](https://example.test) `ok`')).toBe('Completed cleanly Result ok')
+    expect(notificationBody('')).toBe('Lượt trả lời đã kết thúc.')
+    expect(notificationBody({ text: 'NOT AN ANSWER' })).toBe('Lượt trả lời đã kết thúc.')
+    expect(notificationBody('AUTHORIZED ANSWER')).toBe('AUTHORIZED ANSWER')
+    const { service, send } = setup()
+    service.subscribe(subscription, owner())
+    service.completed('t'.repeat(128), 'turn', { threadName: '😀'.repeat(80), groupName: '😀'.repeat(60) }, ('😀"\\').repeat(10000))
+    await vi.waitFor(() => expect(send).toHaveBeenCalledOnce())
+    const payload = send.mock.calls[0][1]
+    expect(Buffer.byteLength(payload)).toBeLessThan(3500)
+    const body = JSON.parse(payload).body
+    expect(body.endsWith('…')).toBe(true)
+    expect(body).not.toContain('\ufffd')
   })
 
   it('suppresses delivery while that subscribed device reports a visible app', async () => {
@@ -70,7 +79,7 @@ describe('Web Push delivery without an SSE client', () => {
     expect(service.visibility(subscription.endpoint, false, session)).toBe(true)
     service.completed('thread', 'hidden-turn', { threadName: 'Hidden' })
     await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1))
-    expect(JSON.parse(send.mock.calls[0][1])).toMatchObject({ body: 'Your Codex turn is complete.' })
+    expect(JSON.parse(send.mock.calls[0][1])).toMatchObject({ body: 'Lượt trả lời đã kết thúc.' })
   })
 
   it('retries transient failure from persisted state after a restart', async () => {
@@ -129,7 +138,7 @@ describe('Web Push delivery without an SSE client', () => {
 })
 
 describe('bounded contextual completion metadata', () => {
-  it('allows only bounded names and identifiers, never answer/preview fields', () => {
+  it('allows only bounded names and identifiers, with validated identifiers', () => {
     const context = notificationContext('thread-1', { threadName: '😀'.repeat(200), groupName: ' Group\n\u202eName ', isLeader: true })!
     expect([...context.threadName]).toHaveLength(80)
     expect(context.groupName).toBe('Group Name')
@@ -144,7 +153,7 @@ describe('bounded contextual completion metadata', () => {
     const first = setup(vi.fn().mockRejectedValue({ statusCode: 503 }))
     first.service.subscribe(subscription, owner())
     const context = { threadName: 'Leader old name', groupName: 'Group A', isLeader: true }
-    first.service.completed('leader', 'turn-1', context)
+    first.service.completed('leader', 'turn-1', context, '**Answer A** with literal _under_score_')
     context.threadName = 'Later rename'; context.isLeader = false
     await vi.advanceTimersByTimeAsync(0)
     first.service.stop()
@@ -152,12 +161,14 @@ describe('bounded contextual completion metadata', () => {
     next.service.start()
     await vi.advanceTimersByTimeAsync(2100)
     expect(JSON.parse(next.send.mock.calls[0][1]).notification).toMatchObject({ threadId: 'leader', threadName: 'Leader old name', groupName: 'Group A', isLeader: true })
+    expect(JSON.parse(next.send.mock.calls[0][1]).body).toBe('Answer A with literal _under_score_')
     next.service.stop()
     next.service.completed('worker', 'turn-2', { threadName: 'Worker B', groupName: 'Group B', isLeader: false })
-    next.service.completed('solo', 'turn-3', { threadName: 'Solo', outcome: 'failed' })
+    next.service.completed('solo', 'turn-3', { threadName: 'Solo', outcome: 'failed' }, 'Answer C')
     const last = setup(undefined, first.path)
     last.service.start(); await vi.advanceTimersByTimeAsync(0)
     expect(last.send).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(last.send.mock.calls[0][1]).body).toBe('Answer C')
     expect(JSON.parse(last.send.mock.calls[0][1]).notification).toEqual({ threadId: 'solo', threadName: 'Solo', groupName: '', isLeader: false, outcome: 'failed' })
   })
 
@@ -184,12 +195,13 @@ describe('bounded contextual completion metadata', () => {
     const send = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve })).mockResolvedValue(response)
     const { service } = setup(send)
     service.subscribe(subscription, owner())
-    service.completed('leader-a', 'turn-a', { threadName: 'Leader A', groupName: 'A', isLeader: true })
+    service.completed('leader-a', 'turn-a', { threadName: 'Leader A', groupName: 'A', isLeader: true }, 'Answer A')
     await vi.advanceTimersByTimeAsync(0)
-    service.completed('worker-b', 'turn-b', { threadName: 'Worker B', groupName: 'B', isLeader: false })
+    service.completed('worker-b', 'turn-b', { threadName: 'Worker B', groupName: 'B', isLeader: false }, 'Answer B')
     finish(response)
     await vi.advanceTimersByTimeAsync(150)
     expect(send).toHaveBeenCalledTimes(2)
+    expect(send.mock.calls.map(call => JSON.parse(call[1]).body)).toEqual(['Answer A', 'Answer B'])
     expect(send.mock.calls.map(call => JSON.parse(call[1]).notification)).toEqual([
       { threadId: 'leader-a', threadName: 'Leader A', groupName: 'A', isLeader: true, outcome: 'completed' },
       { threadId: 'worker-b', threadName: 'Worker B', groupName: 'B', isLeader: false, outcome: 'completed' },

@@ -25,23 +25,23 @@ function fixture() {
     click: (data: unknown) => dispatch('notificationclick', { notification: { close: vi.fn(), data } }) }
 }
 
-it('shows bounded approved metadata for leader, worker, solo and failed turns, never arbitrary body', async () => {
+it('uses only convo name as title and authorized answer as body for every role', async () => {
   const f = fixture()
-  await f.push({ tag: 'turn', body: 'PRIVATE ANSWER', notification: { threadId: 'leader', threadName: 'Sửa CR', groupName: 'Codex Remote', isLeader: true } })
-  expect(f.showNotification).toHaveBeenLastCalledWith('Codex Remote · Leader', expect.objectContaining({ body: 'Sửa CR đã trả lời.', data: { threadId: 'leader' } }))
-  await f.push({ notification: { threadId: 'worker', threadName: 'Worker', groupName: 'Project', isLeader: false } })
-  expect(f.showNotification).toHaveBeenLastCalledWith('Project', expect.objectContaining({ body: 'Worker đã trả lời.' }))
-  await f.push({ notification: { threadId: 'solo', isLeader: true, outcome: 'failed' } })
-  expect(f.showNotification).toHaveBeenLastCalledWith('Codex · Chưa phân nhóm', expect.objectContaining({ body: 'Cuộc hội thoại: lượt chat bị lỗi.' }))
-  await f.push({ notification: { threadId: 't', threadName: '😀'.repeat(500), groupName: '\u202e\nGroup', isLeader: 'true' } })
-  expect(f.showNotification.mock.lastCall![0]).toBe('Group')
-  expect([...f.showNotification.mock.lastCall![1].body]).toHaveLength(80 + ' đã trả lời.'.length)
-  expect(JSON.stringify(f.showNotification.mock.calls)).not.toContain('PRIVATE ANSWER')
+  for (const isLeader of [true, false]) {
+    await f.push({ tag: 'turn', body: 'Đã sửa xong.', notification: { threadId: 'thread', threadName: 'Sửa CR', groupName: 'Project', isLeader } })
+    expect(f.showNotification).toHaveBeenLastCalledWith('Sửa CR', expect.objectContaining({ body: 'Đã sửa xong.', data: { threadId: 'thread' } }))
+  }
+  await f.push({ notification: { threadId: 'solo', outcome: 'failed' } })
+  expect(f.showNotification).toHaveBeenLastCalledWith('Cuộc hội thoại', expect.objectContaining({ body: 'Lượt chat bị lỗi.' }))
+  await f.push({ body: '😀'.repeat(5000), notification: { threadId: 't', threadName: '\u202e' + '😀'.repeat(500) } })
+  expect([...f.showNotification.mock.lastCall![0]]).toHaveLength(80)
+  expect([...f.showNotification.mock.lastCall![1].body]).toHaveLength(2202)
+  expect(f.showNotification.mock.lastCall![1].body.endsWith('…')).toBe(true)
 })
 
 it.each([null, {}, { body: 'PRIVATE' }, { notification: { threadId: '//evil.test' } }, { notification: { threadId: 'x'.repeat(129) } }])('falls back safely for malformed/old push: %j', async payload => {
   const f = fixture(); await f.push(payload)
-  expect(f.showNotification).toHaveBeenCalledWith('Codex finished', expect.objectContaining({ body: 'Your Codex turn is complete.', data: { threadId: null } }))
+  expect(f.showNotification).toHaveBeenCalledWith('Cuộc hội thoại', expect.objectContaining({ body: 'Lượt trả lời đã kết thúc.', data: { threadId: null } }))
 })
 
 it('suppresses foreground notifications only for same-origin visible clients', async () => {

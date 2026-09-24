@@ -257,6 +257,7 @@ describe('RemoteController', () => {
     expect(controller.onTurnCompleted).not.toHaveBeenCalled()
     appServer.emit('notification', { method: 'item/completed', params: { threadId: 'thread-stored', turnId: 'finished-turn', item: { id: 'commentary', type: 'agentMessage', text: 'Checking the result.' } } })
     appServer.emit('notification', { method: 'item/agentMessage/delta', params: { threadId: 'thread-stored', turnId: 'finished-turn', itemId: 'final', delta: 'Finished successfully.\nMore detail.' } })
+    appServer.emit('notification', { method: 'item/completed', params: { threadId: 'thread-stored', turnId: 'finished-turn', item: { id: 'final', type: 'agentMessage', phase: 'final_answer', text: 'Finished successfully.\nMore detail.' } } })
     appServer.emit('notification', { method: 'turn/completed', params: { threadId: 'thread-stored', turn: { id: 'finished-turn' } } })
     expect(controller.onTurnCompleted).toHaveBeenCalledExactlyOnceWith('thread-stored', 'finished-turn', 'Finished successfully.\nMore detail.', { threadName: undefined, groupName: undefined, isLeader: false, outcome: undefined })
   })

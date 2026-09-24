@@ -42,8 +42,8 @@ self.addEventListener('message', (event) => {
 
 self.addEventListener('push', (event) => {
   let tag = 'complete'
-  let title = 'Codex finished'
-  let body = 'Your Codex turn is complete.'
+  let title = 'Cuộc hội thoại'
+  let body = 'Lượt trả lời đã kết thúc.'
   let threadId = null
   try {
     const data = event.data?.json()
@@ -51,11 +51,9 @@ self.addEventListener('push', (event) => {
     const context = data?.notification
     threadId = validThreadId(context?.threadId)
     if (threadId) {
-      const group = notificationLabel(context.groupName, 60)
-      const name = notificationLabel(context.threadName, 80) || 'Cuộc hội thoại'
-      title = group ? `${group}${context.isLeader === true ? ' · Leader' : ''}` : 'Codex · Chưa phân nhóm'
-      body = context.outcome === 'failed' ? `${name}: lượt chat bị lỗi.`
-        : context.outcome === 'interrupted' ? `${name}: lượt chat đã dừng.` : `${name} đã trả lời.`
+      title = notificationLabel(context.threadName, 80) || 'Cuộc hội thoại'
+      body = notificationAnswer(data.body) || (context.outcome === 'failed' ? 'Lượt chat bị lỗi.'
+        : context.outcome === 'interrupted' ? 'Lượt chat đã dừng.' : 'Lượt trả lời đã kết thúc.')
     }
   } catch { /* Still display a generic alert for malformed payloads. */ }
   event.waitUntil((async () => {
@@ -94,6 +92,12 @@ function validThreadId(value) {
 }
 function notificationLabel(value, limit) {
   return typeof value === 'string' ? [...value.replace(/[\p{Cc}\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, ' ').replace(/\s+/g, ' ').trim()].slice(0, limit).join('') : ''
+}
+function notificationAnswer(value) {
+  if (typeof value !== 'string') return ''
+  const text = value.slice(0, 64000).replace(/[\p{Cc}\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, ' ').replace(/\s+/g, ' ').trim()
+  const chars = [...text]
+  return chars.slice(0, 2201).join('') + (chars.length > 2201 || value.length > 64000 ? '…' : '')
 }
 function sameOrigin(value) {
   try { return new URL(value).origin === self.location.origin } catch { return false }
