@@ -21,21 +21,19 @@ export function persistedFixtureThread(thread) {
     records.set(thread.id, entry); owned.add(entry.path)
   }
   if (entry.signature !== signature) {
-    const rows = [{ type: 'session_meta', payload: { id: thread.id, cwd: thread.cwd } }]
+    const rows = [{ type: 'session_meta', payload: { id: thread.id, cwd: thread.cwd, cli_version: '0.155.0', history_mode: 'paginated', history_base: null, subagent_history_start_ordinal: null } }]
     for (const turn of thread.turns ?? []) {
       rows.push({ type: 'event_msg', payload: { type: 'task_started', turn_id: turn.id } })
       for (const item of turn.items ?? []) {
-        if (item.type === 'userMessage' || item.type === 'agentMessage') rows.push({ type: 'event_msg', payload: {
-          type: item.type === 'userMessage' ? 'user_message' : 'agent_message',
-          message: item.text ?? (item.content ?? []).map(part => part.text ?? '').join('\n'),
-          images: [], local_images: [], phase: item.phase,
-        } })
-        rows.push({ type: 'event_msg', payload: { type: 'item_completed', turn_id: turn.id, item } })
+        const canonical = { ...item, type: item.type[0].toUpperCase() + item.type.slice(1) }
+        if (item.type === 'agentMessage') { canonical.content = [{ type: 'Text', text: item.text ?? '' }]; delete canonical.text }
+        rows.push({ type: 'event_msg', payload: { type: 'item_completed', thread_id: thread.id, turn_id: turn.id,
+          item: canonical, started_at_ms: 1, completed_at_ms: 2 } })
       }
-      if (turn.status !== 'inProgress') rows.push({ type: 'event_msg', payload: { type: turn.status === 'completed' ? 'task_complete' : turn.status === 'failed' ? 'task_failed' : 'turn_aborted', turn_id: turn.id } })
+      if (turn.status !== 'inProgress') rows.push({ type: 'event_msg', payload: { type: turn.status === 'completed' || turn.status === 'failed' ? 'task_complete' : 'turn_aborted', turn_id: turn.id, ...(turn.status === 'failed' ? { error: { message: 'Fixture failure' } } : {}) } })
     }
     const temporary = entry.path + '.tmp'; owned.add(temporary)
-    writeFileSync(temporary, rows.map(row => JSON.stringify(row)).join('\n') + '\n', { mode: 0o600 }); renameSync(temporary, entry.path)
+    writeFileSync(temporary, rows.map((row, ordinal) => JSON.stringify({ timestamp: '2026-09-25T00:00:00.000Z', ordinal, ...row })).join('\n') + '\n', { mode: 0o600 }); renameSync(temporary, entry.path)
     entry.signature = signature
   }
   return { ...thread, path: entry.path }

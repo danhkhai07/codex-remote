@@ -2,7 +2,7 @@
  * contain arbitrarily large strings. JSON structure is checked while only bounded
  * strings/containers are retained. Unknown/deep formats fail visibly. */
 type Frame = { value: Record<string, unknown> | unknown[]; array: boolean; state: string; key: string; count: number; keep: boolean }
-const important = new Set(['payload', 'item', 'type', 'id', 'turn_id', 'thread_id', 'cwd', 'status', 'phase', 'channel', 'call_id', 'num_turns', 'history_base', 'subagent_history_start_ordinal', 'history_mode'])
+const important = new Set(['ordinal', 'payload', 'item', 'type', 'id', 'turn_id', 'thread_id', 'cwd', 'status', 'phase', 'channel', 'call_id', 'num_turns', 'history_base', 'subagent_history_start_ordinal', 'history_mode'])
 export class HistoryJson {
   private stack: Frame[] = []
   private mode: 'none' | 'string' | 'word' = 'none'

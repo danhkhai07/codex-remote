@@ -10,17 +10,23 @@ import { RemoteController } from '../dist-server/controller.js'
 import { createRemoteHttpServer } from '../dist-server/http-app.js'
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || '/tmp/working-hours-browser/node_modules/playwright/index.mjs')
 const root = await mkdtemp(join(tmpdir(), 'history-window-')), files = join(root, 'files'), sessions = join(root, 'native', 'sessions'), sockets = new Set()
-const row = (type, payload) => JSON.stringify({ type, payload }) + '\n'
-const event = (type, payload = {}) => row('event_msg', { type, ...payload })
-const item = (id, type, text, turn = 't') => type === 'userMessage' || type === 'agentMessage'
-  ? event(type === 'userMessage' ? 'user_message' : 'agent_message', { message: text, images: [], local_images: [], phase: type === 'agentMessage' ? 'final_answer' : undefined })
-  : event('item_completed', { turn_id: turn, item: { id, type, command: 'fixture', status: 'completed', aggregatedOutput: text } })
+const ordinals = new Map()
+const row = (type, payload, thread = 'window') => {
+  const ordinal = ordinals.get(thread) ?? 0; ordinals.set(thread, ordinal + 1)
+  return JSON.stringify({ timestamp: '2026-09-25T00:00:00.000Z', ordinal, type, payload }) + '\n'
+}
+const event = (type, payload = {}, thread = 'window') => row('event_msg', { type, ...payload }, thread)
+const item = (id, type, text, turn = 't', thread = 'window') => event('item_completed', { thread_id: thread, turn_id: turn,
+  started_at_ms: 1, completed_at_ms: 2, item: { id, type: type[0].toUpperCase() + type.slice(1),
+    ...(type === 'userMessage' ? { content: [{ type: 'text', text, text_elements: [] }] } : type === 'agentMessage' ?
+      { content: [{ type: 'Text', text }], phase: 'final_answer' } : { command: 'fixture', status: 'completed', aggregatedOutput: text }) } }, thread)
+
 let browser, server, release = () => {}
 try {
   await mkdir(files); await mkdir(sessions, { recursive: true })
   const sourcePath = join(sessions, 'window.jsonl'), otherPath = join(sessions, 'other.jsonl')
   const fd = await open(sourcePath, 'w', 0o600)
-  await fd.write(row('session_meta', { id: 'window', cwd: files }) + event('task_started', { turn_id: 't' }))
+  await fd.write(row('session_meta', { id: 'window', cwd: files, cli_version: '0.155.0', history_mode: 'paginated', history_base: null, subagent_history_start_ordinal: null }) + event('task_started', { turn_id: 't' }))
   // REAL bytes written in bounded pieces: 197 MB across 1000 tool records.
   // This is NOT a measurement of a real transcript or a 197 MB single item.
   const tool = 'x'.repeat(197000)
@@ -30,7 +36,7 @@ try {
     await fd.write(item(`a${n}`, 'agentMessage', `Answer ${n}\n\n${'Readable fixture content. '.repeat(15)}`))
   }
   await fd.write(event('task_complete', { turn_id: 't' })); await fd.close()
-  await writeFile(otherPath, row('session_meta', { id: 'other', cwd: files }) + event('task_started', { turn_id: 'other-turn' }) + item('other-answer', 'agentMessage', 'Other cached answer', 'other-turn') + event('task_complete', { turn_id: 'other-turn' }))
+  await writeFile(otherPath, row('session_meta', { id: 'other', cwd: files, cli_version: '0.155.0', history_mode: 'paginated' }, 'other') + event('task_started', { turn_id: 'other-turn' }, 'other') + item('other-answer', 'agentMessage', 'Other cached answer', 'other-turn', 'other') + event('task_complete', { turn_id: 'other-turn' }, 'other'))
   const key = { version: 1, app: randomBytes(24).toString('base64url'), generation: randomBytes(24).toString('base64url'), key: randomBytes(32).toString('base64url') }
   const keyFile = join(root, 'owner.json'); await writeFile(keyFile, JSON.stringify(key), { mode: 0o600 })
   const config = { host: '127.0.0.1', port: 0, publicOrigin: new URL('http://127.0.0.1'), password: 'FAKE window browser password', sessionSecret: 'fake-window'.repeat(6), sessionTtlSeconds: 600, codexBin: 'unused', production: true, workspaceRoots: [files], fileRoots: [files], secureApiRequired: true, secureKeyFile: keyFile, sessionStateFile: join(root, 'sessions.json'), historyNativeHome: join(root, 'native'), historyIndexPath: join(root, 'index') }

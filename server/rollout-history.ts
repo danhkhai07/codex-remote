@@ -5,10 +5,11 @@ import { createHash, randomUUID } from 'node:crypto'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { setImmediate as yieldIO } from 'node:timers/promises'
 import { HistoryJson } from './history-json.js'
+import { projectPaginated } from './history-paginated.js'
 
 export type HistoryMetadata = { id: string; cwd: string; path?: string }
 export type IndexedItem = { seq: number; turn: string; status: string; id: string; type: string; data: string; start: number; end: number; clipped: number; msg: number }
-type Checkpoint = { version: 2; recordIndex: number; nextItem: number; explicit: boolean; compacted: boolean; generation: string; identity: string; offset: number; size: number; mtime: number; head: string; tail: string; turn: string | null; verified: boolean; scanned: boolean }
+type Checkpoint = { version: 3; mode: 'legacy' | 'paginated' | null; nextOrdinal: number; recordIndex: number; nextItem: number; explicit: boolean; compacted: boolean; generation: string; identity: string; offset: number; size: number; mtime: number; head: string; tail: string; turn: string | null; verified: boolean; scanned: boolean }
 const obj = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 const string = (value: unknown, max = 4096) => typeof value === 'string' ? value.slice(0, max) : ''
 const visible = `e.suppressed=0`
@@ -17,9 +18,9 @@ const BLOCK = 64 * 1024
 /** Typed projection: never null-out IDs, content arrays or renderer objects. */
 export function historyItem(item: Record<string, unknown>, id: string, fallback = false): { value: Record<string, unknown>; message: boolean } {
   const raw = string(item.type, 128)
-  const type = ({ UserMessage: 'userMessage', AgentMessage: 'agentMessage', CommandExecution: 'commandExecution', FileChange: 'fileChange', Plan: 'plan', McpToolCall: 'mcpToolCall', DynamicToolCall: 'dynamicToolCall' } as Record<string, string>)[raw] ?? raw
+  const type = ({ UserMessage: 'userMessage', AgentMessage: 'agentMessage', CommandExecution: 'commandExecution', FileChange: 'fileChange', Plan: 'plan', McpToolCall: 'mcpToolCall', DynamicToolCall: 'dynamicToolCall' } as Record<string, string>)[raw] ?? (raw ? raw[0].toLowerCase() + raw.slice(1) : raw)
   const texts = Array.isArray(item.content) ? item.content.map(obj).filter(v => ['text', 'Text', 'input_text', 'output_text', 'inputText'].includes(String(v.type))).map(v => string(v.text, 16384)) : []
-  const text = typeof item.text === 'string' ? string(item.text, 16384) : texts.join('\n').slice(0, 16384)
+  const text = typeof item.text === 'string' ? string(item.text, 16384) : texts.join(type === 'agentMessage' ? '' : '\n').slice(0, 16384)
   const base = { id, type, ...(typeof item.status === 'string' ? { status: string(item.status, 64) } : {}) }
   if (type === 'userMessage') {
     const images = Array.isArray(item.content) ? item.content.map(obj).filter(v => ['image', 'localImage', 'Image', 'LocalImage'].includes(String(v.type))).slice(0, 16).map(() => ({ type: 'image' })) : []
@@ -101,7 +102,7 @@ export class RolloutHistory {
       if (read.bytesRead !== size) throw Error('History truncated while indexing')
       return createHash('sha256').update(buffer).digest('hex')
     }
-    let valid = checkpoint?.version === 2 && checkpoint.identity === identity && checkpoint.offset <= snapshot.size
+    let valid = checkpoint?.version === 3 && checkpoint.identity === identity && checkpoint.offset <= snapshot.size
     if (valid && checkpoint) {
       valid = checkpoint.head === await digest(0, Math.min(checkpoint.offset, 4096)) && checkpoint.tail === await digest(Math.max(0, checkpoint.offset - 4096), Math.min(checkpoint.offset, 4096))
       if (snapshot.size === checkpoint.size && snapshot.mtimeMs !== checkpoint.mtime) valid = false
@@ -109,13 +110,14 @@ export class RolloutHistory {
     if (!valid || !checkpoint) {
       this.metrics.rebuilds++
       db.exec('BEGIN IMMEDIATE; DELETE FROM entries; DELETE FROM turns; DELETE FROM state; COMMIT;')
-      checkpoint = { version: 2, recordIndex: 0, nextItem: 1, explicit: false, compacted: false, generation: randomUUID(), identity, offset: 0, size: 0, mtime: 0, head: '', tail: '', turn: null, verified: false, scanned: false }
+      checkpoint = { version: 3, mode: null, nextOrdinal: 0, recordIndex: 0, nextItem: 1, explicit: false, compacted: false, generation: randomUUID(), identity, offset: 0, size: 0, mtime: 0, head: '', tail: '', turn: null, verified: false, scanned: false }
     }
     // An unchanged incomplete tail is not reparsed on every poll/detail request.
     if (checkpoint.scanned && checkpoint.size === snapshot.size && checkpoint.mtime === snapshot.mtimeMs) return checkpoint
     // Persist the reducer state at the SAME record boundary as indexed rows.
-    // Native 0.155.0 ThreadHistoryBuilder: model ResponseItems and TurnContext
-    // are not UI messages/turn boundaries. Dedicated EventMsgs own that history.
+    // Legacy ThreadHistoryBuilder helpers are below; paginated records take
+    // their own projector before that reducer. Never blend the two identity
+    // schemes or infer a display turn from model ResponseItems/TurnContext.
     const knownTurn = (id: string) => db.prepare('SELECT status FROM turns WHERE id=?').get(id) as { status: string } | undefined
     const ensureTurn = (start: number) => {
       if (!checkpoint!.turn) {
@@ -128,9 +130,9 @@ export class RolloutHistory {
     const closeTurn = () => { checkpoint!.turn = null; checkpoint!.explicit = false; checkpoint!.compacted = false }
     const nextId = () => `item-${checkpoint!.nextItem++}`
     const insert = db.prepare(`INSERT INTO entries(seq,turn,id,type,canonical,msg,data,start,end,clipped,fingerprint,suppressed) VALUES(?,?,?,?,1,?,?,?,?,?,'',?)
-      ON CONFLICT(turn,id,canonical) DO UPDATE SET data=excluded.data,start=excluded.start,end=excluded.end,clipped=excluded.clipped,suppressed=excluded.suppressed`)
-    const put = (item: Record<string, unknown>, id: string, turn: string, start: number, end: number, clipped: boolean, hidden = false) => {
-      if (!knownTurn(turn)) return // A late lifecycle item cannot resurrect a rolled-back turn.
+      ON CONFLICT(turn,id,canonical) DO UPDATE SET data=excluded.data,start=excluded.start,end=excluded.end,clipped=excluded.clipped,suppressed=excluded.suppressed,type=excluded.type,msg=excluded.msg`)
+    const put = (item: Record<string, unknown>, id: string, turn: string, start: number, end: number, clipped: boolean, hidden = false, requireKnownTurn = true) => {
+      if (requireKnownTurn && !knownTurn(turn)) return // A late lifecycle item cannot resurrect a rolled-back turn.
       if (id.length >= 4096 || !id) throw Error('Unsupported native item identity')
       const normalized = historyItem(item, id)
       const data = hidden ? '{}' : JSON.stringify(normalized.value), kind = String(normalized.value.type)
@@ -146,10 +148,37 @@ export class RolloutHistory {
       if (typeof payload.turn_id === 'string' && payload.turn_id.length > 256) throw Error('Unsupported native turn identity length')
       if (!checkpoint!.verified) {
         if (type !== 'session_meta' || payload.id !== metadata.id || payload.cwd !== metadata.cwd) throw Error('Native history identity mismatch')
-        if (payload.history_base != null || payload.subagent_history_start_ordinal != null || (payload.history_mode != null && payload.history_mode !== 'legacy')) {
+        if (payload.history_base != null || payload.subagent_history_start_ordinal != null) {
           throw Error('Native referenced/ordinal history requires a compatible reader; no partial history was returned')
         }
-        checkpoint!.verified = true; return
+        const mode = payload.history_mode ?? 'legacy'
+        if (mode !== 'legacy' && mode !== 'paginated') throw Error('Unsupported native history mode')
+        checkpoint!.mode = mode
+        checkpoint!.verified = true
+        if (mode === 'legacy') return
+      }
+      if (checkpoint!.mode === 'paginated') {
+        // Ordinals and byte checkpoints advance together. Fail visibly on a
+        // malformed/discontinuous source; never silently renumber native rows.
+        if (!Number.isSafeInteger(row.ordinal) || row.ordinal !== checkpoint!.nextOrdinal) throw Error('Paginated history ordinal mismatch; source needs native compatibility review')
+        checkpoint!.nextOrdinal++
+        if (type === 'session_meta') {
+          if (payload.id !== metadata.id || payload.cwd !== metadata.cwd || payload.history_mode !== 'paginated' || payload.history_base != null || payload.subagent_history_start_ordinal != null) throw Error('Native history identity/mode changed')
+          return
+        }
+        const change = projectPaginated(row, metadata.id)
+        if (!change) return
+        if (change.kind === 'turn') {
+          // Native materialized turn rows preserve their first position and the
+          // first terminal outcome. A later start/completion cannot reopen it.
+          db.prepare(`INSERT INTO turns(id,seq,status) VALUES(?,?,?)
+            ON CONFLICT(id) DO UPDATE SET status=excluded.status WHERE turns.status='inProgress'`).run(change.id, start, change.status)
+        } else {
+          // A completed review item may precede its turn lifecycle record.
+          // Preserve its explicit turn ID without inventing a turn-start row.
+          put(change.item, change.id, change.turn, start, end, clipped, change.hidden, false)
+        }
+        return
       }
       if (type === 'session_meta') { if (payload.id !== metadata.id || payload.cwd !== metadata.cwd) throw Error('Native history identity changed'); return }
       if (type === 'compacted') { ensureTurn(start); checkpoint!.compacted = true; return }
@@ -313,8 +342,8 @@ export class HistoryView {
     before = Math.min(before, this.checkpoint.offset)
     const messages = this.db.prepare(`SELECT e.seq FROM entries e WHERE e.msg=1 AND e.seq<? AND ${visible} ORDER BY e.seq DESC LIMIT 20`).all(before) as Array<{ seq: number }>
     const lower = messages.length === 20 ? messages.at(-1)!.seq : 0
-    const rows = this.db.prepare(`SELECT e.*, t.status FROM entries e JOIN turns t ON t.id=e.turn WHERE e.seq>=? AND e.seq<? AND ${visible} AND e.msg=1 ORDER BY e.seq`).all(lower, before) as IndexedItem[]
-    const tools = this.db.prepare(`SELECT e.*,t.status FROM entries e JOIN turns t ON t.id=e.turn WHERE e.seq>=? AND e.seq<? AND ${visible} AND e.msg=0 ORDER BY e.seq DESC LIMIT 60`).all(lower, before) as IndexedItem[]
+    const rows = this.db.prepare(`SELECT e.*, COALESCE(t.status,'unknown') AS status FROM entries e LEFT JOIN turns t ON t.id=e.turn WHERE e.seq>=? AND e.seq<? AND ${visible} AND e.msg=1 ORDER BY e.seq`).all(lower, before) as IndexedItem[]
+    const tools = this.db.prepare(`SELECT e.*,COALESCE(t.status,'unknown') AS status FROM entries e LEFT JOIN turns t ON t.id=e.turn WHERE e.seq>=? AND e.seq<? AND ${visible} AND e.msg=0 ORDER BY e.seq DESC LIMIT 60`).all(lower, before) as IndexedItem[]
     const totalTools = Number(this.db.prepare(`SELECT count(*) AS n FROM entries e WHERE e.seq>=? AND e.seq<? AND e.msg=0 AND ${visible}`).get(lower, before)!.n)
     const previous = this.db.prepare(`SELECT e.seq FROM entries e WHERE e.seq<? AND ${visible} ORDER BY e.seq DESC LIMIT 1`).get(lower)
     const latestTurn = this.db.prepare('SELECT id,status FROM turns ORDER BY seq DESC LIMIT 1').get() as { id: string; status: string } | undefined

@@ -1,5 +1,6 @@
-// Synthetic text/IDs only. Structural ordering from root's bounded inspection;
-// event semantics from OpenAI codex rust-v0.155.0 ThreadHistoryBuilder.
+// Synthetic text/IDs only. Structural ordering from root's bounded inspection.
+// Dedicated events are LEGACY controls, not evidence for paginated native
+// logs. paginatedBootstrapRecords below uses canonical completed items only.
 export const record = (type, payload) => ({ timestamp: '2026-09-25T00:00:00.000Z', type, payload })
 export const nativeEvent = (type, payload = {}) => record('event_msg', { type, ...payload })
 export const nativeUser = message => nativeEvent('user_message', { message, images: [], local_images: [], text_elements: [] })
@@ -29,4 +30,24 @@ export function bootstrapRecords(id, cwd) {
     nativeEvent('item_completed', { thread_id: id, turn_id: 'first', item: { type: 'AgentMessage', id: 'copy-answer', content: [{ type: 'Text', text: 'First visible answer' }], phase: 'final_answer' } }),
     nativeAnswer('First visible answer'), nativeComplete('first'),
   ]
+}
+
+// Actual target format: canonical items only, no dedicated legacy messages.
+export const materialized = (thread_id, turn_id, item) => nativeEvent('item_completed', {
+  thread_id, turn_id, item, started_at_ms: 1790294400000, completed_at_ms: 1790294400001,
+})
+export const materializedUser = (thread, turn, id, text) => materialized(thread, turn, { type: 'UserMessage', id, content: [{ type: 'text', text, text_elements: [] }] })
+export const materializedAnswer = (thread, turn, id, text, phase = 'final_answer') => materialized(thread, turn, { type: 'AgentMessage', id, content: [{ type: 'Text', text }], phase })
+export const withOrdinals = (rows, start = 0) => rows.map((row, index) => ({ ...row, ordinal: start + index }))
+export function paginatedBootstrapRecords(id, cwd) {
+  // Same physical lines 5/7/10/13 as structural inspection; text is synthetic.
+  const prefix = bootstrapRecords(id, cwd).slice(0, 12)
+  prefix[0].payload = { ...prefix[0].payload, history_mode: 'paginated', history_base: null, subagent_history_start_ordinal: null }
+  return withOrdinals([
+    ...prefix,
+    materializedUser(id, 'first', 'native-user-1', 'First visible input'),
+    rawAssistant('Model output duplicate, not a display input'),
+    materializedAnswer(id, 'first', 'native-agent-1', 'First visible answer'),
+    nativeComplete('first'),
+  ])
 }

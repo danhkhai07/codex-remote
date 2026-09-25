@@ -166,9 +166,10 @@ it('does not mistake a persisted mid-scan cancellation checkpoint for an unchang
   expect(restarted.metrics.rebuilds).toBe(0)
 }, 90000)
 
-// No production payloads: replay exactly the observed *structural* bootstrap.
-// These assertions are pending execution via codex-heavy, not native parity proof.
-it('maps bootstrap before turn_context/task_started without guessing a turn or counting context copies', async () => {
+// Synthetic LEGACY control, not the actual paginated target. The latter lives
+// in history-paginated.test.ts, without these dedicated legacy display events.
+// All assertions still need execution via codex-heavy and native parity.
+it('maps legacy bootstrap before turn_context/task_started without guessing a turn or counting context copies', async () => {
   const { bootstrapRecords, serializeRecords, rawUser, nativeStart, nativeUser, nativeAnswer, nativeComplete } = await import('./fixtures/native-history-order.mjs')
   const f = await fixture(0, 0), rows = bootstrapRecords(f.metadata.id, f.metadata.cwd)
   await writeFile(f.metadata.path, serializeRecords(rows.slice(0, 5)))

@@ -163,13 +163,13 @@ describe('RemoteController', () => {
     try {
       await mkdir(join(dir, 'sessions'))
       const path = join(dir, 'sessions', 'fake.jsonl')
-      const records: unknown[] = [{ type: 'session_meta', payload: { id: 'messages', cwd: '/workspace' } }]
+      const records: unknown[] = [{ type: 'session_meta', payload: { id: 'messages', cwd: '/workspace', history_mode: 'paginated', history_base: null, subagent_history_start_ordinal: null } }]
       for (let n = 0; n < 30; n++) {
         records.push({ type: 'event_msg', payload: { type: 'task_started', turn_id: `t${n}` } },
-          { type: 'event_msg', payload: { type: 'agent_message', message: `Answer ${n}`, phase: 'final_answer' } },
+          { type: 'event_msg', payload: { type: 'item_completed', thread_id: 'messages', turn_id: `t${n}`, item: { id: `canonical-a${n}`, type: 'AgentMessage', content: [{ type: 'Text', text: `Answer ${n}` }], phase: 'final_answer' }, completed_at_ms: 1 } },
           { type: 'event_msg', payload: { type: 'task_complete', turn_id: `t${n}` } })
       }
-      await writeFile(path, records.map(row => JSON.stringify(row)).join('\n') + '\n')
+      await writeFile(path, records.map((row, ordinal) => JSON.stringify({ ...(row as object), ordinal })).join('\n') + '\n')
       const source = { thread: { id: 'messages', cwd: '/workspace', path } }, app = new StubAppServer()
       const rpc = vi.spyOn(app, 'request').mockImplementation(async (method, params) => {
         if (method === 'thread/turns/list') { expect(params).toEqual({ threadId: 'messages', limit: 1, sortDirection: 'desc', itemsView: 'notLoaded' }); return { data: [{ id: 't29', status: 'completed', items: [] }], nextCursor: null } }
