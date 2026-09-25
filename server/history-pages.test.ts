@@ -9,7 +9,10 @@ const owned: string[] = []
 afterEach(async () => { for (const dir of owned.splice(0)) await rm(dir, { recursive: true, force: true }) })
 const row = (type: string, payload: unknown) => JSON.stringify({ type, payload }) + '\n'
 const event = (type: string, payload: object = {}) => row('event_msg', { type, ...payload })
-const item = (id: string, type: string, text = id, turn = 't') => event('item_completed', { turn_id: turn, item: { id, type, text, ...(type === 'userMessage' ? { content: [{ type: 'text', text }] } : {}) } })
+const item = (id: string, type: string, text = id, turn = 't') => {
+  if (['userMessage', 'UserMessage', 'agentMessage', 'AgentMessage'].includes(type)) return event(type.toLowerCase() === 'usermessage' ? 'user_message' : 'agent_message', { message: text, images: [], local_images: [], phase: type.toLowerCase() === 'agentmessage' ? 'final_answer' : undefined })
+  return event('item_completed', { turn_id: turn, item: { id, type, text } })
+}
 async function fixture(messages = 60, tools = 3) {
   const dir = await mkdtemp(join(tmpdir(), 'history-test-')); owned.push(dir)
   await mkdir(join(dir, 'sessions'))
@@ -22,7 +25,7 @@ async function fixture(messages = 60, tools = 3) {
   const source = new RolloutHistory(dir, join(dir, 'index')), pages = new HistoryPages('FAKE'.repeat(16), source)
   return { dir, metadata, header, source, pages, live: () => {} }
 }
-const ids = (page: Awaited<ReturnType<HistoryPages['page']>>) => page.turns.flatMap(t => t.items).filter(i => ['userMessage', 'agentMessage'].includes(i.type)).map(i => i.id)
+const ids = (page: Awaited<ReturnType<HistoryPages['page']>>) => page.turns.flatMap(t => t.items).filter(i => ['userMessage', 'agentMessage'].includes(i.type)).map(i => i.type === 'agentMessage' ? String(i.text) : String((i.content as Array<{ text: string }>)[0].text))
 describe('read-only persisted native history windows', () => {
   it('counts exactly twenty messages, bounded tools, stable pages and persisted restart revision', async () => {
     const f = await fixture(61, 5), before = createHash('sha256').update(await readFile(f.metadata.path)).digest('hex')
@@ -63,11 +66,11 @@ describe('read-only persisted native history windows', () => {
   })
   it('bounds an independent synthetic huge single record before materialization; detail reads ranges only', async () => {
     const f = await fixture(0, 0), fd = await open(f.metadata.path, 'a')
-    await fd.write('{"type":"event_msg","payload":{"type":"item_completed","turn_id":"t","item":{"type":"AgentMessage","id":"giant","text":"')
+    await fd.write('{"type":"event_msg","payload":{"type":"agent_message","message":"')
     // Synthetic 16 MiB ONE item, separate from the 197 MB whole-transcript fixture.
     const block = Buffer.from('x'.repeat(65536))
     for (let n = 0; n < 256; n++) await fd.write(block)
-    await fd.write('"}}}\n'); await fd.close()
+    await fd.write('"}}\n'); await fd.close()
     const page = await f.pages.page(f.metadata, f.live), giant = page.turns[0].items[0]
     expect(String(giant.text).length).toBeLessThanOrEqual(16384)
     expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(25000)
@@ -77,14 +80,17 @@ describe('read-only persisted native history windows', () => {
     expect(Buffer.byteLength(first.text)).toBe(32768); expect(second.offset).toBe(first.next)
     expect(f.source.metrics.detailBytes).toBe(65536); expect(f.source.metrics.indexBytes).toBe(scan)
     await expect(f.pages.detail({ ...f.metadata, id: 'other' }, String(giant.historyDetail), 0, f.live)).rejects.toThrow('cursor')
-    await appendFile(f.metadata.path, item('giant', 'agentMessage', 'updated'))
+    await appendFile(f.metadata.path, event('thread_rolled_back', { num_turns: 1 }))
     await expect(f.pages.detail(f.metadata, String(giant.historyDetail), 0, f.live)).rejects.toThrow(/changed|rewritten/)
   }, 90000)
-  it('does not resurrect canonical duplicates, hide fallback messages, or lose interrupted status', async () => {
+  it('uses display events once, ignoring model context/canonical copies and preserving interrupted status', async () => {
     const f = await fixture(0, 0)
-    await appendFile(f.metadata.path, row('response_item', { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'final' }] }) + item('canonical', 'AgentMessage', 'final') + row('response_item', { type: 'message', role: 'assistant', id: 'legacy-only', content: [{ type: 'output_text', text: 'unique legacy text' }] }) + event('turn_aborted', { turn_id: 't' }))
+    await appendFile(f.metadata.path, event('task_started', { turn_id: 'display' }) + row('response_item', { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'not a UI message' }] }) +
+      event('item_completed', { turn_id: 'display', item: { type: 'AgentMessage', id: 'native-copy', content: [{ type: 'Text', text: 'final' }] } }) +
+      item('ignored-id', 'AgentMessage', 'final') + event('turn_aborted', { turn_id: 'display' }) + event('task_complete', { turn_id: 'display' }))
     const page = await f.pages.page(f.metadata, f.live)
-    expect(ids(page)).toEqual(['canonical', 'legacy-only']); expect(page.turns[0].status).toBe('interrupted')
+    expect(ids(page)).toEqual(['final']); expect(page.turns[0].status).toBe('interrupted')
+    expect(page.turns[0].items[0].id).toBe('item-1')
     expect(page.latestTurn?.status).toBe('interrupted')
   })
   it('validates thread/path/descriptor, signed cursors and cancellation with recoverable cache', async () => {
@@ -101,6 +107,7 @@ describe('read-only persisted native history windows', () => {
   })
   it('retains valid renderer field types rather than recursively nulling nested values', () => {
     expect(historyItem({ type: 'UserMessage', content: [{ type: 'text', text: 'hi' }, { type: 'Image', url: 'do not embed' }] }, 'id').value).toEqual({ id: 'id', type: 'userMessage', content: [{ type: 'text', text: 'hi' }, { type: 'image' }] })
+    expect(historyItem({ type: 'AgentMessage', content: [{ type: 'Text', text: 'Việt 😀' }] }, 'native').value).toMatchObject({ id: 'native', text: 'Việt 😀' })
     expect(historyItem({ type: 'FileChange', changes: [{ path: 'x', diff: 'x'.repeat(100000) }] }, 'file').value).toMatchObject({ id: 'file', changes: [] })
   })
 })
@@ -119,7 +126,7 @@ it('bounds UTF-8 ranges, preserves tool records between messages and requires si
   }
   expect(count).toBe(100) // 60 displayed + 40 summarized; no tool record lost.
   await appendFile(f.metadata.path, item('unicode', 'agentMessage', 'Việt 😀'.repeat(12000)))
-  const changed = await f.pages.page(f.metadata, f.live), unicode = changed.turns[0].items.find(i => i.id === 'unicode')!
+  const changed = await f.pages.page(f.metadata, f.live), unicode = changed.turns.flatMap(t => t.items).find(i => String(i.text).startsWith('Việt'))!
   const first = await f.pages.detail(f.metadata, String(unicode.historyDetail), 0, f.live)
   const second = await f.pages.detail(f.metadata, String(unicode.historyDetail), first.next!, f.live)
   expect(first.text + second.text).not.toContain('\uFFFD')
@@ -158,3 +165,99 @@ it('does not mistake a persisted mid-scan cancellation checkpoint for an unchang
   expect(restarted.metrics.indexBytes).toBeGreaterThan(0)
   expect(restarted.metrics.rebuilds).toBe(0)
 }, 90000)
+
+// No production payloads: replay exactly the observed *structural* bootstrap.
+// These assertions are pending execution via codex-heavy, not native parity proof.
+it('maps bootstrap before turn_context/task_started without guessing a turn or counting context copies', async () => {
+  const { bootstrapRecords, serializeRecords, rawUser, nativeStart, nativeUser, nativeAnswer, nativeComplete } = await import('./fixtures/native-history-order.mjs')
+  const f = await fixture(0, 0), rows = bootstrapRecords(f.metadata.id, f.metadata.cwd)
+  await writeFile(f.metadata.path, serializeRecords(rows.slice(0, 5)))
+  const beforeStart = await f.pages.page(f.metadata, f.live)
+  expect(beforeStart.turns).toEqual([]); expect(beforeStart.latestTurn).toBeUndefined()
+  await appendFile(f.metadata.path, serializeRecords(rows.slice(5, 13)))
+  // Persist across a process-style restart between context/canonical copy and
+  // dedicated display event. No deferred raw text is held in RAM or checkpoint.
+  const restarted = new HistoryPages('FAKE'.repeat(16), new RolloutHistory(f.dir, join(f.dir, 'index')))
+  expect(ids(await restarted.page(f.metadata, f.live))).toEqual([])
+  await appendFile(f.metadata.path, serializeRecords(rows.slice(13)))
+  const first = await restarted.page(f.metadata, f.live)
+  expect(first.turns.map(t => t.id)).toEqual(['first'])
+  expect(ids(first)).toEqual(['First visible input', 'First visible answer'])
+  expect(first.turns[0].items.map(i => i.id)).toEqual(['item-1', 'item-2'])
+  await appendFile(f.metadata.path, serializeRecords([rawUser('Second visible input'), nativeStart('second'), nativeUser('Second visible input'), nativeAnswer('Second answer'), nativeComplete('second')]))
+  const next = await restarted.page(f.metadata, f.live)
+  expect(next.turns.map(t => [t.id, t.items.map(i => i.id)])).toEqual([['first', ['item-1', 'item-2']], ['second', ['item-3', 'item-4']]])
+  // A fresh index and incrementally persisted index produce the same projection.
+  const cold = await new HistoryPages('FAKE'.repeat(16), new RolloutHistory(f.dir, join(f.dir, 'cold-index'))).page(f.metadata, f.live)
+  const values = (page: Awaited<ReturnType<HistoryPages['page']>>) => page.turns.map(t => ({ ...t, items: t.items.map(item => { const value = { ...item }; delete value.historyDetail; return value }) }))
+  expect(values(cold)).toEqual(values(next))
+})
+
+it('keeps legacy implicit identities, compaction and cancelled/empty turns across restart', async () => {
+  const f = await fixture(0, 0)
+  await writeFile(f.metadata.path, row('session_meta', { id: f.metadata.id, cwd: f.metadata.cwd }) +
+    row('response_item', { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Imported model context' }] }) +
+    event('user_message', { message: 'Imported visible input' }) + event('agent_message', { message: 'Imported answer' }) +
+    row('compacted', { message: 'Model summary', replacement_history: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Do not inject summary as UI' }] }] }))
+  const first = await f.pages.page(f.metadata, f.live)
+  expect(first.turns[0].id).toBe('rollout-2')
+  await appendFile(f.metadata.path, event('user_message', { message: 'Next imported input' }) +
+    event('task_started', { turn_id: 'empty' }) + event('turn_aborted', { turn_id: 'empty' }) + event('task_complete', { turn_id: 'empty' }))
+  const restarted = await new HistoryPages('FAKE'.repeat(16), new RolloutHistory(f.dir, join(f.dir, 'index'))).page(f.metadata, f.live)
+  expect(restarted.turns.map(t => t.id)).toEqual(['rollout-2', 'rollout-5'])
+  expect(ids(restarted)).toEqual(['Imported visible input', 'Imported answer', 'Next imported input'])
+  expect(restarted.latestTurn).toEqual({ id: 'empty', status: 'interrupted' })
+  await appendFile(f.metadata.path, row('compacted', { message: 'Only compaction' }))
+  await f.pages.page(f.metadata, f.live)
+  await appendFile(f.metadata.path, event('user_message', { message: 'Reuses compaction-only implicit turn' }))
+  const compacted = await f.pages.page(f.metadata, f.live)
+  expect(compacted.turns.at(-1)?.id).toBe('rollout-9')
+})
+
+it('excludes internal channels and reasoning without shifting native IDs across checkpoints', async () => {
+  const f = await fixture(0, 0)
+  await writeFile(f.metadata.path, f.header + event('user_message', { message: 'Visible' }) +
+    row('response_item', { type: 'message', role: 'assistant', channel: 'analysis', content: [{ type: 'output_text', text: 'RAW INTERNAL' }] }) +
+    event('agent_reasoning', { text: 'PRIVATE REASONING' }) + event('agent_reasoning_raw_content', { text: 'MORE PRIVATE' }))
+  expect(ids(await f.pages.page(f.metadata, f.live))).toEqual(['Visible'])
+  await appendFile(f.metadata.path, event('agent_message', { message: 'Visible final', phase: 'final_answer' }) +
+    event('agent_message', { message: 'INTERNAL MESSAGE', channel: 'analysis' }) + event('agent_message', { message: 'Final after hidden', phase: 'final_answer' }))
+  const page = await new HistoryPages('FAKE'.repeat(16), new RolloutHistory(f.dir, join(f.dir, 'index'))).page(f.metadata, f.live)
+  expect(page.messages).toBe(3)
+  expect(page.turns[0].items.map(i => i.id)).toEqual(['item-1', 'item-3', 'item-5'])
+  expect(JSON.stringify(page)).not.toMatch(/PRIVATE|INTERNAL/)
+})
+
+it('applies native rollback to derived turns only, invalidates cursors, and ignores late orphan tool replies', async () => {
+  const f = await fixture(21, 0), original = await f.pages.page(f.metadata, f.live)
+  await appendFile(f.metadata.path, event('task_started', { turn_id: 'removed' }) + item('remove', 'agentMessage') + event('task_complete', { turn_id: 'removed' }))
+  const beforeRollback = await readFile(f.metadata.path)
+  await appendFile(f.metadata.path, event('thread_rolled_back', { num_turns: 1 }) + item('late-tool', 'commandExecution', 'late', 'removed'))
+  await expect(f.pages.page(f.metadata, f.live, original.older!)).rejects.toThrow('rewritten')
+  const page = await f.pages.page(f.metadata, f.live)
+  expect(ids(page)).toEqual(ids(original)); expect(page.latestTurn?.id).toBe('t')
+  expect(JSON.stringify(page)).not.toContain('late-tool')
+  expect((await readFile(f.metadata.path)).subarray(0, beforeRollback.length)).toEqual(beforeRollback)
+  await appendFile(f.metadata.path, event('task_started', { turn_id: 'fresh' }) + item('after rollback', 'agentMessage'))
+  const fresh = await new HistoryPages('FAKE'.repeat(16), new RolloutHistory(f.dir, join(f.dir, 'index'))).page(f.metadata, f.live)
+  expect(fresh.turns.at(-1)?.items.at(-1)?.id).toBe('item-22')
+})
+
+it('does not return incomplete child/fork history when metadata requires an unresolved source prefix', async () => {
+  const f = await fixture(0, 0)
+  await writeFile(f.metadata.path, row('session_meta', { id: f.metadata.id, cwd: f.metadata.cwd, history_base: { thread_id: 'parent', ordinal: 20 } }) + event('user_message', { message: 'Only child suffix' }))
+  await expect(f.pages.page(f.metadata, f.live)).rejects.toThrow('no partial history')
+  await writeFile(f.metadata.path, row('session_meta', { id: f.metadata.id, cwd: f.metadata.cwd, subagent_history_start_ordinal: 20 }) + event('user_message', { message: 'Inherited model context must not leak into child display' }))
+  await expect(f.pages.page(f.metadata, f.live)).rejects.toThrow('no partial history')
+})
+
+it('keeps pre-turn native hook prompts as tools rather than fabricated user inputs', async () => {
+  const f = await fixture(0, 0)
+  await writeFile(f.metadata.path, row('session_meta', { id: f.metadata.id, cwd: f.metadata.cwd }) +
+    row('response_item', { type: 'message', role: 'user', id: 'hook-1', content: [{ type: 'input_text', text: '<hook_prompt hook_run_id="owned-hook">Fixture hook</hook_prompt>' }] }) + event('task_started', { turn_id: 'real' }) + item('Real input', 'userMessage'))
+  const page = await f.pages.page(f.metadata, f.live)
+  expect(page.messages).toBe(1); expect(ids(page)).toEqual(['Real input'])
+  expect(page.turns[0].id).toBe('rollout-1')
+  expect(page.turns[0].items[0]).toMatchObject({ id: 'hook-1', type: 'historyTool' })
+  expect(page.turns[1].items[0].id).toBe('item-1')
+})

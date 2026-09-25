@@ -166,7 +166,7 @@ describe('RemoteController', () => {
       const records: unknown[] = [{ type: 'session_meta', payload: { id: 'messages', cwd: '/workspace' } }]
       for (let n = 0; n < 30; n++) {
         records.push({ type: 'event_msg', payload: { type: 'task_started', turn_id: `t${n}` } },
-          { type: 'event_msg', payload: { type: 'item_completed', turn_id: `t${n}`, item: { id: `a${n}`, type: 'AgentMessage', text: `Answer ${n}`, phase: 'final_answer' } } },
+          { type: 'event_msg', payload: { type: 'agent_message', message: `Answer ${n}`, phase: 'final_answer' } },
           { type: 'event_msg', payload: { type: 'task_complete', turn_id: `t${n}` } })
       }
       await writeFile(path, records.map(row => JSON.stringify(row)).join('\n') + '\n')

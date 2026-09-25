@@ -24,7 +24,14 @@ export function persistedFixtureThread(thread) {
     const rows = [{ type: 'session_meta', payload: { id: thread.id, cwd: thread.cwd } }]
     for (const turn of thread.turns ?? []) {
       rows.push({ type: 'event_msg', payload: { type: 'task_started', turn_id: turn.id } })
-      for (const item of turn.items ?? []) rows.push({ type: 'event_msg', payload: { type: 'item_completed', turn_id: turn.id, item } })
+      for (const item of turn.items ?? []) {
+        if (item.type === 'userMessage' || item.type === 'agentMessage') rows.push({ type: 'event_msg', payload: {
+          type: item.type === 'userMessage' ? 'user_message' : 'agent_message',
+          message: item.text ?? (item.content ?? []).map(part => part.text ?? '').join('\n'),
+          images: [], local_images: [], phase: item.phase,
+        } })
+        rows.push({ type: 'event_msg', payload: { type: 'item_completed', turn_id: turn.id, item } })
+      }
       if (turn.status !== 'inProgress') rows.push({ type: 'event_msg', payload: { type: turn.status === 'completed' ? 'task_complete' : turn.status === 'failed' ? 'task_failed' : 'turn_aborted', turn_id: turn.id } })
     }
     const temporary = entry.path + '.tmp'; owned.add(temporary)

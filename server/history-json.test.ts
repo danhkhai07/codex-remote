@@ -42,3 +42,8 @@ it('does not let arbitrary nested tool keys bypass the global retention budget',
   expect(JSON.stringify(result.value).length).toBeLessThan(250000)
   expect(result.value).toMatchObject({ type: 'event_msg', payload: { turn_id: 'exact-turn', item: { id: 'exact-id', type: 'McpToolCall' } } })
 })
+it('retains visibility and source-format discriminators even after a clipped large payload', () => {
+  const result = project(JSON.stringify({ type: 'event_msg', payload: { message: 'x'.repeat(100000), channel: 'analysis', phase: 'analysis', history_base: { thread_id: 'parent', ordinal: 20 }, history_mode: 'paginated', subagent_history_start_ordinal: 20 } }))
+  expect(result.truncated).toBe(true)
+  expect(result.value).toMatchObject({ payload: { channel: 'analysis', phase: 'analysis', history_base: { thread_id: 'parent', ordinal: 20 }, history_mode: 'paginated', subagent_history_start_ordinal: 20 } })
+})

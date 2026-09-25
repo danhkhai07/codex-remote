@@ -8,7 +8,7 @@ import { HistoryJson } from './history-json.js'
 
 export type HistoryMetadata = { id: string; cwd: string; path?: string }
 export type IndexedItem = { seq: number; turn: string; status: string; id: string; type: string; data: string; start: number; end: number; clipped: number; msg: number }
-type Checkpoint = { version: 1; generation: string; identity: string; offset: number; size: number; mtime: number; head: string; tail: string; turn: string | null; verified: boolean; scanned: boolean }
+type Checkpoint = { version: 2; recordIndex: number; nextItem: number; explicit: boolean; compacted: boolean; generation: string; identity: string; offset: number; size: number; mtime: number; head: string; tail: string; turn: string | null; verified: boolean; scanned: boolean }
 const obj = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 const string = (value: unknown, max = 4096) => typeof value === 'string' ? value.slice(0, max) : ''
 const visible = `e.suppressed=0`
@@ -101,7 +101,7 @@ export class RolloutHistory {
       if (read.bytesRead !== size) throw Error('History truncated while indexing')
       return createHash('sha256').update(buffer).digest('hex')
     }
-    let valid = checkpoint?.version === 1 && checkpoint.identity === identity && checkpoint.offset <= snapshot.size
+    let valid = checkpoint?.version === 2 && checkpoint.identity === identity && checkpoint.offset <= snapshot.size
     if (valid && checkpoint) {
       valid = checkpoint.head === await digest(0, Math.min(checkpoint.offset, 4096)) && checkpoint.tail === await digest(Math.max(0, checkpoint.offset - 4096), Math.min(checkpoint.offset, 4096))
       if (snapshot.size === checkpoint.size && snapshot.mtimeMs !== checkpoint.mtime) valid = false
@@ -109,65 +109,158 @@ export class RolloutHistory {
     if (!valid || !checkpoint) {
       this.metrics.rebuilds++
       db.exec('BEGIN IMMEDIATE; DELETE FROM entries; DELETE FROM turns; DELETE FROM state; COMMIT;')
-      checkpoint = { version: 1, generation: randomUUID(), identity, offset: 0, size: 0, mtime: 0, head: '', tail: '', turn: null, verified: false, scanned: false }
+      checkpoint = { version: 2, recordIndex: 0, nextItem: 1, explicit: false, compacted: false, generation: randomUUID(), identity, offset: 0, size: 0, mtime: 0, head: '', tail: '', turn: null, verified: false, scanned: false }
     }
     // An unchanged incomplete tail is not reparsed on every poll/detail request.
     if (checkpoint.scanned && checkpoint.size === snapshot.size && checkpoint.mtime === snapshot.mtimeMs) return checkpoint
-    const writeTurn = db.prepare('INSERT INTO turns(id,seq,status) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status')
-    const insert = db.prepare(`INSERT INTO entries(seq,turn,id,type,canonical,msg,data,start,end,clipped,fingerprint) VALUES(?,?,?,?,?,?,?,?,?,?,?)
-      ON CONFLICT(turn,id,canonical) DO UPDATE SET data=excluded.data,start=excluded.start,end=excluded.end,clipped=excluded.clipped,fingerprint=excluded.fingerprint`)
+    // Persist the reducer state at the SAME record boundary as indexed rows.
+    // Native 0.155.0 ThreadHistoryBuilder: model ResponseItems and TurnContext
+    // are not UI messages/turn boundaries. Dedicated EventMsgs own that history.
+    const knownTurn = (id: string) => db.prepare('SELECT status FROM turns WHERE id=?').get(id) as { status: string } | undefined
+    const ensureTurn = (start: number) => {
+      if (!checkpoint!.turn) {
+        checkpoint!.turn = `rollout-${checkpoint!.recordIndex - 1}`
+        checkpoint!.explicit = false; checkpoint!.compacted = false
+        db.prepare('INSERT INTO turns VALUES(?,?,?)').run(checkpoint!.turn, start, 'completed')
+      }
+      return checkpoint!.turn
+    }
+    const closeTurn = () => { checkpoint!.turn = null; checkpoint!.explicit = false; checkpoint!.compacted = false }
+    const nextId = () => `item-${checkpoint!.nextItem++}`
+    const insert = db.prepare(`INSERT INTO entries(seq,turn,id,type,canonical,msg,data,start,end,clipped,fingerprint,suppressed) VALUES(?,?,?,?,1,?,?,?,?,?,'',?)
+      ON CONFLICT(turn,id,canonical) DO UPDATE SET data=excluded.data,start=excluded.start,end=excluded.end,clipped=excluded.clipped,suppressed=excluded.suppressed`)
+    const put = (item: Record<string, unknown>, id: string, turn: string, start: number, end: number, clipped: boolean, hidden = false) => {
+      if (!knownTurn(turn)) return // A late lifecycle item cannot resurrect a rolled-back turn.
+      if (id.length >= 4096 || !id) throw Error('Unsupported native item identity')
+      const normalized = historyItem(item, id)
+      const data = hidden ? '{}' : JSON.stringify(normalized.value), kind = String(normalized.value.type)
+      const lossyContent = Array.isArray(item.content) && item.content.some(value => !['text', 'Text', 'input_text', 'output_text', 'inputText'].includes(String(obj(value).type)))
+      const clip = clipped || lossyContent || !normalized.message || JSON.stringify(item).length > data.length + 1024 ? 1 : 0
+      const prior = db.prepare('SELECT data,start,end FROM entries WHERE turn=? AND id=? AND canonical=1').get(turn, id) as { data: string; start: number; end: number } | undefined
+      if (prior && (prior.data !== data || prior.start !== start || prior.end !== end)) checkpoint!.generation = randomUUID()
+      insert.run(start, turn, id, kind, normalized.message && !hidden ? 1 : 0, data, start, end, clip, hidden ? 1 : 0)
+    }
     const record = (row: Record<string, unknown>, start: number, end: number, clipped: boolean) => {
-      this.metrics.records++
-      const payload = obj(row.payload), type = String(row.type ?? '')
+      this.metrics.records++; checkpoint!.recordIndex++
+      const payload = obj(row.payload), type = String(row.type ?? ''), event = String(payload.type ?? '')
       if (typeof payload.turn_id === 'string' && payload.turn_id.length > 256) throw Error('Unsupported native turn identity length')
       if (!checkpoint!.verified) {
         if (type !== 'session_meta' || payload.id !== metadata.id || payload.cwd !== metadata.cwd) throw Error('Native history identity mismatch')
+        if (payload.history_base != null || payload.subagent_history_start_ordinal != null || (payload.history_mode != null && payload.history_mode !== 'legacy')) {
+          throw Error('Native referenced/ordinal history requires a compatible reader; no partial history was returned')
+        }
         checkpoint!.verified = true; return
       }
       if (type === 'session_meta') { if (payload.id !== metadata.id || payload.cwd !== metadata.cwd) throw Error('Native history identity changed'); return }
-      if (type === 'turn_context' && typeof payload.turn_id === 'string') {
-        checkpoint!.turn = string(payload.turn_id, 256)
-        db.prepare('INSERT OR IGNORE INTO turns(id,seq,status) VALUES(?,?,?)').run(checkpoint!.turn, start, 'inProgress')
-      }
-      if (type === 'event_msg' && payload.type === 'task_started' && typeof payload.turn_id === 'string') {
-        checkpoint!.turn = string(payload.turn_id, 256); writeTurn.run(checkpoint!.turn, start, 'inProgress'); return
-      }
-      if (type === 'event_msg' && ['task_complete', 'turn_aborted', 'task_failed'].includes(String(payload.type)) && typeof payload.turn_id === 'string') {
-        writeTurn.run(string(payload.turn_id, 256), start, payload.type === 'task_complete' ? 'completed' : payload.type === 'task_failed' ? 'failed' : 'interrupted'); return
-      }
-      let item: Record<string, unknown> | undefined, turn = checkpoint!.turn, canonical = 0
-      if (type === 'event_msg' && payload.type === 'item_completed') {
-        item = obj(payload.item); turn = typeof payload.turn_id === 'string' ? string(payload.turn_id, 256) : turn; canonical = 1
-        if (['Reasoning', 'reasoning'].includes(String(item.type))) return // Never expand internal reasoning payloads.
-      } else if (type === 'response_item' && payload.type === 'message' && ['user', 'assistant'].includes(String(payload.role))) {
-        item = { ...payload, type: payload.role === 'user' ? 'userMessage' : 'agentMessage' }
-      } else if (type === 'response_item' && ['function_call', 'function_call_output', 'custom_tool_call', 'custom_tool_call_output'].includes(String(payload.type))) {
-        item = { ...payload, id: `legacy:${start}:${string(payload.call_id, 128)}`, type: 'historyTool', text: string(payload.arguments ?? payload.output, 2048) }
-      }
-      if (!item) return
-      if (!turn) throw Error('Native history item has no turn identity')
-      if (typeof item.id === 'string' && item.id.length >= 4096) throw Error('Unsupported native item identity length')
-      const id = typeof item.id === 'string' && item.id ? item.id : `record:${start}`
-      const normalized = historyItem(item, id, canonical === 0 && item.type === 'historyTool')
-      db.prepare('INSERT OR IGNORE INTO turns(id,seq,status) VALUES(?,?,?)').run(turn, start, 'inProgress')
-      const data = JSON.stringify(normalized.value), kind = String(normalized.value.type)
-      const lossyContent = Array.isArray(item.content) && item.content.some(value => !['text', 'Text', 'input_text', 'output_text', 'inputText'].includes(String(obj(value).type)))
-      const clip = clipped || lossyContent || !normalized.message || JSON.stringify(item).length > data.length + 1024 ? 1 : 0
-      const prior = db.prepare('SELECT seq,data FROM entries WHERE turn=? AND id=? AND canonical=?').get(turn, id, canonical) as { seq: number; data: string } | undefined
-      if (prior && prior.data !== data) checkpoint!.generation = randomUUID()
-      // Native may persist both response_item and item_completed. Pair at most
-      // ONE exact, untruncated message; never suppress all legacy items in a turn.
-      const fingerprint = normalized.message && !clip ? createHash('sha256').update(JSON.stringify({ type: kind,
-        text: kind === 'agentMessage' ? normalized.value.text : normalized.value.content })).digest('hex') : ''
-      insert.run(start, turn, id, kind, canonical, normalized.message ? 1 : 0, data, start, end, clip, fingerprint)
-      if (!prior && normalized.message) {
-        const counterpart = db.prepare(`SELECT seq FROM entries WHERE turn=? AND type=? AND canonical=? AND paired=0
-          AND (id=? OR (? <> '' AND fingerprint=?)) ORDER BY seq DESC LIMIT 1`).get(turn, kind, 1 - canonical, id, fingerprint, fingerprint) as { seq: number } | undefined
-        if (counterpart) {
-          db.prepare('UPDATE entries SET paired=1, suppressed=CASE WHEN canonical=0 THEN 1 ELSE 0 END WHERE seq IN (?,?)').run(start, counterpart.seq)
-          // Old windows/cursors may contain the fallback identity just replaced.
-          if (counterpart.seq < committed) checkpoint!.generation = randomUUID()
+      if (type === 'compacted') { ensureTurn(start); checkpoint!.compacted = true; return }
+      if (type === 'response_item') {
+        // Only native hook prompts are projected from ResponseItems. Ordinary
+        // bootstrap/imported user context, assistant channels and tool wire data
+        // are intentionally NOT a second conversation stream.
+        if (event !== 'message' || payload.role !== 'user' || !Array.isArray(payload.content)) return
+        const content = payload.content.map(obj)
+        const hooks = content.length > 0 && content.every(value => value.type === 'input_text' && /^\s*<hook_prompt\s/.test(String(value.text)))
+        if (!hooks) return
+        if (clipped || !content.every(value => /^\s*<hook_prompt\s+hook_run_id=(?:"[^"<>]+"|'[^'<>]+')\s*>[^<>]*<\/hook_prompt>\s*$/.test(String(value.text)))) {
+          throw Error('Unsupported native hook XML; use a compatible native history reader')
         }
+        // Support the normal serialized hook XML subset; richer XML or absent
+        // IDs requires native parity work. Never guess a random native identity.
+        if (typeof payload.id !== 'string' || !payload.id) throw Error('Native hook prompt needs a stable identity; native compatibility check required')
+        put({ type: 'historyTool', text: 'Hook prompt' }, payload.id, ensureTurn(start), start, end, true); return
+      }
+      if (type !== 'event_msg') return
+      if (event === 'task_started' && typeof payload.turn_id === 'string') {
+        closeTurn(); checkpoint!.turn = payload.turn_id; checkpoint!.explicit = true
+        if (knownTurn(payload.turn_id)) throw Error('Repeated native turn identity; rebuild with compatible native reader')
+        db.prepare('INSERT INTO turns VALUES(?,?,?)').run(payload.turn_id, start, 'inProgress'); return
+      }
+      if (event === 'thread_rolled_back') {
+        if (!Number.isSafeInteger(payload.num_turns) || Number(payload.num_turns) < 0) throw Error('Invalid native rollback count')
+        closeTurn()
+        // Delete only derived rows, in SQL (no array proportional to history).
+        db.prepare('DELETE FROM entries WHERE turn IN (SELECT id FROM turns ORDER BY seq DESC LIMIT ?)').run(Number(payload.num_turns))
+        db.prepare('DELETE FROM turns WHERE id IN (SELECT id FROM turns ORDER BY seq DESC LIMIT ?)').run(Number(payload.num_turns))
+        checkpoint!.nextItem = Number(db.prepare('SELECT count(*) AS n FROM entries').get()!.n) + 1
+        checkpoint!.generation = randomUUID(); return
+      }
+      if (['task_complete', 'turn_aborted', 'task_failed'].includes(event)) {
+        const exact = string(payload.turn_id, 256)
+        const turn = knownTurn(exact) ? exact : checkpoint!.turn
+        if (turn) {
+          const prior = knownTurn(turn)!.status
+          const status = event === 'turn_aborted' ? 'interrupted' : event === 'task_failed' || payload.error ? 'failed' : ['failed', 'interrupted'].includes(prior) ? prior : 'completed'
+          db.prepare('UPDATE turns SET status=? WHERE id=?').run(status, turn)
+          if (event !== 'turn_aborted' && turn === checkpoint!.turn) closeTurn()
+        }
+        return
+      }
+      if (event === 'error') {
+        const info = payload.codex_error_info
+        const kind = typeof info === 'string' ? info : Object.keys(obj(info))[0]
+        if (checkpoint!.turn && !['thread_rollback_failed', 'active_turn_not_steerable', 'threadRollbackFailed', 'activeTurnNotSteerable'].includes(kind ?? '')) {
+          db.prepare('UPDATE turns SET status=? WHERE id=?').run('failed', checkpoint!.turn)
+        }
+        return
+      }
+      if (event === 'user_message' || event === 'agent_message') {
+        if (typeof payload.message !== 'string') throw Error('Invalid native display message')
+        if (event === 'user_message' && checkpoint!.turn && !checkpoint!.explicit) {
+          const empty = !db.prepare('SELECT 1 FROM entries WHERE turn=? LIMIT 1').get(checkpoint!.turn)
+          if (!(checkpoint!.compacted && empty)) closeTurn()
+        }
+        if (event === 'agent_message' && !payload.message) return
+        const turn = ensureTurn(start), id = nextId()
+        const hidden = (payload.channel != null && !['commentary', 'final', 'final_answer'].includes(String(payload.channel))) ||
+          (payload.phase != null && !['commentary', 'final', 'final_answer'].includes(String(payload.phase)))
+        const images = [...(Array.isArray(payload.images) ? payload.images : []), ...(Array.isArray(payload.local_images) ? payload.local_images : [])].slice(0, 16).map(() => ({ type: 'image' }))
+        put(event === 'user_message' ? { type: 'userMessage', content: [{ type: 'text', text: payload.message.trim() }, ...images] } :
+          { type: 'agentMessage', text: payload.message, phase: payload.phase }, id, turn, start, end, clipped, hidden); return
+      }
+      if (event === 'agent_reasoning' || event === 'agent_reasoning_raw_content') {
+        if (!payload.text) return
+        const turn = ensureTurn(start)
+        const last = db.prepare('SELECT type FROM entries WHERE turn=? ORDER BY seq DESC LIMIT 1').get(turn) as { type: string } | undefined
+        if (last?.type !== 'reasoning') put({ type: 'reasoning' }, nextId(), turn, start, end, false, true)
+        return // Count native identity bookkeeping, retain no internal text or detail.
+      }
+      if (event === 'entered_review_mode' || event === 'exited_review_mode') {
+        const explicit = string(payload.turn_id, 256)
+        if (explicit && !knownTurn(explicit)) {
+          closeTurn(); checkpoint!.turn = explicit
+          db.prepare('INSERT INTO turns VALUES(?,?,?)').run(explicit, start, 'completed')
+        }
+        put({ ...payload, type: event === 'entered_review_mode' ? 'enteredReviewMode' : 'exitedReviewMode' },
+          string(payload.item_id) || nextId(), explicit || ensureTurn(start), start, end, true); return
+      }
+      if (event === 'context_compacted') { put({ type: 'contextCompaction' }, nextId(), ensureTurn(start), start, end, false); return }
+      if (event === 'item_started' || event === 'item_completed') {
+        const item = obj(payload.item), kind = String(item.type ?? '')
+        const allowed = ['Plan', 'HookPrompt', 'FunctionCallOutput', 'CommandExecution', 'DynamicToolCall', 'CollabAgentToolCall', 'SubAgentActivity', 'Extension', 'EnteredReviewMode', 'ExitedReviewMode']
+        if (!allowed.some(name => kind === name || kind === name[0].toLowerCase() + name.slice(1))) return
+        if (kind.toLowerCase() === 'plan' && !item.text) return
+        const turn = string(payload.turn_id, 256)
+        // Dedicated user/agent events supply native item-N IDs; materialized
+        // copies (including AgentMessage.content Text[]) must not duplicate them.
+        put(item, string(item.id), turn, start, end, clipped); return
+      }
+      const tools: Record<string, string> = {
+        exec_command_begin: 'commandExecution', exec_command_end: 'commandExecution',
+        patch_apply_begin: 'fileChange', patch_apply_end: 'fileChange', apply_patch_approval_request: 'fileChange',
+        dynamic_tool_call_request: 'dynamicToolCall', dynamic_tool_call_response: 'dynamicToolCall',
+        mcp_tool_call_begin: 'mcpToolCall', mcp_tool_call_end: 'mcpToolCall',
+        web_search_begin: 'webSearch', web_search_end: 'webSearch', view_image_tool_call: 'imageView',
+        collab_agent_spawn_begin: 'collabAgentToolCall', collab_agent_spawn_end: 'collabAgentToolCall',
+        collab_agent_interaction_begin: 'collabAgentToolCall', collab_agent_interaction_end: 'collabAgentToolCall',
+        collab_waiting_begin: 'collabAgentToolCall', collab_waiting_end: 'collabAgentToolCall',
+        collab_close_begin: 'collabAgentToolCall', collab_close_end: 'collabAgentToolCall',
+        collab_resume_begin: 'collabAgentToolCall', collab_resume_end: 'collabAgentToolCall',
+        image_generation_begin: 'imageGeneration', image_generation_end: 'imageGeneration',
+      }
+      if (tools[event]) {
+        const turn = string(payload.turn_id, 256) || ensureTurn(start)
+        put({ ...payload, type: tools[event], aggregatedOutput: payload.aggregated_output ?? payload.stdout ?? payload.output,
+          exitCode: payload.exit_code }, string(payload.call_id), turn, start, end, true)
       }
     }
     // Fixed-size input buffer and bounded parser; never readline/JSON.parse a raw line.

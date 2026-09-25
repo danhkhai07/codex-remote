@@ -12,7 +12,9 @@ const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || '/tmp/working
 const root = await mkdtemp(join(tmpdir(), 'history-window-')), files = join(root, 'files'), sessions = join(root, 'native', 'sessions'), sockets = new Set()
 const row = (type, payload) => JSON.stringify({ type, payload }) + '\n'
 const event = (type, payload = {}) => row('event_msg', { type, ...payload })
-const item = (id, type, text, turn = 't') => event('item_completed', { turn_id: turn, item: { id, type, ...(type === 'userMessage' ? { content: [{ type: 'text', text }] } : type === 'commandExecution' ? { command: 'fixture', status: 'completed', aggregatedOutput: text } : { text, phase: 'final_answer' }) } })
+const item = (id, type, text, turn = 't') => type === 'userMessage' || type === 'agentMessage'
+  ? event(type === 'userMessage' ? 'user_message' : 'agent_message', { message: text, images: [], local_images: [], phase: type === 'agentMessage' ? 'final_answer' : undefined })
+  : event('item_completed', { turn_id: turn, item: { id, type, command: 'fixture', status: 'completed', aggregatedOutput: text } })
 let browser, server, release = () => {}
 try {
   await mkdir(files); await mkdir(sessions, { recursive: true })
