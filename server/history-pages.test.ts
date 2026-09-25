@@ -1,91 +1,151 @@
-import { describe, it, expect, vi } from 'vitest'
-import { HistoryPages, type HistoryItem } from './history-pages.js'
-
-function fixture() {
-  const turns: Array<{ id: string; status: string; items: HistoryItem[] }> = Array.from({ length: 40 }, (_, n) => ({ id: `t${n}`, status: n === 3 ? 'interrupted' : 'completed', items: [
-    { id: `u${n}`, type: 'userMessage', content: [{ type: 'inputText', text: `Question ${n}` }] },
-    ...Array.from({ length: 3 }, (_, k) => ({ id: `tool${n}-${k}`, type: 'commandExecution', aggregatedOutput: 'x'.repeat(4000) })),
-    { id: `a${n}`, type: 'agentMessage', phase: 'final_answer', text: `Answer ${n}` },
-  ] }))
-  const rpc = vi.fn(async (method: string, p: Record<string, unknown>) => {
-    if (method === 'thread/turns/list') {
-      expect(p.itemsView).toBe('notLoaded'); expect(p.limit).toBe(1)
-      const index = p.cursor ? Number(String(p.cursor).slice(1)) : turns.length - 1
-      const turn = turns[index]
-      return { data: turn ? [{ id: turn.id, status: turn.status, items: [] }] : [], nextCursor: index > 0 ? `t${index - 1}` : null }
-    }
-    expect(method).toBe('thread/items/list'); expect(p.limit).toBe(1)
-    const turn = turns.find(t => t.id === p.turnId)!
-    const index = p.cursor ? Number(String(p.cursor).slice(1)) : turn.items.length - 1
-    return { data: [{ turnId: turn.id, item: turn.items[index] }], nextCursor: index > 0 ? `i${index - 1}` : null }
-  })
-  return { turns, rpc, pages: new HistoryPages('fake-only'.repeat(8)) }
+import { afterEach, describe, expect, it } from 'vitest'
+import { mkdtemp, mkdir, writeFile, appendFile, open, readFile, rename, rm, symlink } from 'node:fs/promises'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { createHash } from 'node:crypto'
+import { HistoryPages } from './history-pages.js'
+import { RolloutHistory, historyItem } from './rollout-history.js'
+const owned: string[] = []
+afterEach(async () => { for (const dir of owned.splice(0)) await rm(dir, { recursive: true, force: true }) })
+const row = (type: string, payload: unknown) => JSON.stringify({ type, payload }) + '\n'
+const event = (type: string, payload: object = {}) => row('event_msg', { type, ...payload })
+const item = (id: string, type: string, text = id, turn = 't') => event('item_completed', { turn_id: turn, item: { id, type, text, ...(type === 'userMessage' ? { content: [{ type: 'text', text }] } : {}) } })
+async function fixture(messages = 60, tools = 3) {
+  const dir = await mkdtemp(join(tmpdir(), 'history-test-')); owned.push(dir)
+  await mkdir(join(dir, 'sessions'))
+  const metadata = { id: 'fake-thread', cwd: '/fake', path: join(dir, 'sessions', 'fake.jsonl') }
+  const header = row('session_meta', { id: metadata.id, cwd: metadata.cwd }) + event('task_started', { turn_id: 't' })
+  let body = header
+  for (let n = 0; n < messages; n++) { body += item('m' + n, n % 2 ? 'agentMessage' : 'userMessage'); for (let k = 0; k < tools; k++) body += item(`tool${n}-${k}`, 'commandExecution', 'tool output') }
+  body += event('task_complete', { turn_id: 't' })
+  await writeFile(metadata.path, body)
+  const source = new RolloutHistory(dir, join(dir, 'index')), pages = new HistoryPages('FAKE'.repeat(16), source)
+  return { dir, metadata, header, source, pages, live: () => {} }
 }
-
-describe('message windows over supported native pagination', () => {
-  it('counts twenty messages, keeps associated tools, retrieves older windows without full reads', async () => {
-    const { pages, rpc } = fixture()
-    const first = await pages.page('thread', 'v1', rpc)
-    expect(first.messages).toBe(20)
-    expect(first.turns.flatMap(t => t.items).filter(i => i.type === 'commandExecution').length).toBe(30)
-    expect(first.turns[0].items[0].id).toBe('u30')
-    expect(first.older).toBeTruthy()
-    const older = await pages.page('thread', 'v1', rpc, first.older!)
-    expect(older.messages).toBe(20)
-    expect(older.turns[0].items[0].id).toBe('u20')
-    expect(rpc.mock.calls.every(([method]) => method !== 'thread/read')).toBe(true)
-    await expect(pages.page('different-thread', 'v1', rpc, first.older!)).rejects.toThrow('Invalid history cursor')
+const ids = (page: Awaited<ReturnType<HistoryPages['page']>>) => page.turns.flatMap(t => t.items).filter(i => ['userMessage', 'agentMessage'].includes(i.type)).map(i => i.id)
+describe('read-only persisted native history windows', () => {
+  it('counts exactly twenty messages, bounded tools, stable pages and persisted restart revision', async () => {
+    const f = await fixture(61, 5), before = createHash('sha256').update(await readFile(f.metadata.path)).digest('hex')
+    const first = await f.pages.page(f.metadata, f.live)
+    expect(ids(first)).toEqual(Array.from({ length: 20 }, (_, n) => 'm' + (41 + n)))
+    expect(first.scanned).toBe(80)
+    expect(first.turns[0].items.some(i => i.type === 'historyTools')).toBe(true)
+    const older = await f.pages.page(f.metadata, f.live, first.older!)
+    expect(ids(older)).toEqual(Array.from({ length: 20 }, (_, n) => 'm' + (21 + n)))
+    const all = [...ids(first), ...ids(older)]
+    let cursor = older.older
+    while (cursor) { const next = await f.pages.page(f.metadata, f.live, cursor); all.push(...ids(next)); cursor = next.older }
+    expect(new Set(all).size).toBe(61); expect(all).toHaveLength(61)
+    const scanned = f.source.metrics.indexBytes
+    expect(await f.pages.page(f.metadata, f.live)).toEqual(first)
+    expect(f.source.metrics.indexBytes).toBe(scanned)
+    const restarted = new RolloutHistory(f.dir, join(f.dir, 'index'))
+    expect(await new HistoryPages('FAKE'.repeat(16), restarted).page(f.metadata, f.live)).toEqual(first)
+    expect(restarted.metrics.indexBytes).toBe(0)
+    expect(createHash('sha256').update(await readFile(f.metadata.path)).digest('hex')).toBe(before)
   })
-  it('preserves interrupted status and partial-turn cursor; does not count tools', async () => {
-    const { pages, rpc, turns } = fixture()
-    turns.splice(4)
-    turns[3].items = Array.from({ length: 27 }, (_, n) => ({ id: `long${n}`, type: 'agentMessage', phase: 'final_answer', text: `Part ${n}` }))
-    const first = await pages.page('thread', 'v1', rpc)
-    expect(first.messages).toBe(20); expect(first.turns[0].status).toBe('interrupted')
-    const older = await pages.page('thread', 'v1', rpc, first.older!)
-    expect(older.messages).toBe(13)
-    const ids = [...older.turns, ...first.turns].flatMap(t => t.items.map(i => i.id))
-    expect(new Set(ids).size).toBe(ids.length)
+  it('indexes only append, waits for complete JSONL, and rejects stale cursors after rotation', async () => {
+    const f = await fixture(), first = await f.pages.page(f.metadata, f.live), previousBytes = f.source.metrics.indexBytes
+    const complete = item('fresh', 'agentMessage'), prefix = complete.slice(0, -5)
+    await appendFile(f.metadata.path, prefix)
+    expect(ids(await f.pages.page(f.metadata, f.live))).toEqual(ids(first))
+    const partialBytes = f.source.metrics.indexBytes
+    await f.pages.page(f.metadata, f.live); expect(f.source.metrics.indexBytes).toBe(partialBytes)
+    await appendFile(f.metadata.path, complete.slice(-5))
+    const latest = await f.pages.page(f.metadata, f.live)
+    expect(ids(latest).at(-1)).toBe('fresh'); expect(latest.generation).toBe(first.generation)
+    expect(f.source.metrics.indexBytes - previousBytes).toBeLessThan(1024)
+    expect(ids(await f.pages.page(f.metadata, f.live, first.older!)).at(-1)).toBe('m39')
+    await writeFile(f.metadata.path + '.next', f.header + item('replacement', 'agentMessage'))
+    await rename(f.metadata.path + '.next', f.metadata.path)
+    await expect(f.pages.page(f.metadata, f.live, first.older!)).rejects.toThrow('rewritten')
+    expect(ids(await f.pages.page(f.metadata, f.live))).toEqual(['replacement'])
   })
-  it('reuses revision cache, invalidates for append/events and bounds dense tool scans', async () => {
-    const { pages, rpc, turns } = fixture()
-    const first = await pages.page('thread', 'v1', rpc, undefined, true), calls = rpc.mock.calls.length
-    expect(await pages.page('thread', 'v1', rpc, undefined, true)).toEqual(first)
-    expect(rpc.mock.calls.length).toBe(calls)
-    pages.invalidate('thread')
-    turns.at(-1)!.items = Array.from({ length: 100 }, (_, n) => ({ id: `tool${n}`, type: 'commandExecution', aggregatedOutput: 'Large'.repeat(10000) }))
-    const next = await pages.page('thread', 'v2', rpc)
-    expect(next.scanned).toBe(80); expect(next.messages).toBe(0); expect(next.older).toBeTruthy()
-    expect(Buffer.byteLength(JSON.stringify(next))).toBeLessThan(600_000)
-    expect(next.revision).not.toBe(first.revision)
+  it('bounds an independent synthetic huge single record before materialization; detail reads ranges only', async () => {
+    const f = await fixture(0, 0), fd = await open(f.metadata.path, 'a')
+    await fd.write('{"type":"event_msg","payload":{"type":"item_completed","turn_id":"t","item":{"type":"AgentMessage","id":"giant","text":"')
+    // Synthetic 16 MiB ONE item, separate from the 197 MB whole-transcript fixture.
+    const block = Buffer.from('x'.repeat(65536))
+    for (let n = 0; n < 256; n++) await fd.write(block)
+    await fd.write('"}}}\n'); await fd.close()
+    const page = await f.pages.page(f.metadata, f.live), giant = page.turns[0].items[0]
+    expect(String(giant.text).length).toBeLessThanOrEqual(16384)
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(25000)
+    const scan = f.source.metrics.indexBytes
+    const first = await f.pages.detail(f.metadata, String(giant.historyDetail), 0, f.live)
+    const second = await f.pages.detail(f.metadata, String(giant.historyDetail), first.next!, f.live)
+    expect(Buffer.byteLength(first.text)).toBe(32768); expect(second.offset).toBe(first.next)
+    expect(f.source.metrics.detailBytes).toBe(65536); expect(f.source.metrics.indexBytes).toBe(scan)
+    await expect(f.pages.detail({ ...f.metadata, id: 'other' }, String(giant.historyDetail), 0, f.live)).rejects.toThrow('cursor')
+    await appendFile(f.metadata.path, item('giant', 'agentMessage', 'updated'))
+    await expect(f.pages.detail(f.metadata, String(giant.historyDetail), 0, f.live)).rejects.toThrow(/changed|rewritten/)
+  }, 90000)
+  it('does not resurrect canonical duplicates, hide fallback messages, or lose interrupted status', async () => {
+    const f = await fixture(0, 0)
+    await appendFile(f.metadata.path, row('response_item', { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'final' }] }) + item('canonical', 'AgentMessage', 'final') + row('response_item', { type: 'message', role: 'assistant', id: 'legacy-only', content: [{ type: 'output_text', text: 'unique legacy text' }] }) + event('turn_aborted', { turn_id: 't' }))
+    const page = await f.pages.page(f.metadata, f.live)
+    expect(ids(page)).toEqual(['canonical', 'legacy-only']); expect(page.turns[0].status).toBe('interrupted')
+    expect(page.latestTurn?.status).toBe('interrupted')
   })
-  it('keeps giant details out of page response and provides bounded detail windows', async () => {
-    const { pages, rpc, turns } = fixture()
-    turns.at(-1)!.items.at(-1)!.text = 'Unicode Việt '.repeat(100_000)
-    const page = await pages.page('thread', 'v1', rpc)
-    const item = page.turns.at(-1)!.items.at(-1)!
-    expect(String(item.text).length).toBeLessThanOrEqual(16000)
-    expect(typeof item.historyDetail).toBe('string')
-    const detail = await pages.detail('thread', String(item.historyDetail), 0, rpc)
-    expect(detail.text.length).toBe(32768); expect(detail.next).toBe(32768)
-    await expect(pages.detail('other', String(item.historyDetail), 0, rpc)).rejects.toThrow()
-    await expect(pages.detail('thread', String(item.historyDetail), -1, rpc)).rejects.toThrow()
-    turns.at(-1)!.items.at(-1)!.id = 'replacement'
-    await expect(pages.detail('thread', String(item.historyDetail), 0, rpc)).rejects.toThrow('History changed')
+  it('validates thread/path/descriptor, signed cursors and cancellation with recoverable cache', async () => {
+    const f = await fixture(), first = await f.pages.page(f.metadata, f.live)
+    await expect(f.pages.page({ ...f.metadata, cwd: '/other' }, f.live)).rejects.toThrow('identity')
+    await expect(f.pages.page(f.metadata, f.live, first.older! + 'x')).rejects.toThrow('cursor')
+    const external = join(f.dir, 'outside.jsonl'); await writeFile(external, f.header)
+    const link = join(f.dir, 'sessions', 'link.jsonl'); await symlink(external, link)
+    await expect(f.pages.page({ ...f.metadata, path: link }, f.live)).rejects.toThrow('outside')
+    let checks = 0
+    await appendFile(f.metadata.path, item('later', 'agentMessage'))
+    await expect(f.pages.page(f.metadata, () => { if (++checks > 5) throw Error('revoked') })).rejects.toThrow('revoked')
+    expect(ids(await f.pages.page(f.metadata, f.live)).at(-1)).toBe('later')
+  })
+  it('retains valid renderer field types rather than recursively nulling nested values', () => {
+    expect(historyItem({ type: 'UserMessage', content: [{ type: 'text', text: 'hi' }, { type: 'Image', url: 'do not embed' }] }, 'id').value).toEqual({ id: 'id', type: 'userMessage', content: [{ type: 'text', text: 'hi' }, { type: 'image' }] })
+    expect(historyItem({ type: 'FileChange', changes: [{ path: 'x', diff: 'x'.repeat(100000) }] }, 'file').value).toMatchObject({ id: 'file', changes: [] })
   })
 })
 
-it('rejects delayed native work when request authorization is withdrawn', async () => {
-  const { pages, rpc } = fixture()
-  let revoked = false
-  const guarded = async (method: string, params: Record<string, unknown>) => {
-    if (revoked) throw Error('revoked')
-    const response = await rpc(method, params)
-    if (method === 'thread/items/list') revoked = true
-    if (revoked) throw Error('revoked')
-    return response
+it('bounds UTF-8 ranges, preserves tool records between messages and requires signed detail scope', async () => {
+  const f = await fixture(25, 5), page = await f.pages.page(f.metadata, f.live)
+  const summary = page.turns[0].items.find(i => i.type === 'historyTools')!
+  let next: number | null = 0, count = 0
+  while (next !== null) {
+    const result = await f.pages.detail(f.metadata, String(summary.historyDetail), next, f.live)
+    expect(Buffer.byteLength(result.text)).toBeLessThanOrEqual(32768)
+    const parsed = JSON.parse(result.text)
+    expect(parsed.payload.item.type).toBe('commandExecution')
+    expect(result.next === null || result.next > result.offset).toBe(true)
+    count++; next = result.next
   }
-  await expect(pages.page('thread', 'v1', guarded)).rejects.toThrow('revoked')
-  const fresh = await pages.page('thread', 'v1', rpc)
-  expect(fresh.messages).toBe(20)
+  expect(count).toBe(100) // 60 displayed + 40 summarized; no tool record lost.
+  await appendFile(f.metadata.path, item('unicode', 'agentMessage', 'Việt 😀'.repeat(12000)))
+  const changed = await f.pages.page(f.metadata, f.live), unicode = changed.turns[0].items.find(i => i.id === 'unicode')!
+  const first = await f.pages.detail(f.metadata, String(unicode.historyDetail), 0, f.live)
+  const second = await f.pages.detail(f.metadata, String(unicode.historyDetail), first.next!, f.live)
+  expect(first.text + second.text).not.toContain('\uFFFD')
+  await expect(f.pages.detail(f.metadata, String(unicode.historyDetail), 1, f.live)).rejects.toThrow('position')
+  await expect(f.pages.detail(f.metadata, page.older!, 0, f.live)).rejects.toThrow('item cursor')
+})
+
+it('rejects parent replacement after FD acquisition, then rebuilds from the new verified identity', async () => {
+  const f = await fixture(), first = await f.pages.page(f.metadata, f.live)
+  await expect(f.source.use(f.metadata, f.live, async view => {
+    await rename(join(f.dir, 'sessions'), join(f.dir, 'sessions-original'))
+    await mkdir(join(f.dir, 'sessions'))
+    await writeFile(f.metadata.path, f.header + item('new-file', 'agentMessage'))
+    return view.page()
+  })).rejects.toThrow(/rotated|changed/)
+  await expect(f.pages.page(f.metadata, f.live, first.older!)).rejects.toThrow('rewritten')
+  expect(ids(await f.pages.page(f.metadata, f.live))).toEqual(['new-file'])
+})
+it('rebuilds safely after truncation and retains progress after cancellation, without writing native data', async () => {
+  const f = await fixture(1000, 2)
+  let checks = 0
+  await expect(f.pages.page(f.metadata, () => { if (++checks === 30) throw Error('cancel') })).rejects.toThrow('cancel')
+  expect(ids(await f.pages.page(f.metadata, f.live))).toHaveLength(20)
+  const sourceBefore = await readFile(f.metadata.path)
+  await expect(f.pages.page(f.metadata, () => { throw Error('expired') })).rejects.toThrow('expired')
+  expect(await readFile(f.metadata.path)).toEqual(sourceBefore)
+  await writeFile(f.metadata.path, f.header + item('only', 'agentMessage'))
+  expect(ids(await f.pages.page(f.metadata, f.live))).toEqual(['only'])
 })

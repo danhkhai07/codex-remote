@@ -16,11 +16,11 @@ describe('controller history memory', () => {
     let resolve!: (value: unknown) => void
     const request = vi.spyOn(app, 'request').mockImplementation(() => new Promise(done => { resolve = done }))
     const history = controller.readThread('thread')
-    const ids = controller.readMessageIds('thread')
+    const overlapping = controller.readThread('thread')
     expect(request).toHaveBeenCalledTimes(1)
     resolve({ thread: { id: 'thread', cwd: '/workspace', turns: [{ id: 'turn', status: 'completed', items: [{ id: 'reply', type: 'agentMessage', text: 'hello' }] }] } })
     await expect(history).resolves.toMatchObject({ thread: { turns: [{ id: 'turn' }] } })
-    await expect(ids).resolves.toEqual({ ids: ['reply:turn'] })
+    await expect(overlapping).resolves.toMatchObject({ thread: { turns: [{ id: 'turn' }] } })
     request.mockRejectedValueOnce(new Error('temporary failure'))
     await expect(controller.readThread('thread')).rejects.toThrow('temporary failure')
     request.mockResolvedValue({ thread: { id: 'thread', cwd: '/workspace', turns: [] } })

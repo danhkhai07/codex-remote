@@ -1,4 +1,6 @@
-import { stat } from 'node:fs/promises'
+import { resolve, dirname } from 'node:path'
+import { homedir } from 'node:os'
+import { RolloutHistory } from './rollout-history.js'
 import { HistoryPages } from './history-pages.js'
 import { ContextVaultError, type ContextVault } from './context-vault.js'
 import { normalizeSkills, validateSkills, type SkillList } from './skills.js'
@@ -177,8 +179,6 @@ export class RemoteController {
   }
 
   #exportContextEvent(message: AppServerMessage): void {
-    const changedThread = asObject(message.params).threadId
-    if (typeof changedThread === 'string') this.historyPages?.invalidate(changedThread)
     if (!this.contextVault || !['item/completed', 'turn/completed'].includes(message.method ?? '')) return
     const params = asObject(message.params)
     if (typeof params.threadId !== 'string') return
@@ -342,22 +342,29 @@ export class RemoteController {
   }
 
   private historyPages?: HistoryPages
-  async readHistoryPage(threadId: string, token?: string, live?: () => void) {
-    const metadata = threadFromResult(await this.#readThreadMetadata(threadId, true, live)); live?.()
-    this.historyPages ??= new HistoryPages(this.#config.sessionSecret)
-    const rpc = async (method: string, params: Record<string, unknown>) => {
-      live?.(); const result = await this.appServer.request(method, params, undefined, live); live?.(); return result
-    }
-    const file = typeof metadata.path === 'string' ? await stat(metadata.path).catch(() => null) : null; live?.()
-    const page = await this.historyPages.page(threadId, JSON.stringify([metadata.updatedAt, metadata.status, file?.size, file?.mtimeMs, file?.ino]), rpc, token, Boolean(file)); live?.()
-    return { thread: { ...metadata, turns: page.turns, latestTurn: page.latestTurn, historyWindow: { revision: page.revision, older: page.older, messages: page.messages } } }
+  private historySource() {
+    return this.historyPages ??= new HistoryPages(this.#config.sessionSecret, new RolloutHistory(
+      this.#config.historyNativeHome ?? process.env.CODEX_HOME ?? resolve(homedir(), '.codex'),
+      this.#config.historyIndexPath ?? resolve(this.#config.sessionStateFile ? dirname(this.#config.sessionStateFile) : this.#config.contextVaultPath ?? resolve(homedir(), '.local/state/codex-remote'), 'history-index'),
+    ))
   }
-  async readHistoryDetail(threadId: string, token: string, offset: number, live?: () => void) {
-    await this.assertThreadAccess(threadId, live); live?.()
-    this.historyPages ??= new HistoryPages(this.#config.sessionSecret)
-    return this.historyPages.detail(threadId, token, offset, async (method, params) => {
-      live?.(); const value = await this.appServer.request(method, params, undefined, live); live?.(); return value
-    })
+  async readHistoryPage(threadId: string, token?: string, live: () => void = () => {}) {
+    const metadata = threadFromResult(await this.#readThreadMetadata(threadId, true, live)); live()
+    // One bounded native turn-metadata request keeps active/status authoritative
+    // even when the last persisted line has not been flushed yet. Never items.
+    const latest = asObject(await this.appServer.request('thread/turns/list', { threadId, limit: 1, sortDirection: 'desc', itemsView: 'notLoaded' }, undefined, live)); live()
+    const candidate = asObject(Array.isArray(latest.data) ? latest.data[0] : undefined)
+    if (typeof candidate.id !== 'string' || typeof candidate.status !== 'string') {
+      if (!Array.isArray(latest.data) || latest.data.length) throw Error('Native turn metadata is unavailable; retry shortly')
+    }
+    const page = await this.historySource().page({ id: threadId, cwd: String(metadata.cwd), path: typeof metadata.path === 'string' ? metadata.path : undefined }, live, token); live()
+    const latestTurn = typeof candidate.id === 'string' && typeof candidate.status === 'string' ? { id: candidate.id, status: candidate.status } : page.latestTurn
+    return { thread: { ...metadata, turns: page.turns.map(turn => turn.id === latestTurn?.id ? { ...turn, status: latestTurn.status } : turn), latestTurn, historyWindow: { revision: page.revision, generation: page.generation, older: page.older, messages: page.messages } } }
+  }
+  async readHistoryDetail(threadId: string, token: string, offset: number, live: () => void = () => {}) {
+    const metadata = threadFromResult(await this.#readThreadMetadata(threadId, false, live)); live()
+    const value = await this.historySource().detail({ id: threadId, cwd: String(metadata.cwd), path: typeof metadata.path === 'string' ? metadata.path : undefined }, token, offset, live); live()
+    return value
   }
 
   async readMessageIds(threadId: string, live?: () => void, before?: string, boundary?: { initialized: boolean; known: Set<string> }): Promise<{ ids: string[]; nextCursor: string | null }> {

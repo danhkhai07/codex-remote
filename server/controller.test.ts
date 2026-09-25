@@ -1,3 +1,6 @@
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { RemoteConfig } from './config.js'
 import { CodexAppServer, type JsonRpcId } from './codex-app-server.js'
@@ -155,20 +158,32 @@ describe('RemoteController', () => {
     expect(complete).toHaveBeenCalledExactlyOnceWith('thread-stored', ['reply:done'])
   })
 
-  it('returns only distinct assistant message IDs, including history beyond the display cap', async () => {
-    const appServer = new StubAppServer()
-    const source = { thread: { id: 'messages', cwd: '/workspace', turns: [{ id: 't1', status: 'completed', items: [
-      { id: 'user', type: 'userMessage', text: 'Hi' },
-      { id: 'tool', type: 'commandExecution', text: 'x'.repeat(6_000_000) },
-      { id: 'reply', type: 'agentMessage', text: 'Hello' },
-      { id: 'reply', type: 'agentMessage', text: 'Hello' },
-      { id: 'blank', type: 'agentMessage', text: ' ' },
-    ] }, { id: 't2', status: 'completed', items: [{ id: 'reply', type: 'agentMessage', text: 'Another reply' }] }] } }
-    vi.spyOn(appServer, 'request').mockResolvedValue(source)
-    const controller = new RemoteController(config, appServer)
-    expect(await controller.readMessageIds('messages')).toEqual({ ids: ['reply:t1', 'reply:t2'] })
-    source.thread.cwd = '/outside'
-    await expect(controller.readMessageIds('messages')).rejects.toThrow()
+  it('pages persisted replies with two bounded metadata RPCs and rejects workspace changes', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'controller-history-'))
+    try {
+      await mkdir(join(dir, 'sessions'))
+      const path = join(dir, 'sessions', 'fake.jsonl')
+      const records: unknown[] = [{ type: 'session_meta', payload: { id: 'messages', cwd: '/workspace' } }]
+      for (let n = 0; n < 30; n++) {
+        records.push({ type: 'event_msg', payload: { type: 'task_started', turn_id: `t${n}` } },
+          { type: 'event_msg', payload: { type: 'item_completed', turn_id: `t${n}`, item: { id: `a${n}`, type: 'AgentMessage', text: `Answer ${n}`, phase: 'final_answer' } } },
+          { type: 'event_msg', payload: { type: 'task_complete', turn_id: `t${n}` } })
+      }
+      await writeFile(path, records.map(row => JSON.stringify(row)).join('\n') + '\n')
+      const source = { thread: { id: 'messages', cwd: '/workspace', path } }, app = new StubAppServer()
+      const rpc = vi.spyOn(app, 'request').mockImplementation(async (method, params) => {
+        if (method === 'thread/turns/list') { expect(params).toEqual({ threadId: 'messages', limit: 1, sortDirection: 'desc', itemsView: 'notLoaded' }); return { data: [{ id: 't29', status: 'completed', items: [] }], nextCursor: null } }
+        expect(method).toBe('thread/read'); expect(params).toEqual({ threadId: 'messages', includeTurns: false }); return source
+      })
+      const controller = new RemoteController({ ...config, historyNativeHome: dir, historyIndexPath: join(dir, 'index') }, app)
+      const latest = await controller.readMessageIds('messages', undefined, undefined, { initialized: true, known: new Set(['reply:t2']) })
+      expect(latest.ids).toEqual(Array.from({ length: 20 }, (_, n) => `reply:t${n + 10}`))
+      expect(latest.nextCursor).toBeTruthy(); expect(rpc).toHaveBeenCalledTimes(2)
+      const older = await controller.readMessageIds('messages', undefined, latest.nextCursor!, { initialized: true, known: new Set([...latest.ids, 'reply:t2']) })
+      expect(older.ids).toHaveLength(10); expect(older.nextCursor).toBeNull(); expect(rpc).toHaveBeenCalledTimes(4)
+      source.thread.cwd = '/outside'
+      await expect(controller.readMessageIds('messages')).rejects.toThrow()
+    } finally { await rm(dir, { recursive: true, force: true }) }
   })
 
   it('caps thread/read responses at 5 MB without changing the original history', async () => {

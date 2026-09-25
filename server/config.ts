@@ -21,6 +21,8 @@ export type RemoteConfig = {
   sessionStateFile?: string
   trustedProxies?: string[]
   previewOriginTemplate?: string
+  historyNativeHome?: string
+  historyIndexPath?: string
   contextVaultPath?: string
   production: boolean
 }
@@ -92,6 +94,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RemoteConfig {
     secureKeyFile: resolve(env.CODEX_REMOTE_SECURE_KEY_FILE?.trim() || resolve(homedir(), '.local/state/codex-remote/owner-key.json')),
     previewOriginTemplate: env.CODEX_REMOTE_PREVIEW_ORIGIN_TEMPLATE?.trim() ? validatePreviewOriginTemplate(env.CODEX_REMOTE_PREVIEW_ORIGIN_TEMPLATE.trim()) : undefined,
     contextVaultPath: resolve(contextVaultPath),
+    historyNativeHome: resolve(env.CODEX_HOME || resolve(homedir(), '.codex')),
+    historyIndexPath: resolve(contextVaultPath, '..', 'history-index'),
     sessionStateFile: resolve(env.CODEX_REMOTE_SESSION_STATE?.trim() || resolve(homedir(), '.local/state/codex-remote/sessions.json')),
     trustedProxies,
     host: env.CODEX_REMOTE_HOST?.trim() || '127.0.0.1',
