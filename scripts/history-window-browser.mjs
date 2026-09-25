@@ -1,6 +1,6 @@
 // ALL execution via codex-heavy, after worktree build. Owned files/keys/fake RPC only.
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, writeFile, appendFile, open, stat, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, appendFile, open, stat, rm, truncate } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomBytes } from 'node:crypto'
@@ -21,7 +21,7 @@ const item = (id, type, text, turn = 't', thread = 'window') => event('item_comp
     ...(type === 'userMessage' ? { content: [{ type: 'text', text, text_elements: [] }] } : type === 'agentMessage' ?
       { content: [{ type: 'Text', text }], phase: 'final_answer' } : { command: 'fixture', status: 'completed', aggregatedOutput: text }) } }, thread)
 
-let browser, server, release = () => {}
+let browser, server, lastPage, release = () => {}
 try {
   await mkdir(files); await mkdir(sessions, { recursive: true })
   const sourcePath = join(sessions, 'window.jsonl'), otherPath = join(sessions, 'other.jsonl')
@@ -36,6 +36,7 @@ try {
     await fd.write(item(`a${n}`, 'agentMessage', `Answer ${n}\n\n${'Readable fixture content. '.repeat(15)}`))
   }
   await fd.write(event('task_complete', { turn_id: 't' })); await fd.close()
+  const originalSize = (await stat(sourcePath)).size, originalOrdinal = ordinals.get('window')
   await writeFile(otherPath, row('session_meta', { id: 'other', cwd: files, cli_version: '0.155.0', history_mode: 'paginated' }, 'other') + event('task_started', { turn_id: 'other-turn' }, 'other') + item('other-answer', 'agentMessage', 'Other cached answer', 'other-turn', 'other') + event('task_complete', { turn_id: 'other-turn' }, 'other'))
   const key = { version: 1, app: randomBytes(24).toString('base64url'), generation: randomBytes(24).toString('base64url'), key: randomBytes(32).toString('base64url') }
   const keyFile = join(root, 'owner.json'); await writeFile(keyFile, JSON.stringify(key), { mode: 0o600 })
@@ -57,6 +58,7 @@ try {
   }
   app.respond = (id, result) => { replies.push({ id, result }); app.emit('notification', { method: 'serverRequest/resolved', params: { threadId: 'window', requestId: id } }) }
   const controller = new RemoteController(config, app), original = controller.readHistoryPage.bind(controller)
+  const indexMetrics = () => ({ ...controller.historyPages?.source?.metrics })
   controller.readHistoryPage = async (...args) => {
     if (args[0] === 'window' && hold) await hold
     const value = await original(...args); pages++; bodyBytes += Buffer.byteLength(JSON.stringify(value)); return value
@@ -75,26 +77,34 @@ try {
   browser = await chromium.launch({ headless: true })
   const results = []
   for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 600 }]) {
+    // Each fresh profile gets identical input. The previous profile's odd final
+    // append otherwise shifts the twenty-message boundary by one message.
+    await truncate(sourcePath, originalSize); ordinals.set('window', originalOrdinal); version = 1
     const context = await browser.newContext({ viewport }), page = await context.newPage(); page.setDefaultTimeout(90000)
+    lastPage = page
     const errors = []; page.on('pageerror', error => errors.push(error.message))
     const select = async name => {
-      if (viewport.width < 800 && !(await page.locator('.thread-row').filter({ hasText: name }).isVisible())) await page.getByRole('button', { name: 'Open conversations', exact: true }).click()
-      await page.locator('.thread-row').filter({ hasText: name }).click()
+      if (viewport.width < 800 && !(await page.locator('.thread-sidebar.is-open').count())) await page.getByRole('button', { name: 'Open conversations', exact: true }).click()
+      await page.locator('.thread-row').filter({ hasText: name }).click({ timeout: 15000 })
     }
     const unlock = async () => { await page.getByLabel('Khóa mã hóa riêng', { exact: true }).fill(key.key); await page.getByRole('button', { name: 'Mở khóa', exact: true }).click() }
+    const login = async () => {
+      await page.getByRole('button', { name: 'Đăng nhập lại', exact: true }).click()
+      await page.getByLabel('Mật khẩu đăng nhập', { exact: true }).fill(config.password)
+      await page.getByRole('button', { name: 'Đăng nhập', exact: true }).click()
+    }
     const transcript = page.getByLabel('Conversation transcript', { exact: true }), composer = page.locator('#instruction')
     await page.goto(config.publicOrigin.origin)
-    await page.getByRole('button', { name: 'Đăng nhập lại', exact: true }).click()
-    await page.getByLabel('Mật khẩu đăng nhập', { exact: true }).fill(config.password)
-    await page.getByRole('button', { name: 'Đăng nhập', exact: true }).click()
-    const started = Date.now(), callStart = calls.length; wireBytes = nativeBytes = bodyBytes = 0
+    await login()
+    const started = Date.now(), callStart = calls.length, indexBefore = indexMetrics(); wireBytes = nativeBytes = bodyBytes = 0
     await unlock(); await select('History window fixture'); await page.getByText('Question 499', { exact: true }).waitFor()
     assert.equal(await page.locator('.conversation-stream article.message').count(), 20)
     const beforeDenied = calls.length
     const denied = await context.request.get(config.publicOrigin.origin + '/api/threads/window/history')
     assert.equal(denied.ok(), false, 'Cookie alone cannot read history')
     assert.equal(calls.length, beforeDenied)
-    const initial = { ms: Date.now() - started, nativeCalls: calls.length - callStart, nativeBytes, wireBytes, indexedResponseBytes: bodyBytes, dom: await page.locator('.conversation-stream').evaluate(el => el.querySelectorAll('*').length), rss: process.memoryUsage().rss }
+    const initial = { ms: Date.now() - started, nativeCalls: calls.length - callStart, nativeBytes, wireBytes, indexedResponseBytes: bodyBytes, dom: await page.locator('.conversation-stream').evaluate(el => el.querySelectorAll('*').length), rss: process.memoryUsage().rss,
+      index: Object.fromEntries(Object.entries(indexMetrics()).map(([k, v]) => [k, v - (indexBefore[k] ?? 0)])) }
     await composer.fill('Keep draft while paging')
     await transcript.evaluate(el => { el.scrollTop = 0 })
     const anchor = await page.locator('[data-history-anchor]').first().evaluate(el => ({ id: el.dataset.historyAnchor, y: el.getBoundingClientRect().top }))
@@ -113,23 +123,33 @@ try {
     await page.getByText('Question 480', { exact: true }).waitFor()
     await context.setOffline(false)
     // Warm reload blocks EVERY history response. Only encrypted device cache can paint.
-    blockHistory(); await page.reload(); await unlock()
+    blockHistory(); await page.reload(); const warmPaintStart = Date.now(); await unlock()
     await page.getByText('Question 499', { exact: true }).waitFor({ timeout: 10000 })
+    const blockedWarmPaintMs = Date.now() - warmPaintStart
     release(); await page.waitForTimeout(500)
-    const noChangeStart = calls.length, noChangeBytes = wireBytes
+    const noChangeStart = calls.length, noChangeBytes = wireBytes, warmIndex = indexMetrics()
     await select('Other fixture'); await select('History window fixture')
     await page.getByText('Question 499', { exact: true }).waitFor(); await page.waitForTimeout(500)
-    const warm = { nativeCalls: calls.length - noChangeStart, wireBytes: wireBytes - noChangeBytes }
+    const warm = { nativeCalls: calls.length - noChangeStart, wireBytes: wireBytes - noChangeBytes,
+      index: Object.fromEntries(Object.entries(indexMetrics()).map(([k, v]) => [k, v - (warmIndex[k] ?? 0)])) }
+    assert.equal(warm.index.indexBytes, 0, 'Unchanged warm reopen must not rescan native records')
     assert(warm.wireBytes < initial.wireBytes, 'Unchanged revalidation does not retransmit the initial history body')
     // Append while closed, reconnect catches only new source suffix and a bounded window.
     await select('Other fixture'); version++
+    const appendIndex = indexMetrics()
     const fresh = `Appended ${viewport.width}`
     await appendFile(sourcePath, item(`append-${version}`, 'agentMessage', fresh))
     await select('History window fixture'); await page.getByText(fresh, { exact: true }).waitFor()
+    const appendedIndexBytes = indexMetrics().indexBytes - appendIndex.indexBytes
+    assert(appendedIndexBytes > 0 && appendedIndexBytes < 4096, 'Append must scan only the new source suffix')
     await transcript.evaluate(el => { el.scrollTop = 0 }); await page.getByRole('button', { name: 'Tải tin nhắn cũ hơn', exact: true }).click()
+    await page.waitForFunction(() => document.querySelectorAll('.conversation-stream article.message').length === 40)
+    await transcript.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
     const beforeLive = await transcript.evaluate(el => el.scrollTop)
     controller.events.publish('codex', { method: 'item/agentMessage/delta', params: { threadId: 'window', turnId: 'live-only', itemId: 'live', delta: 'Fresh live content must not move old reading' } })
-    await page.waitForTimeout(200); assert(Math.abs(await transcript.evaluate(el => el.scrollTop) - beforeLive) < 50)
+    await page.waitForTimeout(200)
+    const afterLive = await transcript.evaluate(el => el.scrollTop)
+    assert(Math.abs(afterLive - beforeLive) < 50, `Live output moved reading position: ${beforeLive} -> ${afterLive}`)
     // Plan is a real pending request from a fake native source; never start a turn.
     await composer.fill('Plan draft preserved')
     app.emit('serverRequest', { id: `plan-${viewport.width}`, method: 'item/tool/requestUserInput', params: { threadId: 'window', turnId: 'fake-plan', itemId: 'q', questions: [{ id: 'q', question: 'History Plan fixture?', options: [{ label: 'Keep', description: 'Preserve current window' }, { label: 'Other', description: 'Alternative' }] }] } })
@@ -146,17 +166,26 @@ try {
     await page.getByRole('button', { name: 'App menu', exact: true }).click(); await page.getByRole('button', { name: 'Lock app', exact: true }).click()
     release(); await page.getByLabel('Khóa mã hóa riêng', { exact: true }).waitFor()
     assert.equal(await page.locator('.conversation-stream').count(), 0)
-    await unlock(); await select('History window fixture'); await page.getByText(fresh, { exact: true }).waitFor()
+    // App menu Lock revokes the server session as well as dropping plaintext;
+    // returning requires login AND owner proof, not merely entering the key.
+    await login(); await unlock()
+    await select('History window fixture'); await page.getByText(fresh, { exact: true }).waitFor()
     // Device cache must not place fixture conversation strings in plaintext localStorage.
     assert.equal(await page.evaluate(() => Object.values(localStorage).some(v => /Question 499|Other cached answer/.test(v))), false)
     assert.deepEqual(errors, [])
     if (process.env.HISTORY_SCREENSHOTS) { await mkdir(process.env.HISTORY_SCREENSHOTS, { recursive: true }); await page.screenshot({ path: join(process.env.HISTORY_SCREENSHOTS, `history-${viewport.width}.png`) }) }
-    results.push({ viewport, initial, warm, offlineOlder: true, blockedNetworkWarmPaint: true, scrollAnchor: true, appendedWhileClosed: true, planDraft: true, lockSwitch: true })
+    results.push({ viewport, initial, warm, blockedWarmPaintMs, appendedIndexBytes, offlineOlder: true, blockedNetworkWarmPaint: true, scrollAnchor: true, appendedWhileClosed: true, planDraft: true, lockSwitch: true })
     await context.close()
   }
   assert(!calls.some(c => c.method === 'turn/start' || c.method === 'thread/items/list' || c.includeTurns === true))
   assert.equal(replies.length, 2)
   console.log(JSON.stringify({ sourceBytes: (await stat(sourcePath)).size, results, nativeMethods: [...new Set(calls.map(c => c.method))], limits: 'Synthetic ~197 MB whole transcript; separate unit fixture tests 16 MiB single item. No production/native model turn.' }, null, 2))
+} catch (error) {
+  if (lastPage && !lastPage.isClosed()) {
+    await lastPage.screenshot({ path: '/tmp/history-window-failure.png' }).catch(() => {})
+    await writeFile('/tmp/history-window-failure.txt', await lastPage.locator('body').innerText().catch(() => 'Page unavailable'))
+  }
+  throw error
 } finally {
   release(); for (const socket of sockets) socket.destroy()
   await browser?.close()

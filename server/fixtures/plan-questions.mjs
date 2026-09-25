@@ -5,12 +5,12 @@ import { createInterface } from 'node:readline'
 const send = message => process.stdout.write(`${JSON.stringify(message)}\n`)
 const replies = []
 let active = false
-const thread = () => persistedFixtureThread({
-  id: 'plan-fixture', name: 'Plan question fixture', cwd: '/tmp', createdAt: 1, updatedAt: 1,
-  status: { type: active ? 'active' : 'idle' },
+const thread = (id = 'plan-fixture') => persistedFixtureThread({
+  id, name: id === 'plan-fixture' ? 'Plan question fixture' : 'Worker fixture', cwd: '/tmp', createdAt: 1, updatedAt: 1,
+  status: { type: active && id === 'plan-fixture' ? 'active' : 'idle' },
   turns: [{ id: 'history', status: 'completed', items: Array.from({ length: 45 }, (_, i) => ({
     id: `history-${i}`, type: 'agentMessage', text: `History ${i}\n\n${'Long conversation context. '.repeat(30)}`,
-  })) }, ...(active ? [{ id: 'plan-turn', status: 'inProgress', items: [] }] : [])],
+  })) }, ...(active && id === 'plan-fixture' ? [{ id: 'plan-turn', status: 'inProgress', items: [] }] : [])],
 })
 
 createInterface({ input: process.stdin }).on('line', line => {
@@ -25,10 +25,10 @@ createInterface({ input: process.stdin }).on('line', line => {
     case 'initialized': return
     case 'initialize': return result({ userAgent: 'plan-fixture' })
     case 'thread/list': return result({ data: [{ ...thread(), turns: [] }] })
-    case 'thread/read': { const value = thread(); return result({ thread: message.params?.includeTurns === false ? { ...value, turns: [] } : value }) }
-    case 'thread/resume': { const value = thread(); return result({ thread: message.params?.excludeTurns ? { ...value, turns: [] } : value }) }
+    case 'thread/read': { const value = thread(message.params?.threadId); return result({ thread: message.params?.includeTurns === false ? { ...value, turns: [] } : value }) }
+    case 'thread/resume': { const value = thread(message.params?.threadId); return result({ thread: message.params?.excludeTurns ? { ...value, turns: [] } : value }) }
     case 'thread/turns/list': {
-      const latest = thread().turns.at(-1)
+      const latest = thread(message.params?.threadId).turns.at(-1)
       return result({ data: latest ? [{ id: latest.id, status: latest.status, items: [] }] : [], nextCursor: null })
     }
     case 'model/list': return result({ data: [{ id: 'fixture', model: 'fixture', isDefault: true, defaultReasoningEffort: 'high', supportedReasoningEfforts: [] }] })
