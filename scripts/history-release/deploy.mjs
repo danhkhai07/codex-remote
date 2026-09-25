@@ -71,6 +71,7 @@ function prepare(release, artifacts, evidencePath) {
   const evidence = json(evidencePath)
   assert.equal(evidence.source, git(worktree, 'rev-parse', 'HEAD'), 'Evidence must match this candidate')
   assert.equal(evidence.liveSource, '6f6fe30a08f3e763d74eed440824ffa84f831aa9', 'Expected previously verified LIVE release')
+  assert.equal(git(worktree, 'diff', evidence.liveSource, '--', 'server/secure-client.ts', 'server/event-hub.ts'), '', 'Preserved historical source changed')
   assert.equal(evidence.checks?.status, 'passed', 'Build/check/browser evidence required before packaging')
   for (const log of evidence.checks.logs ?? []) same(hash(log.path), log.sha256, 'Check log')
   assert((evidence.checks.logs?.length ?? 0) >= 2, 'Require app and browser check logs')

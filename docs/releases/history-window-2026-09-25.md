@@ -4,7 +4,7 @@ User contract:20 newest user/assistant messages excluding tools; upward lazy pag
 
 ## Payload and preserved boundary
 
-Build only `/root/WORKTREES/cr-history-window-cache`. The fixed backend allowlist is16 files: `config`, `controller`, `http-app`, `read-state`, `history-pages`, `history-json`, `history-paginated`, `rollout-history`, each JS + map, plus the whole matching client/PWA. Emitted byte changes outside that list abort preparation. There is no dependency or environment change. Node22.23.2 built-in SQLite is exercised by the tests/browser and the actual installed native0.155 oracle.
+Build only `/root/WORKTREES/cr-history-window-cache`. The fixed backend allowlist is16 files: `config`, `controller`, `http-app`, `read-state`, `history-pages`, `history-json`, `history-paginated`, `rollout-history`, each JS + map, plus the whole matching client/PWA. New emitted byte changes outside that list abort preparation. Three exact pre-existing build/live pairs (`secure-client.js`/map and `event-hub.js.map`) are bound in `PRESERVED_BUILD_DIFFERENCES`, documented by the accepted Push rollout, and **excluded from publication**. Their source must remain identical to live-source6f6fe30; either-side hash drift aborts. The runtime secure-client helper stays old while the matching browser bundle keeps its existing remembered-device implementation. No file is silently normalized or copied over those runtime artifacts. There is no dependency or environment change. Node22.23.2 built-in SQLite is exercised by the tests/browser and the actual installed native0.155 oracle.
 
 Preserve Hours JS `b763a0f7b74c0341684e196855e85b3f5e3b123915a373b27463c17916702e93`, map `6a76da381331d7a802da5d844d341da742f0bfc3809f0cfe3b74370d55c42fb8`, live703ad317 template/generator/data, Push answer behavior, Files owner-full/title, Services middle click, all other backend modules, keys/config/native/Vault/session state. No full dist-server copy. OLD remains disabled; the fixed restart target is **codex-remote-secure.service/127.0.0.1:5174**. Never invoke the stock restart script with its default OLD target.
 
@@ -19,7 +19,8 @@ node scripts/history-release/artifacts.mjs \
   /root/.local/state/codex-remote-secure/history-window-724ec8b2 \
   /tmp/history-window-final-724ec8b2.log \
   /tmp/history-window-controls-724ec8b2.log \
-  /tmp/history-window-validation-724ec8b2-run3.log
+  /tmp/history-window-validation-724ec8b2-run3.log \
+  /tmp/history-window-excluded-artifacts-724ec8b2.log
 node scripts/history-release/deploy.mjs prepare \
   /root/.local/state/codex-remote-secure/releases/history-window-724ec8b2 \
   /root/WORKTREES/cr-history-window-cache \

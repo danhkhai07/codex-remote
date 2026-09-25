@@ -63,6 +63,8 @@ Validation evidence under `/tmp` (copied into the private delivery folder before
 - `history-window-controls-724ec8b2.log`: secure API/cache/replay/multitab/Plan, contextual Push, owner Files1280/390/320 and14 runner controls passed. The fake Team worker initially returned the wrong native identity; the fixture now materializes the requested fake thread instead of weakening the production identity guard.
 - `history-window-final-724ec8b2.log`: final full check passed625 Vitest/89 files +11 Node restart checks; lint/typecheck/server/client/PWA passed. Native oracle, history browser, Plan/Team and14 runner controls also passed. No native user turn or real Push was sent.
 
+A packaging preflight intentionally rejected three known pre-existing build/live differences (`event-hub.js.map`, `secure-client.js`/map). Their exact pairs and unchanged source are now checked and excluded from the16-file payload, as in the preceding Push release; no runtime byte was overwritten. `history-window-excluded-artifacts-724ec8b2.log` passed lint/syntax and15 runner controls, including rejection of further drift in either side of those pairs. Application artifacts did not change, so no additional full app run was needed.
+
 ### Measured comparison
 
 One local sequential Chromium run on identical7,045,307-byte fake input compared the verified LIVE code copied into a disposable directory against the candidate. It includes authentication/unlock/render and all fixture RPCs, not a microbenchmark of one endpoint:
