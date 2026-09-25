@@ -33,3 +33,12 @@ it('bounded block path matches byte-wise projection and validates clipped tails'
     expect(() => { bad.feedBuffer(Buffer.from('{"text":"' + 'x'.repeat(65536) + tail)); bad.finish() }).toThrow()
   }
 })
+it('does not let arbitrary nested tool keys bypass the global retention budget', () => {
+  let tree: Record<string, unknown> = { id: 'x'.repeat(4096) }
+  for (let n = 0; n < 6; n++) tree = { id: 'x'.repeat(4096), payload: tree, item: tree }
+  const parser = new HistoryJson(), raw = Buffer.from(JSON.stringify({ payload: { item: { arguments: tree, id: 'exact-id', type: 'McpToolCall' }, turn_id: 'exact-turn' }, type: 'event_msg' }))
+  for (let n = 0; n < raw.length; n += 65536) parser.feedBuffer(raw.subarray(n, n + 65536))
+  const result = parser.finish()
+  expect(JSON.stringify(result.value).length).toBeLessThan(250000)
+  expect(result.value).toMatchObject({ type: 'event_msg', payload: { turn_id: 'exact-turn', item: { id: 'exact-id', type: 'McpToolCall' } } })
+})

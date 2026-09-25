@@ -17,9 +17,16 @@ export class HistoryJson {
   private done = false
   private root: unknown
   truncated = false
+  private critical(parent: Frame) {
+    // Identity exceptions apply only to the native envelope, never arbitrary
+    // tool argument trees whose keys happen to be named payload/item/id.
+    return !parent.array && important.has(parent.key) && (this.stack.length === 1 ||
+      (this.stack[0]?.key === 'payload' && (this.stack.length === 2 ||
+        (this.stack.length === 3 && this.stack[1]?.key === 'item'))))
+  }
   private keepValue() {
     const parent = this.stack.at(-1)
-    return !parent || (parent.keep && ((++this.nodes <= 2048 && parent.count < 64) || (!parent.array && important.has(parent.key))))
+    return !parent || (parent.keep && ((++this.nodes <= 2048 && parent.count < 64) || this.critical(parent)))
   }
   private accept(value: unknown) {
     const parent = this.stack.at(-1)
@@ -45,7 +52,7 @@ export class HistoryJson {
   private string(key: boolean) {
     this.mode = 'string'; this.key = key; this.escape = false; this.unicode = 0; this.clippedString = false; this.token = ''
     const parent = this.stack.at(-1)
-    this.tokenLimit = key ? 256 : parent && !parent.array && important.has(parent.key) ? 4096 : Math.max(0, Math.min(16_384, 65_536 - this.bytes))
+    this.tokenLimit = key ? 256 : parent && this.critical(parent) ? 4096 : Math.max(0, Math.min(16_384, 65_536 - this.bytes))
   }
   private endString() {
     let raw = this.token, value: string | undefined
