@@ -8,7 +8,7 @@ import { HistoryJson } from './history-json.js'
 
 export type HistoryMetadata = { id: string; cwd: string; path?: string }
 export type IndexedItem = { seq: number; turn: string; status: string; id: string; type: string; data: string; start: number; end: number; clipped: number; msg: number }
-type Checkpoint = { version: 1; generation: string; identity: string; offset: number; size: number; mtime: number; head: string; tail: string; turn: string | null; verified: boolean }
+type Checkpoint = { version: 1; generation: string; identity: string; offset: number; size: number; mtime: number; head: string; tail: string; turn: string | null; verified: boolean; scanned: boolean }
 const obj = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 const string = (value: unknown, max = 4096) => typeof value === 'string' ? value.slice(0, max) : ''
 const visible = `e.suppressed=0`
@@ -109,10 +109,10 @@ export class RolloutHistory {
     if (!valid || !checkpoint) {
       this.metrics.rebuilds++
       db.exec('BEGIN IMMEDIATE; DELETE FROM entries; DELETE FROM turns; DELETE FROM state; COMMIT;')
-      checkpoint = { version: 1, generation: randomUUID(), identity, offset: 0, size: 0, mtime: 0, head: '', tail: '', turn: null, verified: false }
+      checkpoint = { version: 1, generation: randomUUID(), identity, offset: 0, size: 0, mtime: 0, head: '', tail: '', turn: null, verified: false, scanned: false }
     }
     // An unchanged incomplete tail is not reparsed on every poll/detail request.
-    if (checkpoint.size === snapshot.size && checkpoint.mtime === snapshot.mtimeMs) return checkpoint
+    if (checkpoint.scanned && checkpoint.size === snapshot.size && checkpoint.mtime === snapshot.mtimeMs) return checkpoint
     const writeTurn = db.prepare('INSERT INTO turns(id,seq,status) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status')
     const insert = db.prepare(`INSERT INTO entries(seq,turn,id,type,canonical,msg,data,start,end,clipped,fingerprint) VALUES(?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(turn,id,canonical) DO UPDATE SET data=excluded.data,start=excluded.start,end=excluded.end,clipped=excluded.clipped,fingerprint=excluded.fingerprint`)
@@ -175,7 +175,7 @@ export class RolloutHistory {
     let offset = checkpoint.offset, lineStart = offset, parser = new HistoryJson()
     let committed = checkpoint.offset
     const save = async () => {
-      checkpoint!.size = snapshot.size; checkpoint!.mtime = snapshot.mtimeMs
+      checkpoint!.scanned = false; checkpoint!.size = snapshot.size; checkpoint!.mtime = snapshot.mtimeMs
       checkpoint!.head = await digest(0, Math.min(checkpoint!.offset, 4096))
       checkpoint!.tail = await digest(Math.max(0, checkpoint!.offset - 4096), Math.min(checkpoint!.offset, 4096))
       live(); db.prepare('INSERT OR REPLACE INTO state(id,value) VALUES(1,?)').run(JSON.stringify(checkpoint))
@@ -205,7 +205,7 @@ export class RolloutHistory {
       // An incomplete final record is neither committed as an item nor treated as corruption.
       const after = await fd.stat(); live()
       if (`${after.dev}:${after.ino}` !== identity || after.size < snapshot.size || (after.size === snapshot.size && after.mtimeMs !== snapshot.mtimeMs)) throw Error('Native history changed during indexing')
-      checkpoint.size = snapshot.size; checkpoint.mtime = snapshot.mtimeMs
+      checkpoint.scanned = true; checkpoint.size = snapshot.size; checkpoint.mtime = snapshot.mtimeMs
       checkpoint.head = await digest(0, Math.min(checkpoint.offset, 4096))
       checkpoint.tail = await digest(Math.max(0, checkpoint.offset - 4096), Math.min(checkpoint.offset, 4096))
       live(); db.prepare('INSERT OR REPLACE INTO state(id,value) VALUES(1,?)').run(JSON.stringify(checkpoint)); db.exec('COMMIT')

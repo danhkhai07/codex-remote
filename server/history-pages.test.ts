@@ -149,3 +149,12 @@ it('rebuilds safely after truncation and retains progress after cancellation, wi
   await writeFile(f.metadata.path, f.header + item('only', 'agentMessage'))
   expect(ids(await f.pages.page(f.metadata, f.live))).toEqual(['only'])
 })
+it('does not mistake a persisted mid-scan cancellation checkpoint for an unchanged incomplete tail', async () => {
+  const f = await fixture(4000, 4)
+  await expect(f.pages.page(f.metadata, () => { if (f.source.metrics.indexBytes > 1500000) throw Error('cancel after checkpoint') })).rejects.toThrow('cancel after checkpoint')
+  const restarted = new RolloutHistory(f.dir, join(f.dir, 'index'))
+  const page = await new HistoryPages('FAKE'.repeat(16), restarted).page(f.metadata, f.live)
+  expect(ids(page).at(-1)).toBe('m3999')
+  expect(restarted.metrics.indexBytes).toBeGreaterThan(0)
+  expect(restarted.metrics.rebuilds).toBe(0)
+}, 90000)
