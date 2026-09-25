@@ -161,3 +161,74 @@ it('refuses malformed/gapped ordinals and cross-thread canonical IDs rather than
   await f.append([materializedAnswer('other-thread', 'first', 'x', 'x')])
   await expect(f.pages.page(f.metadata, () => {})).rejects.toThrow('different native thread')
 })
+it('recovers a torn complete JSONL record exactly once without consuming its reused native ordinal', async () => {
+  const f = await fixture()
+  await f.pages.page(f.metadata, () => {})
+  // Actual failure shape: a newline-terminated, incomplete envelope in the
+  // middle of a paginated log; the following valid record reuses its ordinal.
+  await appendFile(f.metadata.path, '{"timestamp":"2026-09-25T00:00:00.000Z","o\n')
+  for (let n = 0; n < 25; n++) await f.append([
+    nativeStart(`t${n}`), materializedUser(f.metadata.id, `t${n}`, `u${n}`, `Input ${n}`),
+    materialized(f.metadata.id, `t${n}`, { type: 'Plan', id: `p${n}`, text: 'Tool' }),
+    materializedAnswer(f.metadata.id, `t${n}`, `a${n}`, `Answer ${n}`), nativeComplete(`t${n}`),
+  ])
+  const original = await readFile(f.metadata.path), first = await f.pages.page(f.metadata, () => {})
+  expect(visibleIds(first)).toEqual(Array.from({ length: 10 }, (_, n) => [`u${15+n}`, `a${15+n}`]).flat())
+  expect(first.messages).toBe(20); expect(f.source.metrics.malformedRecords).toBe(1)
+  const scanned = f.source.metrics.indexBytes
+  expect(await f.pages.page(f.metadata, () => {})).toEqual(first)
+  expect(f.source.metrics.indexBytes).toBe(scanned)
+  const restarted = new RolloutHistory(f.root, join(f.root, 'index')), pages = new HistoryPages(secret, restarted)
+  expect(await pages.page(f.metadata, () => {})).toEqual(first)
+  expect(restarted.metrics.indexBytes).toBe(0); expect(restarted.metrics.malformedRecords).toBe(0)
+  const all = visibleIds(first)
+  let cursor = first.older
+  while (cursor) { const page = await pages.page(f.metadata, () => {}, cursor); all.unshift(...visibleIds(page)); cursor = page.older }
+  expect(all).toEqual(['native-user-1', 'native-agent-1', ...Array.from({ length: 25 }, (_, n) => [`u${n}`, `a${n}`]).flat()])
+  await expect(pages.page(f.metadata, () => {}, first.older! + 'invalid')).rejects.toThrow('cursor')
+  expect(await readFile(f.metadata.path)).toEqual(original)
+})
+it('bounds malformed multi-block records and defers incomplete tail recovery until newline', async () => {
+  const f = await fixture(), first = await f.pages.page(f.metadata, () => {})
+  await appendFile(f.metadata.path, '{"x":INVALID' + 'x'.repeat(300000))
+  // No complete native line yet, so keep the byte checkpoint before the tail.
+  expect(await f.pages.page(f.metadata, () => {})).toEqual(first)
+  expect(f.source.metrics.malformedRecords).toBe(0)
+  const before = f.source.metrics.indexBytes
+  expect(await f.pages.page(f.metadata, () => {})).toEqual(first)
+  expect(f.source.metrics.indexBytes).toBe(before)
+  await appendFile(f.metadata.path, '\n')
+  await f.append([materializedAnswer(f.metadata.id, 'first', 'after-malformed', 'Complete')])
+  // Rejected early syntax, then skipped in constant memory through >4 blocks.
+  expect(visibleIds(await f.restart().page(f.metadata, () => {})).at(-1)).toBe('after-malformed')
+})
+it('does not turn invalid identity, unsupported limits or cancellation into partial successful history', async () => {
+  const f = await fixture()
+  for (const invalid of ['['.repeat(65) + ']'.repeat(65), JSON.stringify({ ['k'.repeat(257)]: 1 }), '1'.repeat(129)]) {
+    await writeFile(f.metadata.path, serializeRecords(f.rows) + invalid + '\n')
+    await expect(f.pages.page(f.metadata, () => {})).rejects.toThrow(/depth|key too long|scalar too long/)
+  }
+  await writeFile(f.metadata.path, '{"timestamp":\n' + serializeRecords(f.rows))
+  await expect(f.pages.page(f.metadata, () => {})).rejects.toThrow('Incomplete')
+  await writeFile(f.metadata.path, serializeRecords(f.rows) + '{"broken":\n' + serializeRecords(withOrdinals([materializedAnswer('other', 'first', 'wrong', 'Wrong')], f.rows.length)))
+  await expect(f.pages.page(f.metadata, () => {})).rejects.toThrow('different native thread')
+  await writeFile(f.metadata.path, serializeRecords(f.rows) + '{"broken":\n')
+  await expect(f.pages.page(f.metadata, () => { throw Error('revoked') })).rejects.toThrow('revoked')
+  expect(f.source.metrics.malformedRecords).toBeGreaterThan(0)
+})
+it('recovers malformed records after a persisted cancellation checkpoint, then continues append with exact IDs', async () => {
+  const f = await fixture()
+  await f.append(Array.from({ length: 600 }, (_, n) => materializedAnswer(f.metadata.id, 'first', `before-${n}`, 'x'.repeat(2048))))
+  await appendFile(f.metadata.path, '{"timestamp":\n')
+  await f.append(Array.from({ length: 600 }, (_, n) => materializedAnswer(f.metadata.id, 'first', `after-${n}`, 'x'.repeat(2048))))
+  await expect(f.pages.page(f.metadata, () => { if (f.source.metrics.indexBytes > 1200000) throw Error('revoked mid-scan') })).rejects.toThrow('revoked mid-scan')
+  const restarted = new RolloutHistory(f.root, join(f.root, 'index')), pages = new HistoryPages(secret, restarted)
+  const latest = await pages.page(f.metadata, () => {})
+  expect(restarted.metrics.rebuilds).toBe(0); expect(restarted.metrics.malformedRecords).toBe(1)
+  expect(restarted.metrics.indexBytes).toBeLessThan((await stat(f.metadata.path)).size - 1000000)
+  expect(visibleIds(latest)).toEqual(Array.from({ length: 20 }, (_, n) => `after-${580+n}`))
+  const scanned = restarted.metrics.indexBytes
+  await f.append([materializedAnswer(f.metadata.id, 'first', 'after-restart', 'Latest')])
+  expect(visibleIds(await pages.page(f.metadata, () => {})).at(-1)).toBe('after-restart')
+  expect(restarted.metrics.indexBytes - scanned).toBeLessThan(1000)
+}, 90000)

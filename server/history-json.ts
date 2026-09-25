@@ -1,6 +1,9 @@
 /** Streaming JSON projection, not a full-record accumulator. Native JSONL can
  * contain arbitrarily large strings. JSON structure is checked while only bounded
  * strings/containers are retained. Unknown/deep formats fail visibly. */
+/** Only invalid JSON syntax is recoverable as a malformed native JSONL line.
+ * Resource limits and unsupported valid formats must still fail closed. */
+export class HistoryJsonSyntaxError extends Error {}
 type Frame = { value: Record<string, unknown> | unknown[]; array: boolean; state: string; key: string; count: number; keep: boolean }
 const important = new Set(['ordinal', 'payload', 'item', 'type', 'id', 'turn_id', 'thread_id', 'cwd', 'status', 'phase', 'channel', 'call_id', 'num_turns', 'history_base', 'subagent_history_start_ordinal', 'history_mode'])
 export class HistoryJson {
@@ -30,8 +33,8 @@ export class HistoryJson {
   }
   private accept(value: unknown, retained?: boolean) {
     const parent = this.stack.at(-1)
-    if (!parent) { if (this.done) throw Error('Multiple history JSON values'); this.root = value; this.done = true; return }
-    if (!['value', 'first'].includes(parent.state)) throw Error('Invalid history JSON value')
+    if (!parent) { if (this.done) throw new HistoryJsonSyntaxError('Multiple history JSON values'); this.root = value; this.done = true; return }
+    if (!['value', 'first'].includes(parent.state)) throw new HistoryJsonSyntaxError('Invalid history JSON value')
     // Containers reserve their place when opened. Rechecking after their
     // children exhaust the budget would discard the entire retained prefix.
     if (retained ?? this.keepValue()) {
@@ -42,14 +45,14 @@ export class HistoryJson {
   }
   private start(byte: number) {
     const parent = this.stack.at(-1)
-    if (parent && !['value', 'first'].includes(parent.state)) throw Error('Invalid history JSON')
+    if (parent && !['value', 'first'].includes(parent.state)) throw new HistoryJsonSyntaxError('Invalid history JSON')
     if (byte === 123 || byte === 91) {
       if (this.stack.length >= 64) throw Error('History JSON nesting exceeds supported depth')
       const keep = this.keepValue(), array = byte === 91
       this.stack.push({ value: array ? [] : Object.create(null), array, state: 'first', key: '', count: 0, keep })
     } else if (byte === 34) this.string(false)
     else if (byte === 45 || (byte >= 48 && byte <= 57) || [116, 102, 110].includes(byte)) { this.mode = 'word'; this.token = String.fromCharCode(byte) }
-    else throw Error('Invalid history JSON token')
+    else throw new HistoryJsonSyntaxError('Invalid history JSON token')
   }
   private string(key: boolean) {
     this.mode = 'string'; this.key = key; this.escape = false; this.unicode = 0; this.clippedString = false; this.token = ''
@@ -61,7 +64,7 @@ export class HistoryJson {
     // A clipped prefix may end inside UTF-8, an escape or a surrogate pair.
     for (let cut = 0; cut <= 12; cut++) {
       try { value = JSON.parse('"' + new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(raw, 'latin1')) + '"'); break }
-      catch { if (!this.clippedString || this.key) throw Error('Invalid history JSON string'); raw = raw.slice(0, -1) }
+      catch { if (!this.clippedString || this.key) throw new HistoryJsonSyntaxError('Invalid history JSON string'); raw = raw.slice(0, -1) }
     }
     if (value === undefined) throw Error('Invalid history string prefix')
     value = value.replace(/[\uD800-\uDBFF]$/, '')
@@ -92,12 +95,12 @@ export class HistoryJson {
   }
   feed(byte: number): void {
     if (this.mode === 'string') {
-      if (byte < 32) throw Error('Unescaped control in history JSON')
+      if (byte < 32) throw new HistoryJsonSyntaxError('Unescaped control in history JSON')
       if (this.unicode) {
-        if (!((byte >= 48 && byte <= 57) || (byte >= 65 && byte <= 70) || (byte >= 97 && byte <= 102))) throw Error('Invalid Unicode escape')
+        if (!((byte >= 48 && byte <= 57) || (byte >= 65 && byte <= 70) || (byte >= 97 && byte <= 102))) throw new HistoryJsonSyntaxError('Invalid Unicode escape')
         this.unicode--
       } else if (this.escape) {
-        if (![34, 92, 47, 98, 102, 110, 114, 116, 117].includes(byte)) throw Error('Invalid JSON escape')
+        if (![34, 92, 47, 98, 102, 110, 114, 116, 117].includes(byte)) throw new HistoryJsonSyntaxError('Invalid JSON escape')
         if (byte === 117) this.unicode = 4
       }
       if (!this.escape && byte === 34) { this.endString(); return }
@@ -112,35 +115,39 @@ export class HistoryJson {
         if (this.token.length >= 128) throw Error('History JSON scalar too long')
         this.token += String.fromCharCode(byte); return
       }
-      const value: unknown = JSON.parse(this.token)
+      let value: unknown
+      try { value = JSON.parse(this.token) } catch (error) {
+        if (error instanceof SyntaxError) throw new HistoryJsonSyntaxError('Invalid history JSON scalar')
+        throw error
+      }
       if (typeof value === 'object' && value !== null) throw Error('Invalid scalar')
       if (typeof value === 'number' && !Number.isFinite(value)) throw Error('Invalid number')
       this.mode = 'none'; this.token = ''; this.accept(value)
     }
     if ([9, 10, 13, 32].includes(byte)) return
     const parent = this.stack.at(-1)
-    if (!parent) { if (this.done) throw Error('Trailing history JSON'); this.start(byte); return }
+    if (!parent) { if (this.done) throw new HistoryJsonSyntaxError('Trailing history JSON'); this.start(byte); return }
     if (byte === 93 || byte === 125) {
-      if ((byte === 93) !== parent.array || !['first', 'comma'].includes(parent.state)) throw Error('Invalid history JSON end')
+      if ((byte === 93) !== parent.array || !['first', 'comma'].includes(parent.state)) throw new HistoryJsonSyntaxError('Invalid history JSON end')
       this.stack.pop(); this.accept(parent.value, parent.keep); return
     }
     if (parent.state === 'comma') {
-      if (byte !== 44) throw Error('Missing history JSON comma')
+      if (byte !== 44) throw new HistoryJsonSyntaxError('Missing history JSON comma')
       parent.state = parent.array ? 'value' : 'key'; return
     }
     if (!parent.array && ['first', 'key'].includes(parent.state)) {
-      if (byte !== 34) throw Error('Missing history JSON key')
+      if (byte !== 34) throw new HistoryJsonSyntaxError('Missing history JSON key')
       this.string(true); return
     }
     if (parent.state === 'colon') {
-      if (byte !== 58) throw Error('Missing history JSON colon')
+      if (byte !== 58) throw new HistoryJsonSyntaxError('Missing history JSON colon')
       parent.state = 'value'; return
     }
     this.start(byte)
   }
   finish(): { value: unknown; truncated: boolean } {
     if (this.mode === 'word') this.feed(32)
-    if (this.mode !== 'none' || this.stack.length || !this.done) throw Error('Incomplete history JSON record')
+    if (this.mode !== 'none' || this.stack.length || !this.done) throw new HistoryJsonSyntaxError('Incomplete history JSON record')
     return { value: this.root, truncated: this.truncated }
   }
 }

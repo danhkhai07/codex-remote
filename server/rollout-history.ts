@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { createHash, randomUUID } from 'node:crypto'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { setImmediate as yieldIO } from 'node:timers/promises'
-import { HistoryJson } from './history-json.js'
+import { HistoryJson, HistoryJsonSyntaxError } from './history-json.js'
 import { projectPaginated } from './history-paginated.js'
 
 export type HistoryMetadata = { id: string; cwd: string; path?: string }
@@ -39,7 +39,7 @@ export function historyItem(item: Record<string, unknown>, id: string, fallback 
 export class RolloutHistory {
   private serial: Promise<unknown> = Promise.resolve()
   private queued = 0
-  readonly metrics = { indexBytes: 0, guardBytes: 0, detailBytes: 0, rebuilds: 0, records: 0 }
+  readonly metrics = { indexBytes: 0, guardBytes: 0, detailBytes: 0, rebuilds: 0, records: 0, malformedRecords: 0 }
   constructor(readonly nativeHome: string, readonly directory: string) {}
   async use<T>(metadata: HistoryMetadata, live: () => void, operation: (view: HistoryView) => Promise<T> | T): Promise<T> {
     if (this.queued >= 16) throw Error('History is busy; retry shortly')
@@ -294,7 +294,7 @@ export class RolloutHistory {
     }
     // Fixed-size input buffer and bounded parser; never readline/JSON.parse a raw line.
     const buffer = Buffer.alloc(BLOCK)
-    let offset = checkpoint.offset, lineStart = offset, parser = new HistoryJson()
+    let offset = checkpoint.offset, lineStart = offset, parser = new HistoryJson(), malformed = false
     let committed = checkpoint.offset
     const save = async () => {
       checkpoint!.scanned = false; checkpoint!.size = snapshot.size; checkpoint!.mtime = snapshot.mtimeMs
@@ -312,10 +312,25 @@ export class RolloutHistory {
         while (n < read.bytesRead) {
           const found = buffer.indexOf(10, n), newline = found >= 0 && found < read.bytesRead ? found : -1
           const end = newline < 0 ? read.bytesRead : newline
-          parser.feedBuffer(buffer.subarray(n, end))
+          let parsed: ReturnType<HistoryJson['finish']> | undefined
+          try {
+            if (!malformed) {
+              parser.feedBuffer(buffer.subarray(n, end))
+              if (newline >= 0 && parser.hasValue) parsed = parser.finish()
+            }
+          } catch (error) {
+            // Native 0.155 paginated materialization skips malformed complete
+            // JSONL records, advancing ONLY the byte checkpoint. The next valid
+            // record can reuse the ordinal after a torn write. Never recover a
+            // header, valid-but-unsupported record, resource/liveness failure or
+            // projector error this way. Keep the original source untouched.
+            if (!(error instanceof HistoryJsonSyntaxError) || !checkpoint.verified || checkpoint.mode !== 'paginated') throw error
+            malformed = true
+          }
           if (newline < 0) break
-          if (parser.hasValue) { const parsed = parser.finish(); record(obj(parsed.value), lineStart, offset + newline + 1, parsed.truncated) }
-          lineStart = offset + newline + 1; checkpoint.offset = lineStart; parser = new HistoryJson()
+          if (malformed) this.metrics.malformedRecords++
+          if (parsed) record(obj(parsed.value), lineStart, offset + newline + 1, parsed.truncated)
+          lineStart = offset + newline + 1; checkpoint.offset = lineStart; parser = new HistoryJson(); malformed = false
           n = newline + 1
         }
         offset += read.bytesRead

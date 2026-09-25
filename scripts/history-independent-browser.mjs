@@ -31,6 +31,9 @@ try {
   // This is NOT a measurement of a real transcript or a 197 MB single item.
   const tool = 'x'.repeat(100)
   for (let n = 0; n < 80; n++) {
+    // TECH regression: a torn complete JSONL line must not prevent encrypted
+    // loading, paging or cached navigation; valid ordinals remain continuous.
+    if (n === 40) await fd.write('{"timestamp":"2026-09-25T00:00:00.000Z","o\n')
     await fd.write(item(`u${n}`, 'userMessage', `Question ${n}`))
     for (let k = 0; k < 2; k++) await fd.write(item(`tool${n}-${k}`, 'commandExecution', tool))
     await fd.write(item(`a${n}`, 'agentMessage', `Answer ${n}\n\n${'Readable fixture content. '.repeat(15)}`))
@@ -93,6 +96,7 @@ try {
     await login()
     await unlock(); await page.getByText('Question 79', { exact: true }).waitFor()
     assert.equal(await page.locator('.conversation-stream article.message').count(), 20)
+    assert(controller.historyPages.source.metrics.malformedRecords > 0)
     await composer.fill('Independent review draft')
     await transcript.evaluate(el => { el.scrollTop = 0 })
     await page.getByRole('button', { name: 'Tải tin nhắn cũ hơn', exact: true }).click()
@@ -181,7 +185,7 @@ try {
     await context.close()
   }
   assert(!calls.some(c => c.method === 'turn/start' || c.method === 'thread/items/list' || c.includeTurns === true))
-  console.log(JSON.stringify({ baseReview: '6471a6e79e77ae94614d070132331a67748cf92a', acceptance: 'H1', results, realModelTurns: 0 }, null, 2))
+  console.log(JSON.stringify({ baseReview: '6471a6e79e77ae94614d070132331a67748cf92a', acceptance: 'H1 and TECH malformed-record recovery', results, realModelTurns: 0 }, null, 2))
 } catch (error) {
   if (lastPage && !lastPage.isClosed()) {
     await lastPage.screenshot({ path: '/tmp/history-independent-failure.png' }).catch(() => {})

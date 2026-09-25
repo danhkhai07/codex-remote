@@ -14,7 +14,7 @@ import { bootstrapRecords, paginatedBootstrapRecords, materialized, materialized
 const binary = '/root/.codex/packages/standalone/releases/0.155.0-x86_64-unknown-linux-musl/bin/codex'
 const root = await mkdtemp(join(tmpdir(), 'history-native-parity-')), home = join(root, 'native')
 let native
-let parseWarning = false
+let parseWarnings = []
 const calls = []
 const launch = () => {
   const child = new CodexAppServer('/usr/bin/env', ['-i', 'PATH=/usr/local/bin:/usr/bin:/bin', `HOME=${root}`, `CODEX_HOME=${home}`, binary])
@@ -22,7 +22,7 @@ const launch = () => {
   child.request = (method, params, ...args) => { calls.push({ method, includeTurns: params?.includeTurns }); return request(method, params, ...args) }
   child.on('log', line => {
     // Owned fake HOME/config/rollouts only; never production log content.
-    if (/parse.*rollout|invalid.*rollout|deserializ|missing field|skipping.*rollout|projection.*expected ordinal/i.test(line)) parseWarning = true
+    if (/parse.*rollout|invalid.*rollout|deserializ|missing field|skipping.*rollout|projection.*expected ordinal/i.test(line)) parseWarnings.push(line)
     if (process.env.HISTORY_PARITY_DIAGNOSTIC) console.error('[owned-native]', line)
   })
   return child
@@ -82,13 +82,19 @@ const allIndexPages = async (pages, metadata) => {
 try {
   await mkdir(join(home, 'sessions', '2026', '09', '25'), { recursive: true })
   await writeFile(join(home, 'config.toml'), 'model_provider = "fixture"\n[model_providers.fixture]\nname = "Fixture offline"\nbase_url = "http://127.0.0.1:1/v1"\nwire_api = "responses"\n', { mode: 0o600 })
-  const scenarios = ['paginated-bootstrap', 'paginated-twenty-tools', 'paginated-cancelled', 'paginated-late-items', 'paginated-rollback-compaction', 'legacy-control']
+  const scenarios = ['paginated-torn-record', 'paginated-bootstrap', 'paginated-twenty-tools', 'paginated-cancelled', 'paginated-late-items', 'paginated-rollback-compaction', 'legacy-control']
   let comparisons = 0
   for (const scenario of scenarios) {
+    parseWarnings = []
+    const checkWarnings = () => {
+      const unexpected = parseWarnings.filter(line => scenario !== 'paginated-torn-record' ||
+        !/skipping malformed rollout line during projection/.test(line))
+      assert.deepEqual(unexpected, [], 'Native rejected otherwise-valid fixture records; do not accept partial parity')
+    }
     const id = randomUUID(), path = join(home, 'sessions', '2026', '09', '25', `rollout-2026-09-25T00-00-00-${id}.jsonl`), metadata = { id, cwd: root, path }
     let rows = paginatedBootstrapRecords(id, root)
-    if (scenario === 'paginated-twenty-tools') {
-      for (let n = 0; n < 13; n++) rows.push(nativeStart(`t${n}`), materializedUser(id, `t${n}`, `u${n}`, `Input ${n}`),
+    if (['paginated-twenty-tools', 'paginated-torn-record'].includes(scenario)) {
+      for (let n = 0; n < (scenario === 'paginated-torn-record' ? 25 : 13); n++) rows.push(nativeStart(`t${n}`), materializedUser(id, `t${n}`, `u${n}`, `Input ${n}`),
         materialized(id, `t${n}`, { type: 'Plan', id: `tool-${n}`, text: 'Materialized non-message' }), materializedAnswer(id, `t${n}`, `a${n}`, `Answer ${n}`), nativeComplete(`t${n}`))
     }
     if (scenario === 'paginated-cancelled') rows = [rows[0], rawUser('Bootstrap'), nativeStart('cancel'), nativeEvent('turn_aborted', { turn_id: 'cancel', reason: 'interrupted' }), nativeComplete('cancel'), nativeStart('empty'), nativeComplete('empty')]
@@ -107,6 +113,10 @@ try {
       await appendFile(path, serializeRecords(rows.slice(5, 13)))
       assert.deepEqual(display(fromTurns((await new HistoryPages('FAKE'.repeat(16), new RolloutHistory(home, indexDirectory)).page(metadata, () => {})).turns)).map(item => item.id), ['native-user-1'])
       await appendFile(path, serializeRecords(rows.slice(13)))
+    } else if (scenario === 'paginated-torn-record') {
+      // Same structural corruption as TECH: General, synthetic bytes only.
+      // Valid record 16 keeps its original ordinal; no invented legacy events.
+      await writeFile(path, serializeRecords(rows.slice(0, 16)) + '{"timestamp":"2026-09-25T00:00:00.000Z","o\n' + serializeRecords(rows.slice(16)), { mode: 0o600 })
     } else await writeFile(path, serializeRecords(rows), { mode: 0o600 })
     const callStart = calls.length
     native = launch()
@@ -114,10 +124,13 @@ try {
     const expected = scenario === 'legacy-control'
       ? await rpc('thread/read', { threadId: id, includeTurns: true }).then(result => ({ turns: result.thread.turns, entries: fromTurns(result.thread.turns) }))
       : await paginatedNative(id)
+    if (scenario === 'paginated-torn-record') {
+      assert.deepEqual(display(expected.entries).map(item => item.id), ['native-user-1', 'native-agent-1', ...Array.from({ length: 25 }, (_, n) => [`u${n}`, `a${n}`]).flat()], 'Native must retain every valid message on both sides of corruption')
+    }
     const prepared = await readFile(path)
     assert.equal(digest(prepared.subarray(0, before.length)), digest(before), 'Native preparation changed the owned fixture prefix')
     const actual = await allIndexPages(new HistoryPages('FAKE'.repeat(16), new RolloutHistory(home, indexDirectory)), metadata)
-    assert.equal(parseWarning, false, 'Native rejected fixture records; fix schema instead of accepting partial parity')
+    checkWarnings()
     assert.deepEqual(display(actual.entries), display(expected.entries), `${scenario}: native canonical IDs/turn/content differ`)
     assert.equal(actual.first.messages, Math.min(20, display(expected.entries).length))
     assert.equal(actual.first.latestTurn?.id, expected.turns.at(-1)?.id)
@@ -133,7 +146,7 @@ try {
       sessionSecret: 'FAKE'.repeat(16), production: true }, native)
     const controlled = await controller.readHistoryPage(id)
     assert.deepEqual(display(fromTurns(controlled.thread.turns)), display(fromTurns(actual.first.turns)))
-    assert.equal(parseWarning, false, 'Native rejected fixture records; fix schema instead of accepting partial parity')
+    checkWarnings()
     if (scenario !== 'legacy-control') assert(!calls.slice(callStart).some(call => call.includeTurns === true))
     comparisons++; await stop(native); native = undefined
     if (scenario === 'paginated-bootstrap') {
@@ -142,7 +155,7 @@ try {
       native = launch()
       const expected = await paginatedNative(id)
       const actual = await allIndexPages(new HistoryPages('FAKE'.repeat(16), new RolloutHistory(home, indexDirectory)), metadata)
-      assert.deepEqual(display(actual.entries), display(expected.entries)); assert.equal(parseWarning, false)
+      assert.deepEqual(display(actual.entries), display(expected.entries)); checkWarnings()
       comparisons++; await stop(native); native = undefined
     }
   }

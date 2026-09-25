@@ -262,3 +262,8 @@ it('keeps pre-turn native hook prompts as tools rather than fabricated user inpu
   expect(page.turns[0].items[0]).toMatchObject({ id: 'hook-1', type: 'historyTool' })
   expect(page.turns[1].items[0].id).toBe('item-1')
 })
+it('retains legacy malformed-record refusal instead of applying paginated recovery to another format', async () => {
+  const f = await fixture(2)
+  await appendFile(f.metadata.path, '{"timestamp":\n')
+  await expect(f.pages.page(f.metadata, f.live)).rejects.toThrow('Incomplete history JSON record')
+})

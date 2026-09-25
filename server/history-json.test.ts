@@ -47,3 +47,13 @@ it('retains visibility and source-format discriminators even after a clipped lar
   expect(result.truncated).toBe(true)
   expect(result.value).toMatchObject({ ordinal: 42, payload: { channel: 'analysis', phase: 'analysis', history_base: { thread_id: 'parent', ordinal: 20 }, history_mode: 'paginated', subagent_history_start_ordinal: 20 } })
 })
+it('distinguishes invalid JSON syntax from valid input that exceeds supported limits', async () => {
+  const { HistoryJsonSyntaxError } = await import('./history-json.js')
+  for (const input of ['{"timestamp":"2026-09-25T00:00:00Z","o', '{"x":}', 'true false', '{"x":tru}', '{"x":"bad\\x"}', '{"x":1,}']) {
+    expect(() => project(input)).toThrow(HistoryJsonSyntaxError)
+  }
+  for (const input of ['['.repeat(65) + ']'.repeat(65), JSON.stringify({ ['k'.repeat(257)]: 1 }), '1'.repeat(129), '1e999']) {
+    expect(() => project(input)).toThrow()
+    try { project(input) } catch (error) { expect(error).not.toBeInstanceOf(HistoryJsonSyntaxError) }
+  }
+})
