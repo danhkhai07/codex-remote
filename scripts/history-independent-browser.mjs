@@ -21,7 +21,7 @@ const item = (id, type, text, turn = 't', thread = 'window') => event('item_comp
     ...(type === 'userMessage' ? { content: [{ type: 'text', text, text_elements: [] }] } : type === 'agentMessage' ?
       { content: [{ type: 'Text', text }], phase: 'final_answer' } : { command: 'fixture', status: 'completed', aggregatedOutput: text }) } }, thread)
 
-let browser, server, lastPage, release = () => {}
+let browser, server, lastPage, release = () => {}, releaseDetail = () => {}
 try {
   await mkdir(files); await mkdir(sessions, { recursive: true })
   const sourcePath = join(sessions, 'window.jsonl'), otherPath = join(sessions, 'other.jsonl')
@@ -29,10 +29,10 @@ try {
   await fd.write(row('session_meta', { id: 'window', cwd: files, cli_version: '0.155.0', history_mode: 'paginated', history_base: null, subagent_history_start_ordinal: null }) + event('task_started', { turn_id: 't' }))
   // REAL bytes written in bounded pieces: Small isolated input for independent navigation controls.
   // This is NOT a measurement of a real transcript or a 197 MB single item.
-  const tool = 'x'.repeat(100)
+  const tool = 'x'.repeat(100), giantTool = 'large-tool-output-'.repeat(10_000)
   for (let n = 0; n < 80; n++) {
     await fd.write(item(`u${n}`, 'userMessage', `Question ${n}`))
-    for (let k = 0; k < 2; k++) await fd.write(item(`tool${n}-${k}`, 'commandExecution', tool))
+    for (let k = 0; k < 2; k++) await fd.write(item(`tool${n}-${k}`, 'commandExecution', n === 79 && k === 1 ? giantTool : tool))
     await fd.write(item(`a${n}`, 'agentMessage', `Answer ${n}\n\n${'Readable fixture content. '.repeat(15)}`))
   }
   await fd.write(event('task_complete', { turn_id: 't' })); await fd.close()
@@ -59,6 +59,8 @@ try {
   }
   app.respond = (id, result) => { replies.push({ id, result }); app.emit('notification', { method: 'serverRequest/resolved', params: { threadId: 'window', requestId: id } }) }
   const controller = new RemoteController(config, app), original = controller.readHistoryPage.bind(controller)
+  const originalDetail = controller.readHistoryDetail.bind(controller), detailReads = []
+  let detailHold = null, failDetail = false
   controller.readHistoryPage = async (...args) => {
     if (args[0] === 'window' && hold) await hold
     const result = await original(...args)
@@ -66,6 +68,13 @@ try {
     return result
   }
   const blockHistory = () => { hold = new Promise(resolve => { release = () => { hold = null; resolve() } }) }
+  const blockDetail = () => { detailHold = new Promise(resolve => { releaseDetail = () => { detailHold = null; resolve() } }) }
+  controller.readHistoryDetail = async (...args) => {
+    detailReads.push(args[2])
+    if (detailHold) await detailHold
+    if (failDetail) { failDetail = false; throw Error('Fixture detail failure') }
+    return originalDetail(...args)
+  }
   server = createRemoteHttpServer(config, controller, resolve('dist'), null)
   server.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)) })
   server.listen(0, '127.0.0.1'); await once(server, 'listening'); config.publicOrigin = new URL(`http://127.0.0.1:${server.address().port}`)
@@ -93,6 +102,48 @@ try {
     await login()
     await unlock(); await page.getByText('Question 79', { exact: true }).waitFor()
     assert.equal(await page.locator('.conversation-stream article.message').count(), 20)
+    const detailCard = page.locator('.activity-card.has-history-detail').last()
+    await detailCard.waitFor()
+    assert.equal(await page.getByRole('button', { name: 'Xem nội dung đầy đủ theo từng phần', exact: true }).count(), 0)
+    const initialDetailReads = detailReads.length
+    await page.waitForTimeout(200)
+    assert.equal(detailReads.length, initialDetailReads, 'Collapsed tools load zero detail')
+    const waitForDetailRead = async expected => {
+      for (let attempt = 0; detailReads.length < expected && attempt < 400; attempt++) await page.waitForTimeout(25)
+      assert.equal(detailReads.length, expected, 'Expected one targeted detail request')
+    }
+    // Opening the native disclosure starts only this tool detail. Collapsing
+    // aborts the client request and cannot paint its late result.
+    blockDetail()
+    await detailCard.locator(':scope > summary').click()
+    await waitForDetailRead(initialDetailReads + 1)
+    await detailCard.getByRole('status').waitFor()
+    await detailCard.locator(':scope > summary').click()
+    releaseDetail()
+    await page.waitForTimeout(200)
+    assert.equal(await detailCard.getAttribute('open'), null)
+    assert.equal(await detailCard.locator('.history-detail').count(), 0)
+    // Reopening retries the aborted first chunk. A completed chunk remains in
+    // component memory across an ordinary collapse/reopen.
+    await detailCard.locator(':scope > summary').click()
+    await waitForDetailRead(initialDetailReads + 2)
+    await detailCard.getByText('Bản ghi gốc (JSON), từng phần tối đa 32 KB.', { exact: true }).waitFor()
+    assert(Buffer.byteLength(await detailCard.locator('.history-detail pre').innerText()) <= 32 * 1024)
+    const cachedReads = detailReads.length
+    await detailCard.locator(':scope > summary').click(); await detailCard.locator(':scope > summary').click()
+    await page.waitForTimeout(200)
+    assert.equal(detailReads.length, cachedReads, 'Reopening a loaded tool reuses its detail page')
+    // Failure and retry stay inside the expanded tool and retry the same chunk.
+    failDetail = true
+    await detailCard.getByRole('button', { name: 'Phần tiếp', exact: true }).click()
+    await detailCard.getByRole('alert').waitFor()
+    const failedOffset = detailReads.at(-1)
+    await detailCard.getByRole('button', { name: 'Thử lại', exact: true }).click()
+    await waitForDetailRead(cachedReads + 2)
+    assert.equal(detailReads.at(-1), failedOffset, 'Retry keeps the failed bounded offset')
+    await detailCard.getByRole('alert').waitFor({ state: 'detached' })
+    assert(Buffer.byteLength(await detailCard.locator('.history-detail pre').innerText()) <= 32 * 1024)
+    await detailCard.locator(':scope > summary').click()
     await composer.fill('Independent review draft')
     await transcript.evaluate(el => { el.scrollTop = 0 })
     await page.getByRole('button', { name: 'Tải tin nhắn cũ hơn', exact: true }).click()
@@ -167,17 +218,30 @@ try {
     const beforeDenied = calls.length
     const denied = await context.request.get(config.publicOrigin.origin + '/api/threads/window/history')
     assert.equal(denied.ok(), false); assert.equal(calls.length, beforeDenied)
+    // A held detail reply cannot paint into a different conversation.
+    await detailCard.locator(':scope > summary').click()
+    await detailCard.getByText('Bản ghi gốc (JSON), từng phần tối đa 32 KB.', { exact: true }).waitFor()
+    blockDetail(); const switchRead = detailReads.length + 1
+    await detailCard.getByRole('button', { name: 'Phần tiếp', exact: true }).click()
+    await waitForDetailRead(switchRead)
+    await select('Other fixture'); releaseDetail()
+    await page.getByText('Other cached answer', { exact: true }).waitFor(); await page.waitForTimeout(200)
+    assert.equal(await page.locator('.history-detail').count(), 0)
     // Real in-flight encrypted history response held while switching and locking.
     blockHistory(); await select('Other fixture'); await select('History window fixture'); await select('Other fixture'); release()
     await page.getByText('Other cached answer', { exact: true }).waitFor(); await page.waitForTimeout(250)
     assert.equal(await page.getByText('Question 79', { exact: true }).count(), 0)
-    blockHistory(); await select('History window fixture')
+    await select('History window fixture'); await page.getByText('Question 79', { exact: true }).waitFor()
+    const lockCard = page.locator('.activity-card.has-history-detail').last()
+    await lockCard.locator(':scope > summary').click(); await lockCard.getByText('Bản ghi gốc (JSON), từng phần tối đa 32 KB.', { exact: true }).waitFor()
+    blockDetail(); const lockRead = detailReads.length + 1
+    await lockCard.getByRole('button', { name: 'Phần tiếp', exact: true }).click(); await waitForDetailRead(lockRead)
     if (viewport.width < 800) await page.getByRole('button', { name: 'Open conversations', exact: true }).click()
     await page.getByRole('button', { name: 'App menu', exact: true }).click(); await page.getByRole('button', { name: 'Lock app', exact: true }).click()
-    release(); await page.getByLabel('Khóa mã hóa riêng', { exact: true }).waitFor()
+    releaseDetail(); await page.getByLabel('Khóa mã hóa riêng', { exact: true }).waitFor()
     assert.equal(await page.locator('.conversation-stream').count(), 0)
     assert.deepEqual(errors, [])
-    results.push({ viewport, frozenBottomRetainsLatest: true, pointerRestoresSameSse: true, pausedLatestRefresh: true, deep240Eviction: true, anchorPreserved: true, noAutoDrain: true, keyboardEnd: true, draftPreserved: true, staleSwitchAndLockDenied: true, cookieOnlyDenied: true })
+    results.push({ viewport, collapsedDetailRequests: 0, disclosureLoadsTarget: true, collapseAbortsLatePaint: true, cachedReopen: true, inlineErrorRetry: true, boundedDetailChunks: true, detailSwitchAndLockDenied: true, oldDetailButtonAbsent: true, frozenBottomRetainsLatest: true, pointerRestoresSameSse: true, pausedLatestRefresh: true, deep240Eviction: true, anchorPreserved: true, noAutoDrain: true, keyboardEnd: true, draftPreserved: true, staleSwitchAndLockDenied: true, cookieOnlyDenied: true })
     await context.close()
   }
   assert(!calls.some(c => c.method === 'turn/start' || c.method === 'thread/items/list' || c.includeTurns === true))
@@ -189,7 +253,7 @@ try {
   }
   throw error
 } finally {
-  release(); for (const socket of sockets) socket.destroy()
+  release(); releaseDetail(); for (const socket of sockets) socket.destroy()
   await browser?.close()
   if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
   await rm(root, { recursive: true, force: true })

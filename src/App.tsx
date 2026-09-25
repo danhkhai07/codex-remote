@@ -329,11 +329,13 @@ function JsonDetails({ value, label = 'Raw data' }: { value: unknown; label?: st
   )
 }
 
-const HistoryItem = memo(function HistoryItem({ item, onOpenFile, onOpenLink }: {
+const HistoryItem = memo(function HistoryItem({ item, threadId, onOpenFile, onOpenLink }: {
   item: ThreadItem
+  threadId?: string
   onOpenFile?: (reference: LocalFileReference) => void
   onOpenLink?: (reference: WebLinkReference) => void
 }) {
+  const [expanded, setExpanded] = useState(false)
   const text = itemText(item)
   const command = commandText(item)
   const changes = Array.isArray(item.changes) ? item.changes : []
@@ -366,7 +368,7 @@ const HistoryItem = memo(function HistoryItem({ item, onOpenFile, onOpenLink }: 
   const status = typeof item.status === 'string' && item.status !== 'completed' ? item.status : null
 
   return (
-    <details className="activity-card">
+    <details className={`activity-card${typeof item.historyDetail === 'string' ? ' has-history-detail' : ''}`} onToggle={event => setExpanded(event.currentTarget.open)}>
       <summary>
         <span className="activity-icon" aria-hidden="true">{item.type === 'commandExecution' ? '$' : item.type === 'fileChange' ? '±' : '·'}</span>
         <span className="activity-summary"><strong>{itemLabel(item)}</strong><small>{preview}</small></span>
@@ -386,10 +388,12 @@ const HistoryItem = memo(function HistoryItem({ item, onOpenFile, onOpenLink }: 
           )
         })}
         <JsonDetails value={item} />
+        {typeof item.historyDetail === 'string' && typeof threadId === 'string' &&
+          <HistoryDetail key={`${threadId}:${item.historyDetail}`} threadId={threadId} cursor={item.historyDetail} expanded={expanded} />}
       </div>
     </details>
   )
-}, (previous, next) => previous.onOpenFile === next.onOpenFile && previous.onOpenLink === next.onOpenLink
+}, (previous, next) => previous.threadId === next.threadId && previous.onOpenFile === next.onOpenFile && previous.onOpenLink === next.onOpenLink
   && Object.keys(previous.item).length === Object.keys(next.item).length
   && Object.keys(previous.item).every(key => Object.is(previous.item[key], next.item[key])))
 
@@ -436,7 +440,7 @@ export const Conversation = memo(function Conversation({ thread, activeTurnId, i
         <Fragment key={item.id ? `${item.turnId}-${item.id}` : `${item.turnId}-${index}`}>
           {showPending && pendingMessage?.turnId === item.turnId && (index === 0 || rows[index - 1].turnId !== item.turnId) &&
             <HistoryItem item={pendingItem!} onOpenFile={onOpenFile} onOpenLink={onOpenLink} />}
-          <div data-history-anchor={`${item.turnId}:${item.id}`}><HistoryItem item={index === pendingMatch ? pendingItem! : item} onOpenFile={onOpenFile} onOpenLink={onOpenLink} />{typeof item.historyDetail === 'string' && <HistoryDetail key={item.historyDetail} threadId={thread.id} cursor={item.historyDetail} />}</div>
+          <div data-history-anchor={`${item.turnId}:${item.id}`}><HistoryItem item={index === pendingMatch ? pendingItem! : item} threadId={thread.id} onOpenFile={onOpenFile} onOpenLink={onOpenLink} /></div>
         </Fragment>
       ))}
       {showPending && !rows.some(item => item.turnId === pendingMessage?.turnId) &&
