@@ -605,10 +605,27 @@ export function createRemoteHttpServer(
       }
       const messageIdsThreadId = routeThread(url.pathname, '/message-ids')
       if (messageIdsThreadId && method === 'GET') {
-        const result = await controller.readMessageIds(messageIdsThreadId, live); live()
+        const cursor = url.searchParams.get('before') ?? undefined
+        if (cursor && cursor.length > 8192) throw new HttpError(400, 'Invalid history cursor')
+        const boundary = readState.historyBoundary(messageIdsThreadId)
+        const result = await controller.readMessageIds(messageIdsThreadId, live, cursor, boundary); live()
         readState.observe(messageIdsThreadId, result.ids)
         json(res, 200, result)
         return
+      }
+      const historyId = routeThread(url.pathname, '/history')
+      if (historyId && method === 'GET') {
+        const token = url.searchParams.get('before') ?? undefined
+        if (token && token.length > 8192) throw new HttpError(400, 'Invalid history cursor')
+        const value = await controller.readHistoryPage(historyId, token, live); live()
+        json(res, 200, value); return
+      }
+      const detailId = routeThread(url.pathname, '/history-detail')
+      if (detailId && method === 'GET') {
+        const token = url.searchParams.get('cursor') ?? ''
+        if (!token || token.length > 8192) throw new HttpError(400, 'Invalid history cursor')
+        const value = await controller.readHistoryDetail(detailId, token, Number(url.searchParams.get('offset') ?? 0), live); live()
+        json(res, 200, value); return
       }
       const readThreadId = routeThread(url.pathname, '')
       if (readThreadId && method === 'GET') {

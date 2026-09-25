@@ -1,3 +1,5 @@
+import { stat } from 'node:fs/promises'
+import { HistoryPages } from './history-pages.js'
 import { ContextVaultError, type ContextVault } from './context-vault.js'
 import { normalizeSkills, validateSkills, type SkillList } from './skills.js'
 import { completedReplyIds } from './completed-replies.js'
@@ -175,6 +177,8 @@ export class RemoteController {
   }
 
   #exportContextEvent(message: AppServerMessage): void {
+    const changedThread = asObject(message.params).threadId
+    if (typeof changedThread === 'string') this.historyPages?.invalidate(changedThread)
     if (!this.contextVault || !['item/completed', 'turn/completed'].includes(message.method ?? '')) return
     const params = asObject(message.params)
     if (typeof params.threadId !== 'string') return
@@ -337,13 +341,36 @@ export class RemoteController {
     return normalizeSkills(result, cwd)
   }
 
-  async readMessageIds(threadId: string, live?: () => void): Promise<{ ids: string[] }> {
-    const result = await this.#readFullThread(threadId); live?.()
-    this.#assertAllowedThread(result)
-    const thread = threadFromResult(result)
-    const turns = Array.isArray(thread.turns) ? thread.turns : []
-    const ids = turns.flatMap(value => completedReplyIds(asObject(value)))
-    return { ids: [...new Set(ids)] }
+  private historyPages?: HistoryPages
+  async readHistoryPage(threadId: string, token?: string, live?: () => void) {
+    const metadata = threadFromResult(await this.#readThreadMetadata(threadId, true, live)); live?.()
+    this.historyPages ??= new HistoryPages(this.#config.sessionSecret)
+    const rpc = async (method: string, params: Record<string, unknown>) => {
+      live?.(); const result = await this.appServer.request(method, params, undefined, live); live?.(); return result
+    }
+    const file = typeof metadata.path === 'string' ? await stat(metadata.path).catch(() => null) : null; live?.()
+    const page = await this.historyPages.page(threadId, JSON.stringify([metadata.updatedAt, metadata.status, file?.size, file?.mtimeMs, file?.ino]), rpc, token, Boolean(file)); live?.()
+    return { thread: { ...metadata, turns: page.turns, latestTurn: page.latestTurn, historyWindow: { revision: page.revision, older: page.older, messages: page.messages } } }
+  }
+  async readHistoryDetail(threadId: string, token: string, offset: number, live?: () => void) {
+    await this.assertThreadAccess(threadId, live); live?.()
+    this.historyPages ??= new HistoryPages(this.#config.sessionSecret)
+    return this.historyPages.detail(threadId, token, offset, async (method, params) => {
+      live?.(); const value = await this.appServer.request(method, params, undefined, live); live?.(); return value
+    })
+  }
+
+  async readMessageIds(threadId: string, live?: () => void, before?: string, boundary?: { initialized: boolean; known: Set<string> }): Promise<{ ids: string[]; nextCursor: string | null }> {
+    const result = await this.readHistoryPage(threadId, before, live)
+    const ids = [...new Set(result.thread.turns.flatMap(turn => completedReplyIds(turn)))]
+    // A new device/account seeds the current baseline. Established receipts scan
+    // only the missed gap, stopping when a previously observed completion appears.
+    const stopAt = this.historyPages!.boundary(threadId, before)
+    const reached = stopAt ? ids.includes(stopAt) : ids.some(id => boundary?.known.has(id))
+    let nextCursor = boundary?.initialized && !reached ? result.thread.historyWindow.older : null
+    const originalBoundary = stopAt ?? [...(boundary?.known ?? [])].at(-1)
+    if (nextCursor && originalBoundary) nextCursor = this.historyPages!.withBoundary(threadId, nextCursor, originalBoundary)
+    return { ids, nextCursor }
   }
 
   async readThread(threadId: string, live?: () => void): Promise<unknown> {

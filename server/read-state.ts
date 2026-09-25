@@ -19,6 +19,10 @@ export class ReadStateStore {
       this.state = value
     }
   }
+  historyBoundary(id: string): { initialized: boolean; known: Set<string> } {
+    const entry = Object.hasOwn(this.state.entries, id) ? this.state.entries[id] : undefined
+    return { initialized: Boolean(entry?.initialized), known: new Set(entry?.known ?? []) }
+  }
   snapshot(): ReplySnapshot {
     return { revision: this.state.revision, unread: Object.fromEntries(Object.entries(this.state.entries)
       .filter(([, entry]) => entry.unread.length).map(([id, entry]) => [id, [...entry.unread]])) }
