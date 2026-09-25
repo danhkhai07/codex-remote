@@ -2,26 +2,31 @@ import { useEffect, useRef, useState } from 'react'
 import { api } from './api'
 import { secureIntent } from './secureApi'
 
+type DetailOperation = { offset: number; backwards: boolean; from: number; hadPage: boolean }
+
 export function HistoryDetail({ threadId, cursor, expanded }: { threadId: string; cursor: string; expanded: boolean }) {
   const [page, setPage] = useState<{ text: string; offset: number; next: number | null } | null>(null)
   const [busy, setBusy] = useState(false), [error, setError] = useState('')
   const pending = useRef<AbortController | null>(null)
   const requestOffset = useRef(0)
-  const retryOffset = useRef(0)
+  const retryOperation = useRef<DetailOperation>({ offset: 0, backwards: false, from: 0, hadPage: false })
   const [trail, setTrail] = useState<number[]>([])
   useEffect(() => () => pending.current?.abort(), [threadId, cursor])
-  async function load(offset: number, backwards = false) {
+  async function perform(operation: DetailOperation) {
     const intent = secureIntent(); intent.assert()
-    retryOffset.current = offset
+    retryOperation.current = operation
     pending.current?.abort(); const request = new AbortController(); pending.current = request
     setBusy(true); setError('')
-    try { const result = await api.historyDetail(threadId, cursor, offset, request.signal); intent.assert(); if (!request.signal.aborted) {
-      if (backwards) setTrail(value => value.slice(0, -1))
-      else if (page) setTrail(value => [...value, requestOffset.current].slice(-128))
-      requestOffset.current = offset; setPage(result)
+    try { const result = await api.historyDetail(threadId, cursor, operation.offset, request.signal); intent.assert(); if (!request.signal.aborted && pending.current === request && requestOffset.current === operation.from) {
+      if (operation.backwards) setTrail(value => value.slice(0, -1))
+      else if (operation.hadPage) setTrail(value => [...value, operation.from].slice(-128))
+      requestOffset.current = operation.offset; setPage(result)
     } }
     catch (reason) { if (!request.signal.aborted) setError(reason instanceof Error ? reason.message : 'Không tải được chi tiết') }
     finally { if (pending.current === request) setBusy(false) }
+  }
+  function load(offset: number, backwards = false) {
+    return perform({ offset, backwards, from: requestOffset.current, hadPage: page !== null })
   }
   useEffect(() => {
     if (!expanded) {
@@ -42,6 +47,6 @@ export function HistoryDetail({ threadId, cursor, expanded }: { threadId: string
     </div></>}
     {!page && !error && <span role="status">{busy ? 'Đang tải…' : 'Đang chuẩn bị…'}</span>}
     {page && busy && <span role="status">Đang tải…</span>}
-    {error && <div><p role="alert">{error}</p><button type="button" disabled={busy} onClick={() => void load(retryOffset.current)}>Thử lại</button></div>}
+    {error && <div><p role="alert">{error}</p><button type="button" disabled={busy} onClick={() => void perform(retryOperation.current)}>Thử lại</button></div>}
   </div>
 }

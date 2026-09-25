@@ -30,10 +30,11 @@ try {
   // REAL bytes written in bounded pieces: Small isolated input for independent navigation controls.
   // This is NOT a measurement of a real transcript or a 197 MB single item.
   const tool = 'x'.repeat(100), giantTool = 'large-tool-output-'.repeat(10_000)
+  const giantUser = 'oversized-user-content-'.repeat(10_000), giantAssistant = 'oversized-assistant-content-'.repeat(10_000)
   for (let n = 0; n < 80; n++) {
-    await fd.write(item(`u${n}`, 'userMessage', `Question ${n}`))
+    await fd.write(item(`u${n}`, 'userMessage', n === 78 ? giantUser : `Question ${n}`))
     for (let k = 0; k < 2; k++) await fd.write(item(`tool${n}-${k}`, 'commandExecution', n === 79 && k === 1 ? giantTool : tool))
-    await fd.write(item(`a${n}`, 'agentMessage', `Answer ${n}\n\n${'Readable fixture content. '.repeat(15)}`))
+    await fd.write(item(`a${n}`, 'agentMessage', n === 78 ? giantAssistant : `Answer ${n}\n\n${'Readable fixture content. '.repeat(15)}`))
   }
   await fd.write(event('task_complete', { turn_id: 't' })); await fd.close()
   const originalSize = (await stat(sourcePath)).size, originalOrdinal = ordinals.get('window')
@@ -105,13 +106,24 @@ try {
     const detailCard = page.locator('.activity-card.has-history-detail').last()
     await detailCard.waitFor()
     assert.equal(await page.getByRole('button', { name: 'Xem nội dung đầy đủ theo từng phần', exact: true }).count(), 0)
-    const initialDetailReads = detailReads.length
+    let initialDetailReads = detailReads.length
     await page.waitForTimeout(200)
     assert.equal(detailReads.length, initialDetailReads, 'Collapsed tools load zero detail')
     const waitForDetailRead = async expected => {
       for (let attempt = 0; detailReads.length < expected && attempt < 400; attempt++) await page.waitForTimeout(25)
       assert.equal(detailReads.length, expected, 'Expected one targeted detail request')
     }
+    const messageDetails = page.locator('.history-message-detail')
+    assert.equal(await messageDetails.count(), 2, 'Both clipped user and assistant messages retain detail access')
+    for (const [index, marker] of ['oversized-user-content-', 'oversized-assistant-content-'].entries()) {
+      const disclosure = messageDetails.nth(index)
+      await disclosure.locator(':scope > summary').click(); await waitForDetailRead(initialDetailReads + index + 1)
+      await disclosure.getByText('Bản ghi gốc (JSON), từng phần tối đa 32 KB.', { exact: true }).waitFor()
+      assert((await disclosure.locator('.history-detail pre').innerText()).includes(marker))
+      assert(Buffer.byteLength(await disclosure.locator('.history-detail pre').innerText()) <= 32 * 1024)
+      await disclosure.locator(':scope > summary').click()
+    }
+    initialDetailReads = detailReads.length
     // Opening the native disclosure starts only this tool detail. Collapsing
     // aborts the client request and cannot paint its late result.
     blockDetail()
@@ -133,15 +145,24 @@ try {
     await detailCard.locator(':scope > summary').click(); await detailCard.locator(':scope > summary').click()
     await page.waitForTimeout(200)
     assert.equal(detailReads.length, cachedReads, 'Reopening a loaded tool reuses its detail page')
-    // Failure and retry stay inside the expanded tool and retry the same chunk.
+    // Navigate two pages forward, then fail Previous twice. Retrying must keep
+    // both the offset and backwards operation without duplicating the trail.
+    await detailCard.getByRole('button', { name: 'Phần tiếp', exact: true }).click(); await waitForDetailRead(cachedReads + 1)
+    await detailCard.getByRole('button', { name: 'Phần tiếp', exact: true }).click(); await waitForDetailRead(cachedReads + 2)
+    const forwardOffset = detailReads.at(-1)
     failDetail = true
-    await detailCard.getByRole('button', { name: 'Phần tiếp', exact: true }).click()
+    await detailCard.getByRole('button', { name: 'Phần trước', exact: true }).click(); await waitForDetailRead(cachedReads + 3)
     await detailCard.getByRole('alert').waitFor()
     const failedOffset = detailReads.at(-1)
-    await detailCard.getByRole('button', { name: 'Thử lại', exact: true }).click()
-    await waitForDetailRead(cachedReads + 2)
-    assert.equal(detailReads.at(-1), failedOffset, 'Retry keeps the failed bounded offset')
+    failDetail = true
+    await detailCard.getByRole('button', { name: 'Thử lại', exact: true }).click(); await waitForDetailRead(cachedReads + 4)
+    assert.equal(detailReads.at(-1), failedOffset, 'Repeated retry keeps the failed bounded offset')
+    await detailCard.getByRole('button', { name: 'Thử lại', exact: true }).click(); await waitForDetailRead(cachedReads + 5)
+    assert.equal(detailReads.at(-1), failedOffset, 'Successful retry keeps the backwards operation')
     await detailCard.getByRole('alert').waitFor({ state: 'detached' })
+    await detailCard.getByRole('button', { name: 'Phần trước', exact: true }).click(); await waitForDetailRead(cachedReads + 6)
+    assert.equal(detailReads.at(-1), 0, 'Previous after backward retry reaches the real predecessor')
+    assert.notEqual(detailReads.at(-1), forwardOffset, 'Previous does not move forward after retry')
     assert(Buffer.byteLength(await detailCard.locator('.history-detail pre').innerText()) <= 32 * 1024)
     await detailCard.locator(':scope > summary').click()
     await composer.fill('Independent review draft')
@@ -241,7 +262,7 @@ try {
     releaseDetail(); await page.getByLabel('Khóa mã hóa riêng', { exact: true }).waitFor()
     assert.equal(await page.locator('.conversation-stream').count(), 0)
     assert.deepEqual(errors, [])
-    results.push({ viewport, collapsedDetailRequests: 0, disclosureLoadsTarget: true, collapseAbortsLatePaint: true, cachedReopen: true, inlineErrorRetry: true, boundedDetailChunks: true, detailSwitchAndLockDenied: true, oldDetailButtonAbsent: true, frozenBottomRetainsLatest: true, pointerRestoresSameSse: true, pausedLatestRefresh: true, deep240Eviction: true, anchorPreserved: true, noAutoDrain: true, keyboardEnd: true, draftPreserved: true, staleSwitchAndLockDenied: true, cookieOnlyDenied: true })
+    results.push({ viewport, collapsedDetailRequests: 0, clippedUserAndAssistantDetails: true, disclosureLoadsTarget: true, collapseAbortsLatePaint: true, cachedReopen: true, backwardsRetryChain: true, repeatedRetryStable: true, inlineErrorRetry: true, boundedDetailChunks: true, detailSwitchAndLockDenied: true, oldDetailButtonAbsent: true, frozenBottomRetainsLatest: true, pointerRestoresSameSse: true, pausedLatestRefresh: true, deep240Eviction: true, anchorPreserved: true, noAutoDrain: true, keyboardEnd: true, draftPreserved: true, staleSwitchAndLockDenied: true, cookieOnlyDenied: true })
     await context.close()
   }
   assert(!calls.some(c => c.method === 'turn/start' || c.method === 'thread/items/list' || c.includeTurns === true))

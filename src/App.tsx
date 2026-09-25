@@ -360,6 +360,11 @@ const HistoryItem = memo(function HistoryItem({ item, threadId, onOpenFile, onOp
           {attachmentPreviews.map(image => <img src={image.previewUrl} alt={image.name} key={image.previewUrl} />)}
         </div>}
         {attachmentPreviews.length === 0 && imageCount > 0 && <span className="image-attachment-label">▧ {imageCount} image{imageCount === 1 ? '' : 's'} attached</span>}
+        {typeof item.historyDetail === 'string' && typeof threadId === 'string' &&
+          <details className="json-details history-message-detail" onToggle={event => setExpanded(event.currentTarget.open)}>
+            <summary>Nội dung đầy đủ theo từng phần</summary>
+            <HistoryDetail key={`${threadId}:${item.historyDetail}`} threadId={threadId} cursor={item.historyDetail} expanded={expanded} />
+          </details>}
       </article>
     )
   }
