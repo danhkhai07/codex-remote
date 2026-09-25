@@ -1880,7 +1880,7 @@ export function App() {
             }} />
         </section>}
 
-        {!showLeader && <TranscriptViewport key={`${selectedId}-conversation`} viewKey={`${selectedId}-conversation`} ready={Boolean(thread) && historyReady} positions={readingPositions.current} onOlder={loadOlder} olderLoading={olderLoading} hasOlder={Boolean(thread?.historyWindow?.older)} onLatest={loadLatest}>
+        {!showLeader && <TranscriptViewport key={`${selectedId}-conversation`} viewKey={`${selectedId}-conversation`} ready={Boolean(thread) && historyReady} positions={readingPositions.current} onOlder={loadOlder} olderLoading={olderLoading} hasOlder={Boolean(thread?.historyWindow?.older)} onLatest={loadLatest} frozen={Boolean(thread?.historyWindow?.browsingOlder)}>
           {draftOpen && <section className="new-conversation-setup" aria-label="New conversation setup">
             <div className="new-conversation-heading"><h2>A fresh conversation</h2>
               <button type="button" className="quiet-button" disabled={busy} onClick={() => {

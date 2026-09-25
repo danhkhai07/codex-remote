@@ -4,7 +4,7 @@ import { readScreenState, writeScreenState } from './screenState'
 export type ReadingPosition = { top: number; following: boolean }
 
 /** Owns only the transcript's scroll; never scrolls the document or composer. */
-export function TranscriptViewport({ children, positions, viewKey, ready, onOlder, hasOlder, olderLoading, onLatest }: {
+export function TranscriptViewport({ children, positions, viewKey, ready, onOlder, hasOlder, olderLoading, onLatest, frozen = false }: {
   children: ReactNode
   positions: Map<string, ReadingPosition>
   viewKey: string
@@ -13,11 +13,15 @@ export function TranscriptViewport({ children, positions, viewKey, ready, onOlde
   hasOlder?: boolean
   olderLoading?: boolean
   onLatest?: () => void
+  frozen?: boolean
 }) {
   const viewport = useRef<HTMLDivElement>(null)
   const content = useRef<HTMLDivElement>(null)
   const savedPosition = positions.get(viewKey) ?? readScreenState<ReadingPosition | null>(`reading:${viewKey}`, null)
-  const following = useRef(savedPosition?.following ?? true)
+  const following = useRef(!frozen && (savedPosition?.following ?? true))
+  const frozenRef = useRef(frozen)
+  frozenRef.current = frozen
+  const resumeRequested = useRef(false)
   const [reading, setReading] = useState(!following.current)
   const [unread, setUnread] = useState(false)
   const lastTop = useRef(0)
@@ -51,6 +55,7 @@ export function TranscriptViewport({ children, positions, viewKey, ready, onOlde
   }, [children])
 
   function pause() {
+    resumeRequested.current = false
     following.current = false
     setReading(true)
     const position = { top: viewport.current?.scrollTop ?? 0, following: false }
@@ -58,16 +63,35 @@ export function TranscriptViewport({ children, positions, viewKey, ready, onOlde
     writeScreenState(`reading:${viewKey}`, position)
   }
 
-  function latest() {
+  function followLatest() {
     const element = viewport.current
     if (!element) return
-    onLatest?.()
     following.current = true
     element.scrollTop = element.scrollHeight
     lastTop.current = element.scrollTop
     setReading(false)
     setUnread(false)
+    const position = { top: element.scrollTop, following: true }
+    positions.set(viewKey, position)
+    writeScreenState(`reading:${viewKey}`, position)
   }
+
+  function latest() {
+    if (frozen) {
+      // The displayed bottom may have evicted newer messages. Wait for App to
+      // restore latest; do not declare this partial window live-following.
+      resumeRequested.current = true
+      onLatest?.()
+    } else { onLatest?.(); followLatest() }
+  }
+
+  useLayoutEffect(() => {
+    if (frozen) { pause(); rememberAnchor() }
+    else if (resumeRequested.current) {
+      resumeRequested.current = false
+      followLatest()
+    }
+  }, [frozen])
 
   useLayoutEffect(() => {
     if (!ready) return
@@ -78,7 +102,7 @@ export function TranscriptViewport({ children, positions, viewKey, ready, onOlde
     lastTop.current = element.scrollTop
     let height = body.scrollHeight
     const observer = new ResizeObserver(() => {
-      if (following.current) {
+      if (following.current && !frozenRef.current) {
         element.scrollTop = element.scrollHeight
         rememberAnchor()
         lastTop.current = element.scrollTop
@@ -115,7 +139,10 @@ export function TranscriptViewport({ children, positions, viewKey, ready, onOlde
       onScroll={(event) => {
         const element = event.currentTarget
         const atBottom = element.scrollHeight - element.clientHeight - element.scrollTop <= 24
-        if (atBottom) {
+        if (frozen) {
+          // Scrolling/anchor restoration cannot unfreeze application history.
+          if (!resumeRequested.current) pause()
+        } else if (atBottom) {
           following.current = true
           setReading(false)
           setUnread(false)
@@ -132,7 +159,7 @@ export function TranscriptViewport({ children, positions, viewKey, ready, onOlde
     >
       <div className="transcript-content" ref={content}>{children}</div>
     </div>
-    {reading && <button className="jump-latest" onClick={latest} type="button">
+    {(frozen || reading) && <button className="jump-latest" onClick={latest} type="button">
       <span aria-hidden="true">↓</span> {unread ? 'New output · Jump to latest' : 'Jump to latest'}
     </button>}
   </div>

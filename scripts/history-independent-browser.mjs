@@ -42,6 +42,7 @@ try {
   const keyFile = join(root, 'owner.json'); await writeFile(keyFile, JSON.stringify(key), { mode: 0o600 })
   const config = { host: '127.0.0.1', port: 0, publicOrigin: new URL('http://127.0.0.1'), password: 'FAKE window browser password', sessionSecret: 'fake-window'.repeat(6), sessionTtlSeconds: 600, codexBin: 'unused', production: true, workspaceRoots: [files], fileRoots: [files], secureApiRequired: true, secureKeyFile: keyFile, sessionStateFile: join(root, 'sessions.json'), historyNativeHome: join(root, 'native'), historyIndexPath: join(root, 'index') }
   let version = 1, hold = null
+  const historyReads = []
   const calls = [], app = new CodexAppServer('UNUSED'), replies = []
   const metadata = id => ({ id, name: id === 'window' ? 'History window fixture' : 'Other fixture', cwd: files, path: id === 'window' ? sourcePath : otherPath, status: { type: 'idle' }, createdAt: 1, updatedAt: version })
   app.request = async (method, p = {}) => {
@@ -60,7 +61,9 @@ try {
   const controller = new RemoteController(config, app), original = controller.readHistoryPage.bind(controller)
   controller.readHistoryPage = async (...args) => {
     if (args[0] === 'window' && hold) await hold
-    return original(...args)
+    const result = await original(...args)
+    historyReads.push(args[1] ?? null)
+    return result
   }
   const blockHistory = () => { hold = new Promise(resolve => { release = () => { hold = null; resolve() } }) }
   server = createRemoteHttpServer(config, controller, resolve('dist'), null)
@@ -97,19 +100,70 @@ try {
     assert.equal(await page.locator('.conversation-stream article.message').count(), 40)
     assert.equal(await page.locator('.jump-latest').count(), 1)
     await transcript.evaluate(el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll', { bubbles: true })) })
-    await page.waitForFunction(() => !document.querySelector('.jump-latest'))
+    await page.locator('.jump-latest').waitFor({state:'visible'})
     const delta = 'INDEPENDENT NEW OUTPUT ' + viewport.width
     controller.events.publish('codex', { method: 'item/agentMessage/delta', params: { threadId: 'window', turnId: 'new-live', itemId: 'new-live-item', delta } })
     await page.waitForTimeout(350)
-    // Inverse control: this assertion captures the candidate defect, not acceptance.
-    assert.equal(await page.getByText(delta, { exact: true }).count(), 0, 'Candidate still suppresses new output after ordinary bottom scroll')
-    assert.equal(await page.locator('.jump-latest').count(), 0, 'Candidate also hides return-to-latest control')
+    // Acceptance: frozen output stays anchored, but pointer/touch recovery is visible.
+    assert.equal(await page.getByText(delta, { exact: true }).count(), 0, 'Frozen history must not inject live output before explicit latest')
+    assert.equal(await page.locator('.jump-latest').count(), 1, 'Frozen bottom retains latest control')
     assert.equal(await composer.inputValue(), 'Independent review draft')
-    if (process.env.HISTORY_SCREENSHOTS) { await mkdir(process.env.HISTORY_SCREENSHOTS, { recursive: true }); await page.screenshot({ path: join(process.env.HISTORY_SCREENSHOTS, `bottom-stuck-${viewport.width}.png`) }) }
-    // Positive control: explicit End calls loadLatest and makes the same SSE visible.
-    await transcript.focus(); await page.keyboard.press('End')
+    if (process.env.HISTORY_SCREENSHOTS) { await mkdir(process.env.HISTORY_SCREENSHOTS, { recursive: true }); await page.screenshot({ path: join(process.env.HISTORY_SCREENSHOTS, `bottom-latest-available-${viewport.width}.png`) }) }
+    // Use pointer (including mobile viewport), not the old keyboard-only workaround.
+    await page.locator('.jump-latest').click()
     await page.getByText(delta, { exact: true }).waitFor({ timeout: 10000 })
     assert.equal(await composer.inputValue(), 'Independent review draft')
+    // A paused latest20 becomes frozen during background revalidation, without loading older.
+    await page.getByText('Question 79', { exact: true }).waitFor()
+    await transcript.evaluate(el => { el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight - 200); el.dispatchEvent(new WheelEvent('wheel', { deltaY: -20, bubbles: true })); el.dispatchEvent(new Event('scroll', { bubbles: true })) })
+    const pausedTop = await transcript.evaluate(el => el.scrollTop), refreshStart = historyReads.length
+    controller.events.publish('codex', { method: 'turn/completed', params: { threadId: 'window', turn: { id: 'refresh-fixture', status: 'completed' } } })
+    while (historyReads.length === refreshStart) await page.waitForTimeout(25)
+    await page.waitForTimeout(250)
+    assert(Math.abs(await transcript.evaluate(el => el.scrollTop) - pausedTop) < 50, 'Background refresh retains paused reader position')
+    const pausedDelta = 'FROZEN LATEST OUTPUT ' + viewport.width
+    controller.events.publish('codex', { method: 'item/agentMessage/delta', params: { threadId: 'window', turnId: 'paused-live', itemId: 'paused-live-item', delta: pausedDelta } })
+    await page.waitForTimeout(250)
+    assert.equal(await page.getByText(pausedDelta, { exact: true }).count(), 0)
+    await transcript.evaluate(el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll', { bubbles: true })) })
+    await page.locator('.jump-latest').waitFor({state:'visible'})
+    await page.locator('.jump-latest').click()
+    await page.getByText(pausedDelta, { exact: true }).waitFor()
+    assert.equal(await composer.inputValue(), 'Independent review draft')
+    // Six deliberate page requests cross the240-item bound and evict latest79.
+    for (let n = 0; n < 6; n++) {
+      await transcript.evaluate(el => { el.scrollTop = 0 })
+      const anchor = await page.locator('[data-history-anchor]').first().evaluate(el => ({ id: el.dataset.historyAnchor, y: el.getBoundingClientRect().top }))
+      await page.getByRole('button', { name: 'Tải tin nhắn cũ hơn', exact: true }).click()
+      await page.getByText('Question ' + (60 - 10*n), { exact: true }).waitFor()
+      await transcript.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+      const y = await page.locator('[data-history-anchor]').evaluateAll((els,id) => els.find(el=>el.dataset.historyAnchor===id)?.getBoundingClientRect().top,anchor.id)
+      assert(Math.abs(y-anchor.y)<50, 'Prepend preserves reader anchor including eviction')
+      const pageCount = await page.locator('[data-history-anchor]').count(), reads = historyReads.length
+      await page.waitForTimeout(200)
+      assert.equal(await page.locator('[data-history-anchor]').count(),pageCount,'No automatic page drain')
+      assert.equal(historyReads.length,reads,'Only deliberate upward/page action loads older')
+    }
+    assert.equal(await page.getByText('Question 79', { exact: true }).count(),0,'Latest was evicted from bounded historical window')
+    assert.equal(await page.locator('[data-history-anchor]').count(),240)
+    await transcript.evaluate(el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll',{bubbles:true})) })
+    await page.locator('.jump-latest').waitFor({state:'visible'})
+    const deepTop = await transcript.evaluate(el => el.scrollTop), deepDelta = 'DEEP WINDOW OUTPUT ' + viewport.width
+    controller.events.publish('codex', { method:'item/agentMessage/delta', params:{threadId:'window',turnId:'deep-live',itemId:'deep-live-item',delta:deepDelta} })
+    await page.waitForTimeout(250)
+    assert.equal(await page.getByText(deepDelta,{exact:true}).count(),0)
+    assert(Math.abs(await transcript.evaluate(el=>el.scrollTop)-deepTop)<50,'SSE does not jump a deep reader')
+    if(process.env.HISTORY_SCREENSHOTS) await page.screenshot({path:join(process.env.HISTORY_SCREENSHOTS,`deep-latest-${viewport.width}.png`)})
+    await page.locator('.jump-latest').click()
+    await page.getByText('Question 79',{exact:true}).waitFor()
+    await page.getByText(deepDelta,{exact:true}).waitFor()
+    assert.equal(await composer.inputValue(),'Independent review draft')
+    const ids=await page.locator('[data-history-anchor]').evaluateAll(els=>els.map(el=>el.dataset.historyAnchor))
+    assert.equal(new Set(ids).size,ids.length,'No duplicate rows after restoring latest')
+    // Keyboard End remains supported for an ordinary paused reader too.
+    await transcript.evaluate(el=>{el.scrollTop=0;el.dispatchEvent(new Event('scroll',{bubbles:true}))})
+    await transcript.focus();await page.keyboard.press('End')
+    await page.waitForFunction(()=>!document.querySelector('.jump-latest'))
     const beforeDenied = calls.length
     const denied = await context.request.get(config.publicOrigin.origin + '/api/threads/window/history')
     assert.equal(denied.ok(), false); assert.equal(calls.length, beforeDenied)
@@ -123,11 +177,11 @@ try {
     release(); await page.getByLabel('Khóa mã hóa riêng', { exact: true }).waitFor()
     assert.equal(await page.locator('.conversation-stream').count(), 0)
     assert.deepEqual(errors, [])
-    results.push({ viewport, bottomScrollLosesLatestControl: true, newSseHidden: true, explicitEndRecoversSameSse: true, draftPreserved: true, staleSwitchAndLockDenied: true, cookieOnlyDenied: true })
+    results.push({ viewport, frozenBottomRetainsLatest: true, pointerRestoresSameSse: true, pausedLatestRefresh: true, deep240Eviction: true, anchorPreserved: true, noAutoDrain: true, keyboardEnd: true, draftPreserved: true, staleSwitchAndLockDenied: true, cookieOnlyDenied: true })
     await context.close()
   }
   assert(!calls.some(c => c.method === 'turn/start' || c.method === 'thread/items/list' || c.includeTurns === true))
-  console.log(JSON.stringify({ reviewedSource: '52fd238dbcc8b2bb8037e1a0e7daac16840cea73', inverseRepro: 'H1', results, realModelTurns: 0 }, null, 2))
+  console.log(JSON.stringify({ baseReview: '6471a6e79e77ae94614d070132331a67748cf92a', acceptance: 'H1', results, realModelTurns: 0 }, null, 2))
 } catch (error) {
   if (lastPage && !lastPage.isClosed()) {
     await lastPage.screenshot({ path: '/tmp/history-independent-failure.png' }).catch(() => {})
