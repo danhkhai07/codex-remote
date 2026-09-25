@@ -45,7 +45,7 @@ try {
    if (path === '/api/files/list') return json({path: '/tmp', parentPath: null, total: 1, offset: 0, limit: 100, entries: [{name: 'index.html', path: dashboardPath, kind: 'file', symlink: false, size: html.length, modifiedAt: new Date(now).toISOString()}]})
    if (path === '/api/files/info') return json({path: dashboardPath, name: 'index.html', extension: '.html', contentType: 'text/html', kind: 'text', size: html.length, previewable: true, createdAt: new Date(now).toISOString(), modifiedAt: new Date(now).toISOString()})
    if (path === '/api/threads') return json({data: [thread], nextCursor: null})
-   if (path === '/api/threads/fixture' || path === '/api/threads/fixture/resume') return json({thread})
+   if (path === '/api/threads/fixture' || path === '/api/threads/fixture/history' || path === '/api/threads/fixture/resume') return json({thread})
    if (path === '/api/conversation-groups') return json({revision: 0, groups: [], assignments: {}})
    if (path === '/api/models') return json({data: [{id: 'fixture', model: 'fixture', isDefault: true, defaultReasoningEffort: 'high', supportedReasoningEfforts: []}]})
    if (path === '/api/read-state' || path.endsWith('/read-state')) return json({revision: 0, unread: {}})

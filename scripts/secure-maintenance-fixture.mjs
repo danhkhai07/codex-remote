@@ -1,3 +1,4 @@
+import { historyFixtureConfig } from '../server/fixtures/history-store.mjs'
 // Post-build local CLI integration with fake credentials and no native/model RPC.
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, readFile, writeFile, rm, stat, symlink } from 'node:fs/promises'
@@ -28,7 +29,7 @@ try {
   await assert.rejects(cli('secure-key.mjs', ['init', join(files, 'hidden', 'key.json')]))
   await symlink(files, join(root, 'linked'))
   await assert.rejects(cli('secure-key.mjs', ['init', join(root, 'linked', 'key.json')]))
-  const config = loadConfig(env), vault = new ContextVault(vaultPath)
+  const config = { ...loadConfig(env), ...historyFixtureConfig() }, vault = new ContextVault(vaultPath)
   controller = new RemoteController(config, new CodexAppServer(process.execPath, [resolve('server/fixtures/plan-questions.mjs')]), vault)
   await controller.start()
   server = createRemoteHttpServer(config, controller, files, null, undefined, undefined, undefined, undefined, undefined, new ServicesStore(join(root, 'services.json')))

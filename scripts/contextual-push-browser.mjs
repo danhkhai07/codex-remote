@@ -1,3 +1,4 @@
+import { historyFixtureConfig, persistedFixtureThread } from '../server/fixtures/history-store.mjs'
 // Real owner gate/encrypted API/App/SW; native RPCs and credentials are fake.
 // No subscription registration or OS notification is sent by this fixture.
 import assert from 'node:assert/strict'
@@ -19,7 +20,7 @@ const nativeCalls = [], screenshots = process.env.PUSH_SCREENSHOTS || join(root,
 try {
   await mkdir(files); await mkdir(screenshots, { recursive: true })
   await writeFile(join(root, 'owner.json'), JSON.stringify(material), { mode: 0o600 })
-  const config = { host: '127.0.0.1', port: 0, publicOrigin: new URL('http://127.0.0.1'), password: 'FAKE contextual push password', sessionSecret: 'fake-push-secret'.repeat(4), sessionTtlSeconds: 600, codexBin: 'UNUSED', production: true, workspaceRoots: [files], fileRoots: [files], secureApiRequired: true, secureKeyFile: join(root, 'owner.json'), sessionStateFile: join(root, 'sessions.json') }
+  const config = { ...historyFixtureConfig(), host: '127.0.0.1', port: 0, publicOrigin: new URL('http://127.0.0.1'), password: 'FAKE contextual push password', sessionSecret: 'fake-push-secret'.repeat(4), sessionTtlSeconds: 600, codexBin: 'UNUSED', production: true, workspaceRoots: [files], fileRoots: [files], secureApiRequired: true, secureKeyFile: join(root, 'owner.json'), sessionStateFile: join(root, 'sessions.json') }
   const makeThread = (id, name, active = false) => ({ id, name, cwd: files, createdAt: 1, updatedAt: 2, modelProvider: 'fixture', status: { type: active ? 'active' : 'idle' }, turns: [{ id: id + '-turn', status: active ? 'inProgress' : 'completed', items: [{ id: 'answer', type: 'agentMessage', text: `Fixture answer for ${name}`, phase: 'final_answer' }] }] })
   const threads = [makeThread('thread-a', 'Convo A', true), makeThread('thread-b', 'Convo B')]
   const app = new CodexAppServer('UNUSED')
@@ -29,8 +30,10 @@ try {
     if (method === 'thread/read' || method === 'thread/resume') {
       const thread = threads.find(t => t.id === params.threadId)
       if (!thread) throw new Error('Fixture thread does not exist')
-      return { thread }
+      const persisted = persistedFixtureThread(thread)
+      return { thread: params.includeTurns === false || params.excludeTurns ? { ...persisted, turns: [] } : persisted }
     }
+    if (method === 'thread/turns/list') { const latest = threads.find(t => t.id === params.threadId)?.turns.at(-1); return { data: latest ? [{ id: latest.id, status: latest.status, items: [] }] : [], nextCursor: null } }
     if (method === 'model/list') return { data: [] }
     if (method === 'account/rateLimits/read') return { rateLimits: {} }
     throw new Error('Unexpected native method: ' + method)

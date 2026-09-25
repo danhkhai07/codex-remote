@@ -1,5 +1,5 @@
 import { HistoryDetail } from './HistoryDetail'
-import { prependHistory } from './historyWindow'
+import { prependHistory, refreshHistoryWindow } from './historyWindow'
 import { secureRequired, secureIntent } from './secureApi'
 import { SecureEvents } from './secureEvents'
 import { QuestionRequest } from './QuestionRequest'
@@ -436,7 +436,7 @@ export const Conversation = memo(function Conversation({ thread, activeTurnId, i
         <Fragment key={item.id ? `${item.turnId}-${item.id}` : `${item.turnId}-${index}`}>
           {showPending && pendingMessage?.turnId === item.turnId && (index === 0 || rows[index - 1].turnId !== item.turnId) &&
             <HistoryItem item={pendingItem!} onOpenFile={onOpenFile} onOpenLink={onOpenLink} />}
-          <div data-history-anchor={`${item.turnId}:${item.id}`}><HistoryItem item={index === pendingMatch ? pendingItem! : item} onOpenFile={onOpenFile} onOpenLink={onOpenLink} />{typeof item.historyDetail === 'string' && <HistoryDetail threadId={thread.id} cursor={item.historyDetail} />}</div>
+          <div data-history-anchor={`${item.turnId}:${item.id}`}><HistoryItem item={index === pendingMatch ? pendingItem! : item} onOpenFile={onOpenFile} onOpenLink={onOpenLink} />{typeof item.historyDetail === 'string' && <HistoryDetail key={item.historyDetail} threadId={thread.id} cursor={item.historyDetail} />}</div>
         </Fragment>
       ))}
       {showPending && !rows.some(item => item.turnId === pendingMessage?.turnId) &&
@@ -878,7 +878,7 @@ export function App() {
     if (!preserveVisibleCache) setDrawerOpen(false)
     setError('')
     if (!preserveVisibleCache) setCommandNotice(null)
-    setThread(cached ? { ...target, ...cached, name: target.name ?? cached.name } : { ...target, turns: [], historyUnavailable: true })
+    setThread(preserveVisibleCache && previous.ready && previous.thread?.id === target.id ? previous.thread : cached ? { ...target, ...cached, name: target.name ?? cached.name } : { ...target, turns: [], historyUnavailable: true })
     setHistoryReady(Boolean(cached))
     if (!cached) {
       const disk = await api.cachedHistory(target.id)
@@ -890,12 +890,12 @@ export function App() {
     // Resuming subscribes the runtime, but must never block painting history.
     void api.resumeThread(target.id, csrf).catch(() => undefined)
     try {
-      const history = await api.thread(target.id, AbortSignal.any([request.signal, AbortSignal.timeout(10_000)]))
+      const history = await api.thread(target.id, AbortSignal.any([request.signal, AbortSignal.timeout(90_000)]))
       if (request.signal.aborted || sequence !== openSequence.current || selectedRef.current !== target.id || epoch !== sessionEpoch.current) return
       threadCache.current.remember(history.thread)
       setThread((current) => history.thread.historyUnavailable && cached && current?.id === target.id
         ? { ...current, ...history.thread, turns: current.turns }
-        : preserveVisibleCache && current?.historyWindow?.browsingOlder ? current : history.thread)
+        : preserveVisibleCache && current ? refreshHistoryWindow(current, history.thread, readingPositions.current.get(`${target.id}-conversation`)?.following === false) : history.thread)
       setHistoryReady(true)
       setTranscripts(current => {
         const before = current[target.id] ?? EMPTY_ITEMS
@@ -1058,8 +1058,8 @@ export function App() {
         const response = await api.thread(id, AbortSignal.timeout(8_000))
         if (cancelled || sequence !== openSequence.current || selectedRef.current !== id || version !== turnVersions.current.get(id)) return
         threadCache.current.remember(response.thread)
-        setThread(current => current?.id !== id || current.historyWindow?.browsingOlder ? current : response.thread.historyUnavailable
-          ? { ...current, ...response.thread, turns: current.turns } : response.thread)
+        setThread(current => current?.id !== id ? current : response.thread.historyUnavailable
+          ? { ...current, ...response.thread, turns: current.turns } : refreshHistoryWindow(current, response.thread, readingPositions.current.get(`${id}-conversation`)?.following === false))
         setHistoryReady(true)
         setTranscripts(current => {
           const before = current[id] ?? EMPTY_ITEMS
@@ -1192,9 +1192,9 @@ export function App() {
           setTimeout(() => {
             const id = eventThread
             if (id && selectedRef.current === id) api.thread(id).then((response) => setThread((current) => (
-              selectedRef.current !== id || current?.id !== id || current.historyWindow?.browsingOlder ? current : response.thread.historyUnavailable
+              selectedRef.current !== id || current?.id !== id ? current : response.thread.historyUnavailable
                 ? { ...current, ...response.thread, turns: current.turns }
-                : response.thread
+                : refreshHistoryWindow(current, response.thread, readingPositions.current.get(`${id}-conversation`)?.following === false)
             ))).catch(() => undefined)
           }, 150)
         }
@@ -1917,6 +1917,7 @@ export function App() {
           {thread && !historyReady && <div className="loading-inline" role="status">
             {historyLoading ? <><span className="spinner" />Loading conversation…</> : <><span>{online ? 'Conversation could not be loaded.' : 'This conversation is not cached on this device yet.'}</span><button type="button" className="quiet-button" disabled={!online} onClick={() => void openThread(thread).catch(reason => setError(errorMessage(reason)))}>Retry</button></>}
           </div>}
+          {thread?.historyWindow?.invalidated && <p className="history-note">Lịch sử gốc đã thay đổi. <button type="button" className="quiet-button" onClick={loadLatest}>Tải lại tin mới nhất</button></p>}
           {thread?.historyWindow?.older && <button data-load-older type="button" className="quiet-button" disabled={olderLoading} onClick={() => void loadOlder()}>{olderLoading ? 'Đang tải tin cũ…' : 'Tải tin nhắn cũ hơn'}</button>}
           {thread?.historyCacheTruncated && <p className="history-note">{thread.historyTruncation === 'head' ? 'Hội thoại vượt giới hạn 5 MB: phần cũ nhất đã được rút gọn trong bản xem/cache. Lịch sử gốc vẫn giữ nguyên.' : thread.historyTruncation === 'tail' ? 'Hội thoại vượt giới hạn 5 MB: phần cuối đã được rút gọn trong bản xem/cache. Lịch sử gốc vẫn giữ nguyên.' : 'Showing recent cached messages. Full history refreshes when connected.'}</p>}
           {thread && historyReady && <Conversation thread={thread} activeTurnId={activeTurnId} items={transcripts[thread.id] ?? EMPTY_ITEMS} pendingMessage={sentMessages[thread.id]} yoloMode={yoloMode} onOpenFile={openFile} onOpenLink={openLink} onSuggestion={suggestPrompt} />}

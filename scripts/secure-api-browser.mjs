@@ -1,3 +1,4 @@
+import { historyFixtureConfig } from '../server/fixtures/history-store.mjs'
 // Local fixture only: fake native RPC/credentials, no model turn or live config.
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, cp, writeFile, readFile, rm } from 'node:fs/promises'
@@ -28,7 +29,7 @@ try {
   const entry = join(root, 'harness.ts')
   await writeFile(entry, `export * from ${JSON.stringify(resolve('src/secureApi.ts'))}; export { CipherCache } from ${JSON.stringify(resolve('src/secureCache.ts'))}; export { importOwner } from ${JSON.stringify(resolve('server/secure-wire.ts'))}; export { SecureEvents } from ${JSON.stringify(resolve('src/secureEvents.ts'))};`)
   await build({ configFile: false, logLevel: 'error', build: { outDir: dist, emptyOutDir: false, minify: true, lib: { entry, formats: ['es'], fileName: () => 'secure-fixture-harness.js' } } })
-  const config = { host: '127.0.0.1', port: 0, publicOrigin: new URL('http://127.0.0.1'), password: 'FAKE browser login password', sessionSecret: 'fake-browser-secret'.repeat(3), sessionTtlSeconds: 600, codexBin: 'unused', production: true, workspaceRoots: ['/tmp'], fileRoots: [files], secureApiRequired: true, secureKeyFile: join(root, 'owner.json'), sessionStateFile: join(root, 'sessions.json') }
+  const config = { ...historyFixtureConfig(), host: '127.0.0.1', port: 0, publicOrigin: new URL('http://127.0.0.1'), password: 'FAKE browser login password', sessionSecret: 'fake-browser-secret'.repeat(3), sessionTtlSeconds: 600, codexBin: 'unused', production: true, workspaceRoots: ['/tmp'], fileRoots: [files], secureApiRequired: true, secureKeyFile: join(root, 'owner.json'), sessionStateFile: join(root, 'sessions.json') }
   const app = new CodexAppServer(process.execPath, [resolve('server/fixtures/plan-questions.mjs')])
   const vault = new ContextVault(join(root, 'vault')); attachments = new AttachmentStore(join(root, 'uploads'))
   controller = new RemoteController(config, app, vault)

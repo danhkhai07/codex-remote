@@ -1,3 +1,4 @@
+import { historyFixtureConfig } from '../server/fixtures/history-store.mjs'
 // Isolated native protocol + mocked team routes. No real vault or model turns.
 // Run after npm run build; PLAYWRIGHT_MODULE may point to an external install.
 import assert from 'node:assert/strict'
@@ -10,7 +11,7 @@ import { MAX_CONCURRENT_WORKERS } from '../dist-server/orchestration.js'
 import { createRemoteHttpServer } from '../dist-server/http-app.js'
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
 const app = new CodexAppServer(process.execPath, [resolve('server/fixtures/plan-questions.mjs')])
-const config = { host: '127.0.0.1', port: 0, publicOrigin: new URL('http://127.0.0.1'), password: 'fixture password',
+const config = { ...historyFixtureConfig(), host: '127.0.0.1', port: 0, publicOrigin: new URL('http://127.0.0.1'), password: 'fixture password',
   sessionSecret: 't'.repeat(48), sessionTtlSeconds: 600, codexBin: 'unused', workspaceRoots: ['/tmp'], production: true }
 const controller = new RemoteController(config, app)
 const server = createRemoteHttpServer(config, controller, resolve('dist'), null)
@@ -55,8 +56,8 @@ try {
       json.data.unshift({ ...json.data[0], id: 'worker', name: 'Fixture worker', updatedAt: json.data[0].updatedAt + 1000 })
       await route.fulfill({ json })
     })
-    await page.route('**/api/threads/worker', async route => {
-      const json = await (await context.request.get(`${config.publicOrigin}api/threads/plan-fixture`)).json()
+    await page.route('**/api/threads/worker/history', async route => {
+      const json = await (await context.request.get(`${config.publicOrigin}api/threads/plan-fixture/history`)).json()
       json.thread.id = 'worker'; json.thread.name = 'Fixture worker'
       await route.fulfill({ json })
     })

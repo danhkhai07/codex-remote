@@ -1,10 +1,11 @@
+import { persistedFixtureThread } from './history-store.mjs'
 // Deterministic native protocol fixture. Never starts a model or reads real threads.
 import { createInterface } from 'node:readline'
 
 const send = message => process.stdout.write(`${JSON.stringify(message)}\n`)
 const replies = []
 let active = false
-const thread = () => ({
+const thread = () => persistedFixtureThread({
   id: 'plan-fixture', name: 'Plan question fixture', cwd: '/tmp', createdAt: 1, updatedAt: 1,
   status: { type: active ? 'active' : 'idle' },
   turns: [{ id: 'history', status: 'completed', items: Array.from({ length: 45 }, (_, i) => ({
@@ -23,9 +24,13 @@ createInterface({ input: process.stdin }).on('line', line => {
   switch (message.method) {
     case 'initialized': return
     case 'initialize': return result({ userAgent: 'plan-fixture' })
-    case 'thread/list': return result({ data: [thread()] })
-    case 'thread/read':
-    case 'thread/resume': return result({ thread: thread() })
+    case 'thread/list': return result({ data: [{ ...thread(), turns: [] }] })
+    case 'thread/read': { const value = thread(); return result({ thread: message.params?.includeTurns === false ? { ...value, turns: [] } : value }) }
+    case 'thread/resume': { const value = thread(); return result({ thread: message.params?.excludeTurns ? { ...value, turns: [] } : value }) }
+    case 'thread/turns/list': {
+      const latest = thread().turns.at(-1)
+      return result({ data: latest ? [{ id: latest.id, status: latest.status, items: [] }] : [], nextCursor: null })
+    }
     case 'model/list': return result({ data: [{ id: 'fixture', model: 'fixture', isDefault: true, defaultReasoningEffort: 'high', supportedReasoningEfforts: [] }] })
     case 'fixture/replies': return result(replies)
     case 'fixture/question':

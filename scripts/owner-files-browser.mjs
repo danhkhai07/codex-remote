@@ -1,3 +1,4 @@
+import { historyFixtureConfig } from '../server/fixtures/history-store.mjs'
 // Real local HTTP/encrypted API + fake native process and fake files only.
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, cp, writeFile, readFile, symlink, rm } from 'node:fs/promises'
@@ -21,11 +22,11 @@ try {
   await writeFile(note, `[Hidden file](${secret})`); await symlink(secret, join(home, 'alias.txt'))
   await writeFile(html, '<button onclick="document.body.dataset.clicked=1">HTML canary</button><script>try{parent.document.body.dataset.escaped=1}catch{}</script>')
   const keyFile = join(privateDir, 'owner-key.json'); await writeFile(keyFile, JSON.stringify(material), { mode: 0o600 })
-  const config = { host: '127.0.0.1', port: 0, publicOrigin: new URL('http://127.0.0.1'), password: 'FAKE owner browser password', sessionSecret: 'fixture-secret'.repeat(4), sessionTtlSeconds: 600, codexBin: 'unused', production: true, workspaceRoots: [files], fileRoots: ['/'], fileAccess: 'owner-full', secureApiRequired: true, secureKeyFile: keyFile, sessionStateFile: join(root, 'sessions.json') }
+  const config = { ...historyFixtureConfig(), host: '127.0.0.1', port: 0, publicOrigin: new URL('http://127.0.0.1'), password: 'FAKE owner browser password', sessionSecret: 'fixture-secret'.repeat(4), sessionTtlSeconds: 600, codexBin: 'unused', production: true, workspaceRoots: [files], fileRoots: ['/'], fileAccess: 'owner-full', secureApiRequired: true, secureKeyFile: keyFile, sessionStateFile: join(root, 'sessions.json') }
   // Replace only the disposable native fixture's history with a file-link receipt.
   const fixture = join(root, 'native.mjs')
   const source = await readFile(resolve('server/fixtures/plan-questions.mjs'), 'utf8')
-  const nativeSource = source.replace("cwd: '/tmp'", `cwd: ${JSON.stringify(files)}`).replace("`History ${i}\\n\\n${'Long conversation context. '.repeat(30)}`", JSON.stringify(`[Conversation file](${secret})`))
+  const nativeSource = source.replace("'./history-store.mjs'", JSON.stringify(resolve('server/fixtures/history-store.mjs'))).replace("cwd: '/tmp'", `cwd: ${JSON.stringify(files)}`).replace("`History ${i}\\n\\n${'Long conversation context. '.repeat(30)}`", JSON.stringify(`[Conversation file](${secret})`))
   assert(nativeSource.includes('[Conversation file]'), 'Native file-link fixture replacement must apply')
   await writeFile(fixture, nativeSource)
   const native = new CodexAppServer(process.execPath, [fixture])

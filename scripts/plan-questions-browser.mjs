@@ -1,3 +1,4 @@
+import { historyFixtureConfig } from '../server/fixtures/history-store.mjs'
 // Run after npm run build. Install Playwright externally, or set PLAYWRIGHT_MODULE
 // to its index.mjs. Uses only a fake stdio app-server and an ephemeral HTTP port.
 import assert from 'node:assert/strict'
@@ -9,7 +10,7 @@ import { createRemoteHttpServer } from '../dist-server/http-app.js'
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
 const app = new CodexAppServer(process.execPath, [resolve('server/fixtures/plan-questions.mjs')])
-const config = { host: '127.0.0.1', port: 0, publicOrigin: new URL('http://127.0.0.1'),
+const config = { ...historyFixtureConfig(), host: '127.0.0.1', port: 0, publicOrigin: new URL('http://127.0.0.1'),
   password: 'isolated fixture password', sessionSecret: 'f'.repeat(48), sessionTtlSeconds: 600,
   codexBin: 'unused', workspaceRoots: ['/tmp'], production: true }
 const controller = new RemoteController(config, app)

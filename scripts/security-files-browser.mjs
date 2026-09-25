@@ -1,3 +1,4 @@
+import { historyFixtureConfig } from '../server/fixtures/history-store.mjs'
 // Fake native protocol and canary files only; no user thread or model turn.
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
@@ -11,7 +12,7 @@ const root = await mkdtemp('/tmp/security-files-browser-')
 await writeFile(join(root, 'readme.md'), 'ALLOWED PROJECT CANARY')
 await writeFile(join(root, '.env'), 'DENIED SECRET CANARY')
 const app = new CodexAppServer(process.execPath, [resolve('server/fixtures/plan-questions.mjs')])
-const config = { host: '127.0.0.1', port: 0, publicOrigin: new URL('http://127.0.0.1'), password: 'fake fixture password', sessionSecret: 'x'.repeat(48), sessionTtlSeconds: 600, codexBin: 'unused', workspaceRoots: ['/tmp'], fileRoots: [root], production: true }
+const config = { ...historyFixtureConfig(), host: '127.0.0.1', port: 0, publicOrigin: new URL('http://127.0.0.1'), password: 'fake fixture password', sessionSecret: 'x'.repeat(48), sessionTtlSeconds: 600, codexBin: 'unused', workspaceRoots: ['/tmp'], fileRoots: [root], production: true }
 const controller = new RemoteController(config, app), server = createRemoteHttpServer(config, controller, resolve('dist'), null)
 const browser = await chromium.launch({ headless: true })
 try {

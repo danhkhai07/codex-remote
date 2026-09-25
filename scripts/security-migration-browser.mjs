@@ -1,3 +1,4 @@
+import { historyFixtureConfig } from '../server/fixtures/history-store.mjs'
 // Real browser storage/old SW + tab across cutover. Fake credentials, no model turns.
 import assert from 'node:assert/strict'
 import { createServer, request } from 'node:http'
@@ -18,7 +19,7 @@ const oldPath = '/preview/5180/'
 const oldHtml = '<!doctype html><title>Legacy canary</title><body>LEGACY_CANARY<script>window.legacyCanary=true</script></body>'
 try {
   const helper = ts.transpileModule(await readFile('src/legacyPreviewWorkers.ts', 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } }).outputText
-  const config = { host: '127.0.0.1', port: 0, publicOrigin: new URL('http://localhost'), password: 'migration fake password', sessionSecret: 'migration-fake-secret'.repeat(3), sessionTtlSeconds: 600, workspaceRoots: [root], fileRoots: [root], production: true, codexBin: 'unused', sessionStateFile: join(root, '.state', 'sessions.json') }
+  const config = { ...historyFixtureConfig(), host: '127.0.0.1', port: 0, publicOrigin: new URL('http://localhost'), password: 'migration fake password', sessionSecret: 'migration-fake-secret'.repeat(3), sessionTtlSeconds: 600, workspaceRoots: [root], fileRoots: [root], production: true, codexBin: 'unused', sessionStateFile: join(root, '.state', 'sessions.json') }
   controller = new RemoteController(config, new CodexAppServer(process.execPath, [resolve('server/fixtures/plan-questions.mjs')]))
   await controller.start()
   gateway = createRemoteHttpServer(config, controller, resolve('dist'), null)

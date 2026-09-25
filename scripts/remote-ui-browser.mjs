@@ -1,3 +1,4 @@
+import { historyFixtureConfig } from '../server/fixtures/history-store.mjs'
 // Isolated fake-native fixture: actual client, SecureGate, crypto and SessionRegistry.
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises'
@@ -20,7 +21,7 @@ const results = []
 try {
   await mkdir(join(root, 'files')); await mkdir(output, { recursive: true })
   await writeFile(join(root, 'owner.json'), JSON.stringify(material), { mode: 0o600 })
-  const config = { host: '127.0.0.1', port: 0, publicOrigin: new URL('http://127.0.0.1'), password: 'FAKE browser password', sessionSecret: 'fake-ui-secret'.repeat(5), sessionTtlSeconds: 600, production: true, workspaceRoots: ['/tmp'], fileRoots: [join(root, 'files')], secureApiRequired: true, secureKeyFile: join(root, 'owner.json'), sessionStateFile: join(root, 'sessions.json') }
+  const config = { ...historyFixtureConfig(), host: '127.0.0.1', port: 0, publicOrigin: new URL('http://127.0.0.1'), password: 'FAKE browser password', sessionSecret: 'fake-ui-secret'.repeat(5), sessionTtlSeconds: 600, production: true, workspaceRoots: ['/tmp'], fileRoots: [join(root, 'files')], secureApiRequired: true, secureKeyFile: join(root, 'owner.json'), sessionStateFile: join(root, 'sessions.json') }
   const app = new CodexAppServer(process.execPath, [resolve('server/fixtures/plan-questions.mjs')])
   controller = new RemoteController(config, app, new ContextVault(join(root, 'vault')))
   const realServer = createRemoteHttpServer(config, controller, resolve(process.env.CLIENT_DIST || 'dist'), null)

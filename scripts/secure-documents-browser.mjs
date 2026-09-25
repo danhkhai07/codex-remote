@@ -1,3 +1,4 @@
+import { historyFixtureConfig } from '../server/fixtures/history-store.mjs'
 // Real generated documents, SessionRegistry, tunnel, file handlers and HoursStore.
 // Only the fixed Hours path is redirected at build time into a temporary fixture.
 // Never read live Hours, call a real model, or write a production credential.
@@ -33,7 +34,7 @@ try {
   const html = (await readFile('working-hours/dashboard.template.html', 'utf8')).replace('__WORK_DATA__', JSON.stringify(data))
   await writeFile(fakeDashboard, html)
   await build({ logLevel: 'error', plugins: [{ name: 'fixture-hours-path', enforce: 'pre', transform(code, id) { if (id.endsWith('/src/workTimerStorage.ts')) { assert(code.includes(realDashboard)); return code.replace(realDashboard, fakeDashboard) } } }], build: { outDir: dist, emptyOutDir: true } })
-  const config = { host: '127.0.0.1', port: 0, publicOrigin: new URL('http://127.0.0.1'), password: 'FAKE documents password', sessionSecret: 'fake-documents-session'.repeat(3), sessionTtlSeconds: 600, codexBin: 'unused', production: true, workspaceRoots: ['/tmp'], fileRoots: [files], secureApiRequired: true, secureKeyFile: join(root, 'owner.json'), sessionStateFile: join(root, 'sessions.json') }
+  const config = { ...historyFixtureConfig(), host: '127.0.0.1', port: 0, publicOrigin: new URL('http://127.0.0.1'), password: 'FAKE documents password', sessionSecret: 'fake-documents-session'.repeat(3), sessionTtlSeconds: 600, codexBin: 'unused', production: true, workspaceRoots: ['/tmp'], fileRoots: [files], secureApiRequired: true, secureKeyFile: join(root, 'owner.json'), sessionStateFile: join(root, 'sessions.json') }
   controller = new RemoteController(config, new CodexAppServer(process.execPath, [resolve('server/fixtures/plan-questions.mjs')]))
   server = createRemoteHttpServer(config, controller, dist, null, undefined, undefined, undefined, store)
   await controller.start(); server.listen(0, '127.0.0.1'); await once(server, 'listening'); config.port = server.address().port; config.publicOrigin = new URL('http://127.0.0.1:' + config.port)
