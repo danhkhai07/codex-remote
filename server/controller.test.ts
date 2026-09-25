@@ -186,6 +186,28 @@ describe('RemoteController', () => {
     } finally { await rm(dir, { recursive: true, force: true }) }
   })
 
+  it('opens legacy history without unsupported native paging/full reads and retains observed active turns', async () => {
+    const { bootstrapRecords, serializeRecords } = await import('./fixtures/native-history-order.mjs')
+    const dir = await mkdtemp(join(tmpdir(), 'controller-legacy-history-'))
+    try {
+      await mkdir(join(dir, 'sessions'))
+      const path = join(dir, 'sessions', 'legacy.jsonl')
+      await writeFile(path, serializeRecords(bootstrapRecords('legacy', '/workspace')))
+      const metadata = { id: 'legacy', cwd: '/workspace', path, historyMode: 'legacy', status: { type: 'idle' } }
+      const app = new StubAppServer(), rpc = vi.spyOn(app, 'request').mockImplementation(async (method, params) => {
+        expect(method).toBe('thread/read'); expect(params).toEqual({ threadId: 'legacy', includeTurns: false })
+        return { thread: metadata }
+      })
+      const controller = new RemoteController({ ...config, historyNativeHome: dir, historyIndexPath: join(dir, 'index') }, app)
+      const page = await controller.readHistoryPage('legacy')
+      expect(page.thread.turns[0].items.map(item => item.id)).toEqual(['item-1', 'item-2'])
+      expect(rpc).toHaveBeenCalledTimes(1)
+      metadata.status.type = 'active'
+      app.emit('notification', { method: 'turn/started', params: { threadId: 'legacy', turn: { id: 'live', status: 'inProgress' } } })
+      expect((await controller.readHistoryPage('legacy')).thread.latestTurn).toEqual({ id: 'live', status: 'inProgress' })
+    } finally { await rm(dir, { recursive: true, force: true }) }
+  })
+
   it('caps thread/read responses at 5 MB without changing the original history', async () => {
     const appServer = new StubAppServer()
     const source = { thread: { id: 'large', cwd: '/workspace', turns: [{ id: 'done', status: 'completed', items: [{ id: 'answer', type: 'agentMessage', text: 'x'.repeat(6_000_000) }] }] } }

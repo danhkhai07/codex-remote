@@ -2,7 +2,7 @@ import { expect, it } from 'vitest'
 import { HistoryJson } from './history-json.js'
 const project = (text: string) => { const parser = new HistoryJson(); for (const byte of Buffer.from(text)) parser.feed(byte); return parser.finish() }
 it('preserves valid small native structure, Unicode, escapes, null, numbers and prototypes safely', () => {
-  const text = JSON.stringify({ type: 'event_msg', payload: { item: { id: 'a', type: 'AgentMessage', text: 'Việt 😀 ☃ \"' }, turn_id: 't' }, ['__proto__']: { polluted: true }, x: [null, true, false, -125] })
+  const text = JSON.stringify({ type: 'event_msg', payload: { item: { id: 'a', type: 'AgentMessage', text: 'Việt 😀 ☃ "' }, turn_id: 't' }, ['__proto__']: { polluted: true }, x: [null, true, false, -125] })
   expect(project(text).value).toEqual(JSON.parse(text))
   expect({}).not.toHaveProperty('polluted')
 })

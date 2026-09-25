@@ -352,12 +352,20 @@ export class RemoteController {
     const metadata = threadFromResult(await this.#readThreadMetadata(threadId, true, live)); live()
     // One bounded native turn-metadata request keeps active/status authoritative
     // even when the last persisted line has not been flushed yet. Never items.
-    const latest = asObject(await this.appServer.request('thread/turns/list', { threadId, limit: 1, sortDirection: 'desc', itemsView: 'notLoaded' }, undefined, live)); live()
-    const candidate = asObject(Array.isArray(latest.data) ? latest.data[0] : undefined)
-    if (typeof candidate.id !== 'string' || typeof candidate.status !== 'string') {
-      if (!Array.isArray(latest.data) || latest.data.length) throw Error('Native turn metadata is unavailable; retry shortly')
+    let candidate: Record<string, unknown> = {}
+    // Installed native explicitly rejects the paging endpoints for legacy
+    // storage. Its display reducer and already-observed live state remain usable
+    // without silently falling back to an unbounded full-history RPC.
+    if (metadata.historyMode !== 'legacy') {
+      const latest = asObject(await this.appServer.request('thread/turns/list', { threadId, limit: 1, sortDirection: 'desc', itemsView: 'notLoaded' }, undefined, live)); live()
+      candidate = asObject(Array.isArray(latest.data) ? latest.data[0] : undefined)
+      if (typeof candidate.id !== 'string' || typeof candidate.status !== 'string') {
+        if (!Array.isArray(latest.data) || latest.data.length) throw Error('Native turn metadata is unavailable; retry shortly')
+      }
     }
     const page = await this.historySource().page({ id: threadId, cwd: String(metadata.cwd), path: typeof metadata.path === 'string' ? metadata.path : undefined }, live, token); live()
+    const observedTurn = this.#activeTurns.get(threadId)
+    if (metadata.historyMode === 'legacy' && observedTurn) candidate = { id: observedTurn, status: 'inProgress' }
     const latestTurn = typeof candidate.id === 'string' && typeof candidate.status === 'string' ? { id: candidate.id, status: candidate.status } : page.latestTurn
     return { thread: { ...metadata, turns: page.turns.map(turn => turn.id === latestTurn?.id ? { ...turn, status: latestTurn.status } : turn), latestTurn, historyWindow: { revision: page.revision, generation: page.generation, older: page.older, messages: page.messages } } }
   }

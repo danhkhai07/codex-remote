@@ -28,11 +28,13 @@ export class HistoryJson {
     const parent = this.stack.at(-1)
     return !parent || (parent.keep && ((++this.nodes <= 2048 && parent.count < 64) || this.critical(parent)))
   }
-  private accept(value: unknown) {
+  private accept(value: unknown, retained?: boolean) {
     const parent = this.stack.at(-1)
     if (!parent) { if (this.done) throw Error('Multiple history JSON values'); this.root = value; this.done = true; return }
     if (!['value', 'first'].includes(parent.state)) throw Error('Invalid history JSON value')
-    if (this.keepValue()) {
+    // Containers reserve their place when opened. Rechecking after their
+    // children exhaust the budget would discard the entire retained prefix.
+    if (retained ?? this.keepValue()) {
       if (parent.array) (parent.value as unknown[]).push(value)
       else Object.defineProperty(parent.value, parent.key, { value, writable: true, enumerable: true, configurable: true })
     } else this.truncated = true
@@ -74,6 +76,8 @@ export class HistoryJson {
    * every byte for JSON control/escape/delimiter syntax; only a 64 KiB caller
    * buffer is converted, never a complete source record. */
   feedBuffer(bytes: Buffer): void {
+    // JSON explicitly forbids unescaped control bytes, including clipped tails.
+    // eslint-disable-next-line no-control-regex
     const text = bytes.toString('latin1'), special = /[\x00-\x1f"\\]/g
     for (let index = 0; index < text.length; index++) {
       if (this.mode === 'string' && !this.key && !this.escape && !this.unicode && this.token.length >= this.tokenLimit) {
@@ -118,7 +122,7 @@ export class HistoryJson {
     if (!parent) { if (this.done) throw Error('Trailing history JSON'); this.start(byte); return }
     if (byte === 93 || byte === 125) {
       if ((byte === 93) !== parent.array || !['first', 'comma'].includes(parent.state)) throw Error('Invalid history JSON end')
-      this.stack.pop(); this.accept(parent.value); return
+      this.stack.pop(); this.accept(parent.value, parent.keep); return
     }
     if (parent.state === 'comma') {
       if (byte !== 44) throw Error('Missing history JSON comma')

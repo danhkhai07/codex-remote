@@ -1,5 +1,5 @@
 // Run ONLY through codex-heavy after worktree build. Own HOME/CODEX_HOME and
-// synthetic sessions; no production thread reads, native resume/start or keys.
+// synthetic sessions; no production thread reads, turn/start or owner keys.
 // Paginated scenarios MUST use native paging APIs, never includeTurns:true.
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, appendFile, readFile, rm } from 'node:fs/promises'
@@ -9,6 +9,7 @@ import { randomUUID, createHash } from 'node:crypto'
 import { CodexAppServer } from '../dist-server/codex-app-server.js'
 import { HistoryPages } from '../dist-server/history-pages.js'
 import { RolloutHistory } from '../dist-server/rollout-history.js'
+import { RemoteController } from '../dist-server/controller.js'
 import { bootstrapRecords, paginatedBootstrapRecords, materialized, materializedUser, materializedAnswer, serializeRecords, withOrdinals, nativeEvent, nativeUser, nativeAnswer, nativeStart, nativeComplete, rawUser, record } from '../server/fixtures/native-history-order.mjs'
 const binary = '/root/.codex/packages/standalone/releases/0.155.0-x86_64-unknown-linux-musl/bin/codex'
 const root = await mkdtemp(join(tmpdir(), 'history-native-parity-')), home = join(root, 'native')
@@ -17,7 +18,13 @@ let parseWarning = false
 const calls = []
 const launch = () => {
   const child = new CodexAppServer('/usr/bin/env', ['-i', 'PATH=/usr/local/bin:/usr/bin:/bin', `HOME=${root}`, `CODEX_HOME=${home}`, binary])
-  child.on('log', line => { if (/parse.*rollout|invalid.*rollout|deserializ|missing field|skipping.*rollout|projection.*expected ordinal/i.test(line)) parseWarning = true })
+  const request = child.request.bind(child)
+  child.request = (method, params, ...args) => { calls.push({ method, includeTurns: params?.includeTurns }); return request(method, params, ...args) }
+  child.on('log', line => {
+    // Owned fake HOME/config/rollouts only; never production log content.
+    if (/parse.*rollout|invalid.*rollout|deserializ|missing field|skipping.*rollout|projection.*expected ordinal/i.test(line)) parseWarning = true
+    if (process.env.HISTORY_PARITY_DIAGNOSTIC) console.error('[owned-native]', line)
+  })
   return child
 }
 const stop = async child => {
@@ -28,7 +35,7 @@ const stop = async child => {
     child.on('state', listener); child.stop()
   })
 }
-const rpc = (method, params) => { calls.push({ method, includeTurns: params.includeTurns }); return native.request(method, params) }
+const rpc = (method, params) => native.request(method, params)
 const digest = bytes => createHash('sha256').update(bytes).digest('hex')
 const message = (turnId, item) => ({ turnId, id: item.id, type: item.type,
   text: item.type === 'agentMessage' ? item.text : item.content.filter(part => part.type === 'text').map(part => part.text).join('\n'),
@@ -50,9 +57,14 @@ const allNativePages = async (method, threadId, extra = {}) => {
   throw Error('Owned parity fixture unexpectedly exceeds bounded page count')
 }
 const paginatedNative = async id => {
-  // Seed discoverable fixture metadata through supported read APIs, never SQL.
+  // Seed discoverable fixture metadata through supported APIs, never SQL.
+  // Native paging reads its own materialized DB; merely placing JSONL on disk
+  // leaves that DB empty. Resume/unsubscribe ONLY this owned offline fixture
+  // makes the native writer flush/project it without starting a model turn.
   await rpc('thread/list', { limit: 100, useStateDbOnly: false })
   await rpc('thread/read', { threadId: id, includeTurns: false })
+  await rpc('thread/resume', { threadId: id, excludeTurns: true, modelProvider: 'fixture', model: 'gpt-6-astra', approvalPolicy: 'never', sandbox: 'read-only' })
+  await rpc('thread/unsubscribe', { threadId: id })
   const turns = await allNativePages('thread/turns/list', id, { itemsView: 'notLoaded' })
   const entries = await allNativePages('thread/items/list', id)
   return { turns, entries }
@@ -98,11 +110,14 @@ try {
     } else await writeFile(path, serializeRecords(rows), { mode: 0o600 })
     const callStart = calls.length
     native = launch()
-    const before = digest(await readFile(path))
+    const before = await readFile(path)
     const expected = scenario === 'legacy-control'
       ? await rpc('thread/read', { threadId: id, includeTurns: true }).then(result => ({ turns: result.thread.turns, entries: fromTurns(result.thread.turns) }))
       : await paginatedNative(id)
+    const prepared = await readFile(path)
+    assert.equal(digest(prepared.subarray(0, before.length)), digest(before), 'Native preparation changed the owned fixture prefix')
     const actual = await allIndexPages(new HistoryPages('FAKE'.repeat(16), new RolloutHistory(home, indexDirectory)), metadata)
+    assert.equal(parseWarning, false, 'Native rejected fixture records; fix schema instead of accepting partial parity')
     assert.deepEqual(display(actual.entries), display(expected.entries), `${scenario}: native canonical IDs/turn/content differ`)
     assert.equal(actual.first.messages, Math.min(20, display(expected.entries).length))
     assert.equal(actual.first.latestTurn?.id, expected.turns.at(-1)?.id)
@@ -111,12 +126,19 @@ try {
       const original = expected.turns.find(t => t.id === turn.id)
       if (original) assert.equal(turn.status, original.status, `${scenario}: turn status differs`)
     }
-    assert.equal(digest(await readFile(path)), before, 'Native read mutated synthetic canonical source')
+    assert.equal(digest(await readFile(path)), digest(prepared), 'Index read mutated synthetic canonical source')
+    // Also exercise the actual app controller against the installed binary,
+    // including legacy's unsupported native paging boundary.
+    const controller = new RemoteController({ workspaceRoots: [root], historyNativeHome: home, historyIndexPath: indexDirectory,
+      sessionSecret: 'FAKE'.repeat(16), production: true }, native)
+    const controlled = await controller.readHistoryPage(id)
+    assert.deepEqual(display(fromTurns(controlled.thread.turns)), display(fromTurns(actual.first.turns)))
     assert.equal(parseWarning, false, 'Native rejected fixture records; fix schema instead of accepting partial parity')
     if (scenario !== 'legacy-control') assert(!calls.slice(callStart).some(call => call.includeTurns === true))
     comparisons++; await stop(native); native = undefined
     if (scenario === 'paginated-bootstrap') {
-      await appendFile(path, serializeRecords(withOrdinals([rawUser('Next bootstrap context'), nativeStart('subsequent'), materializedUser(id, 'subsequent', 'sub-u', 'Subsequent input'), materializedAnswer(id, 'subsequent', 'sub-a', 'Subsequent answer'), nativeComplete('subsequent')], rows.length)))
+      const next = JSON.parse((await readFile(path, 'utf8')).trim().split('\n').at(-1)).ordinal + 1
+      await appendFile(path, serializeRecords(withOrdinals([rawUser('Next bootstrap context'), nativeStart('subsequent'), materializedUser(id, 'subsequent', 'sub-u', 'Subsequent input'), materializedAnswer(id, 'subsequent', 'sub-a', 'Subsequent answer'), nativeComplete('subsequent')], next)))
       native = launch()
       const expected = await paginatedNative(id)
       const actual = await allIndexPages(new HistoryPages('FAKE'.repeat(16), new RolloutHistory(home, indexDirectory)), metadata)
@@ -124,6 +146,6 @@ try {
       comparisons++; await stop(native); native = undefined
     }
   }
-  assert(!calls.some(call => !['thread/list', 'thread/read', 'thread/items/list', 'thread/turns/list'].includes(call.method)))
+  assert(!calls.some(call => !['thread/list', 'thread/read', 'thread/items/list', 'thread/turns/list', 'thread/resume', 'thread/unsubscribe'].includes(call.method)))
   console.log(JSON.stringify({ fixture: 'native-0.155.0-paginated-and-legacy-parity', comparisons, nativeCalls: calls.length, productionRead: false, modelTurns: 0 }))
 } finally { await stop(native); await rm(root, { recursive: true, force: true }) }
