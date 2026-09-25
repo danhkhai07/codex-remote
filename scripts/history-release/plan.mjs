@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
-export const BACKEND = ['config', 'controller', 'http-app', 'read-state', 'history-pages', 'history-json', 'history-paginated', 'rollout-history'].flatMap(n => [`dist-server/${n}.js`, `dist-server/${n}.js.map`])
+export const LIVE_SOURCE = 'be0dcbc4093ad516b10df4452f2ab86d06f1f700'
+export const LIVE_RELEASE = '/root/.local/state/codex-remote-secure/releases/history-window-h1-cf9d8fa1'
+export const BACKEND = ['history-json', 'rollout-history'].flatMap(n => [`dist-server/${n}.js`, `dist-server/${n}.js.map`])
 // Previously reviewed source/runtime divergence from the Push release. These
 // artifacts are NOT published; both sides must match these exact known bytes.
 export const PRESERVED_BUILD_DIFFERENCES = {

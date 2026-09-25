@@ -7,7 +7,7 @@ import { parseEnv } from 'node:util'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { hash, sha, same, tree, identity, atomic, publicationLock, workflow } from './core.mjs'
 import { allReadiness } from './readiness.mjs'
-import { BACKEND, publicationStages, assertDelta } from './plan.mjs'
+import { BACKEND, publicationStages, assertDelta, LIVE_SOURCE } from './plan.mjs'
 export { BACKEND } from './plan.mjs'
 
 const R = '/root/RUNNING-SERVICES/codex-remote-secure'
@@ -70,7 +70,7 @@ function prepare(release, artifacts, evidencePath) {
   assert.equal(git(worktree, 'status', '--porcelain', '--untracked-files=no'), '', 'Dirty source')
   const evidence = json(evidencePath)
   assert.equal(evidence.source, git(worktree, 'rev-parse', 'HEAD'), 'Evidence must match this candidate')
-  assert.equal(evidence.liveSource, '6f6fe30a08f3e763d74eed440824ffa84f831aa9', 'Expected previously verified LIVE release')
+  assert.equal(evidence.liveSource, LIVE_SOURCE, 'Expected previously verified LIVE release')
   assert.equal(git(worktree, 'diff', evidence.liveSource, '--', 'server/secure-client.ts', 'server/event-hub.ts'), '', 'Preserved historical source changed')
   assert.equal(evidence.checks?.status, 'passed', 'Build/check/browser evidence required before packaging')
   for (const log of evidence.checks.logs ?? []) same(hash(log.path), log.sha256, 'Check log')

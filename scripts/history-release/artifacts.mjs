@@ -4,15 +4,15 @@ import { readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { resolve, join } from 'node:path'
 import { hash, tree } from './core.mjs'
-import { BACKEND, assertDelta, PRESERVED_BUILD_DIFFERENCES } from './plan.mjs'
+import { BACKEND, assertDelta, PRESERVED_BUILD_DIFFERENCES, LIVE_SOURCE, LIVE_RELEASE } from './plan.mjs'
 const runtime = '/root/RUNNING-SERVICES/codex-remote-secure', worktree = process.cwd()
 const output = resolve(process.argv[2]), logPaths = process.argv.slice(3)
-assert(logPaths.length >= 3, 'Require full-check, native and browser logs')
+assert(logPaths.length >= 3, 'Require combined full-check/browser, runner and reused native logs')
 const git = (...args) => execFileSync('git', ['-C', worktree, ...args], { encoding: 'utf8' }).trim()
 assert.equal(git('status', '--porcelain', '--untracked-files=no'), '', 'Commit reviewed source first')
-const previous = '/root/.local/state/codex-remote-secure/releases/push-browser-answer-378b37ef'
+const previous = LIVE_RELEASE
 const receipt = JSON.parse(readFileSync(previous + '/status.json', 'utf8'))
-assert.equal(receipt.status, 'complete'); assert.equal(receipt.source, '6f6fe30a08f3e763d74eed440824ffa84f831aa9')
+assert.equal(receipt.status, 'complete'); assert.equal(receipt.source, LIVE_SOURCE)
 assert.equal(git('diff', receipt.source, '--', 'server/secure-client.ts', 'server/event-hub.ts'), '', 'Preserved historical modules changed in source')
 const previousManifest = JSON.parse(readFileSync(previous + '/manifest.json', 'utf8'))
 for (const [p, h] of Object.entries(previousManifest.payload)) assert.equal(hash(join(runtime, p)), h, 'LIVE drift ' + p)
