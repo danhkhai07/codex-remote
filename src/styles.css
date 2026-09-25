@@ -3060,3 +3060,7 @@ html.browser-scroll-locked, html.browser-scroll-locked body { overflow: hidden; 
 .trusted-device-choice { display: flex; align-items: flex-start; gap: 10px; min-height: 44px; cursor: pointer; }
 .trusted-device-choice input[type='checkbox'] { width: 20px; height: 20px; min-height: 20px; margin: 2px 0 0; padding: 0; flex-shrink: 0; accent-color: var(--accent); }
 .trusted-device-choice small { display: block; margin-top: 5px; font-weight: normal; line-height: 1.45; color: var(--muted); }
+
+.history-detail { margin-block: 0.5rem; }
+.history-detail pre { max-height: 45vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.history-detail > div { display: flex; flex-wrap: wrap; gap: 0.5rem; }

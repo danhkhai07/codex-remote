@@ -33,6 +33,7 @@ export type Thread = {
   status: unknown
   model?: string | null
   turns?: Turn[]
+  historyWindow?: { revision: string; older: string | null; messages: number; browsingOlder?: boolean }
   historyUnavailable?: boolean
   historyCacheTruncated?: boolean
   historyTruncation?: 'head' | 'tail'

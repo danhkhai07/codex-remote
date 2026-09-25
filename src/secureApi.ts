@@ -191,3 +191,19 @@ export async function secureFetch(path: string, init: RequestInit = {}): Promise
   }
   assertUnlocked(); return result.response
 }
+
+/** History-only local paint, after THIS unlock performed fresh owner/session proof.
+ * No plaintext persistence, no cache access on a locked/offline cold session. */
+export async function cachedHistoryResponse(path: string): Promise<Response | null> {
+  if (!/^\/api\/threads\/[^/?]+\/history(?:\?before=[^#]*)?$/.test(path) || !metadata?.required) return null
+  const intent = secureIntent(); intent.assert()
+  const current = cache
+  if (!current) return null
+  try {
+    const id = await current.identify(path, '{}'); intent.assert()
+    const previous = await current.get(id); intent.assert()
+    if (!previous || previous.meta.path !== path || previous.meta.representation !== '{}' || previous.meta.response.status !== 200) return null
+    const body = await current.body(id, previous); intent.assert()
+    return new Response(body as Uint8Array<ArrayBuffer>, { headers: previous.meta.response.headers })
+  } catch { intent.assert(); return null }
+}

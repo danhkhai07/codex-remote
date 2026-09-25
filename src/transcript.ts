@@ -40,6 +40,7 @@ export function updateTranscript(items: TranscriptItem[], event: RemoteEvent): T
 export function conversationItems(thread: Thread, live: TranscriptItem[]): TranscriptItem[] {
   const result: TranscriptItem[] = []
   const storedTurns = new Map((thread.turns ?? []).map(turn => [turn.id, turn.items ?? []]))
+  if (thread.historyWindow?.browsingOlder) live = []
   const liveTurns = new Map<string, TranscriptItem[]>()
   for (const item of live) {
     const group = liveTurns.get(item.turnId)
@@ -57,5 +58,5 @@ export function conversationItems(thread: Thread, live: TranscriptItem[]): Trans
     }
     result.push(...updates.filter(item => !storedIds.has(item.id)))
   }
-  return limitItems(result, MAX_CONVERSATION_BYTES).items
+  return limitItems(thread.historyWindow ? result.slice(-240) : result, MAX_CONVERSATION_BYTES).items
 }

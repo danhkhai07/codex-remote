@@ -1,3 +1,5 @@
+import { HistoryDetail } from './HistoryDetail'
+import { prependHistory } from './historyWindow'
 import { secureRequired, secureIntent } from './secureApi'
 import { SecureEvents } from './secureEvents'
 import { QuestionRequest } from './QuestionRequest'
@@ -434,7 +436,7 @@ export const Conversation = memo(function Conversation({ thread, activeTurnId, i
         <Fragment key={item.id ? `${item.turnId}-${item.id}` : `${item.turnId}-${index}`}>
           {showPending && pendingMessage?.turnId === item.turnId && (index === 0 || rows[index - 1].turnId !== item.turnId) &&
             <HistoryItem item={pendingItem!} onOpenFile={onOpenFile} onOpenLink={onOpenLink} />}
-          <HistoryItem item={index === pendingMatch ? pendingItem! : item} onOpenFile={onOpenFile} onOpenLink={onOpenLink} />
+          <div data-history-anchor={`${item.turnId}:${item.id}`}><HistoryItem item={index === pendingMatch ? pendingItem! : item} onOpenFile={onOpenFile} onOpenLink={onOpenLink} />{typeof item.historyDetail === 'string' && <HistoryDetail threadId={thread.id} cursor={item.historyDetail} />}</div>
         </Fragment>
       ))}
       {showPending && !rows.some(item => item.turnId === pendingMessage?.turnId) &&
@@ -585,6 +587,8 @@ export function App() {
   const [selectedSkills, setSelectedSkills, setThreadSkills, clearSkills] = useThreadState<SkillSelection[]>(composerKey, EMPTY_SKILLS, 'draft-skills')
   const [thread, setThread] = useState<Thread | null>(null)
   const [historyReady, setHistoryReady] = useState(false)
+  const [olderLoading, setOlderLoading] = useState(false)
+  const olderRequest = useRef<AbortController | null>(null)
   const [historyLoading, setHistoryLoading] = useState(false)
   const threadCache = useRef(new ThreadHistoryCache())
   const currentView = useRef({ thread, ready: historyReady })
@@ -850,19 +854,20 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    if (thread && historyReady) threadCache.current.remember(thread)
+    if (thread && historyReady && !thread.historyWindow?.browsingOlder) threadCache.current.remember(thread)
   }, [thread, historyReady])
 
-  useEffect(() => () => historyRequest.current?.abort(), [])
+  useEffect(() => () => { historyRequest.current?.abort(); olderRequest.current?.abort() }, [])
 
   const openThread = useCallback(async (target: Thread, csrf = session?.csrf, preserveVisibleCache = false) => {
     const previous = currentView.current
-    if (previous.thread && previous.ready) threadCache.current.remember(previous.thread)
-    const cached = threadCache.current.get(target.id)
+    if (previous.thread && previous.ready && !previous.thread.historyWindow?.browsingOlder) threadCache.current.remember(previous.thread)
+    let cached = threadCache.current.get(target.id)
     const sequence = ++openSequence.current
     const epoch = sessionEpoch.current
     const version = turnVersions.current.get(target.id)
     historyRequest.current?.abort()
+    olderRequest.current?.abort(); olderRequest.current = null; setOlderLoading(false)
     const request = new AbortController()
     historyRequest.current = request
     draftOpenRef.current = false
@@ -875,6 +880,11 @@ export function App() {
     if (!preserveVisibleCache) setCommandNotice(null)
     setThread(cached ? { ...target, ...cached, name: target.name ?? cached.name } : { ...target, turns: [], historyUnavailable: true })
     setHistoryReady(Boolean(cached))
+    if (!cached) {
+      const disk = await api.cachedHistory(target.id)
+      if (sequence !== openSequence.current || epoch !== sessionEpoch.current || request.signal.aborted) return
+      if (disk) { cached = disk.thread; threadCache.current.remember(cached); setThread(cached); setHistoryReady(true) }
+    }
     if (!csrf || !navigator.onLine) { setHistoryLoading(false); return }
     setHistoryLoading(true)
     // Resuming subscribes the runtime, but must never block painting history.
@@ -885,7 +895,7 @@ export function App() {
       threadCache.current.remember(history.thread)
       setThread((current) => history.thread.historyUnavailable && cached && current?.id === target.id
         ? { ...current, ...history.thread, turns: current.turns }
-        : history.thread)
+        : preserveVisibleCache && current?.historyWindow?.browsingOlder ? current : history.thread)
       setHistoryReady(true)
       setTranscripts(current => {
         const before = current[target.id] ?? EMPTY_ITEMS
@@ -902,6 +912,28 @@ export function App() {
       if (sequence === openSequence.current && epoch === sessionEpoch.current) setHistoryLoading(false)
     }
   }, [session?.csrf, setThreadTurn])
+
+  const loadOlder = useCallback(async () => {
+    const current = currentView.current.thread, before = current?.historyWindow?.older
+    if (!current || !before || olderRequest.current) return
+    const id = current.id, sequence = openSequence.current, epoch = sessionEpoch.current
+    const request = new AbortController(); olderRequest.current = request; setOlderLoading(true)
+    try {
+      const cached = await api.cachedHistory(id, before)
+      const page = cached ?? await api.olderHistory(id, before, request.signal)
+      if (request.signal.aborted || sequence !== openSequence.current || epoch !== sessionEpoch.current || selectedRef.current !== id) return
+      setThread(value => value?.id === id && value.historyWindow?.older === before ? prependHistory(value, page.thread) : value)
+    } catch (reason) {
+      if (!request.signal.aborted && sequence === openSequence.current && epoch === sessionEpoch.current) setError(errorMessage(reason))
+    } finally {
+      if (olderRequest.current === request) { olderRequest.current = null; setOlderLoading(false) }
+    }
+  }, [])
+  const loadLatest = useCallback(() => {
+    const current = currentView.current.thread
+    if (current?.historyWindow?.browsingOlder) void openThread({ ...current, turns: [] }).catch(reason => setError(errorMessage(reason)))
+  }, [openThread])
+
 
   useEffect(() => {
     if (!session) {
@@ -1026,7 +1058,7 @@ export function App() {
         const response = await api.thread(id, AbortSignal.timeout(8_000))
         if (cancelled || sequence !== openSequence.current || selectedRef.current !== id || version !== turnVersions.current.get(id)) return
         threadCache.current.remember(response.thread)
-        setThread(current => current?.id !== id ? current : response.thread.historyUnavailable
+        setThread(current => current?.id !== id || current.historyWindow?.browsingOlder ? current : response.thread.historyUnavailable
           ? { ...current, ...response.thread, turns: current.turns } : response.thread)
         setHistoryReady(true)
         setTranscripts(current => {
@@ -1160,7 +1192,7 @@ export function App() {
           setTimeout(() => {
             const id = eventThread
             if (id && selectedRef.current === id) api.thread(id).then((response) => setThread((current) => (
-              selectedRef.current !== id || current?.id !== id ? current : response.thread.historyUnavailable
+              selectedRef.current !== id || current?.id !== id || current.historyWindow?.browsingOlder ? current : response.thread.historyUnavailable
                 ? { ...current, ...response.thread, turns: current.turns }
                 : response.thread
             ))).catch(() => undefined)
@@ -1257,8 +1289,9 @@ export function App() {
   function createThread(groupId?: string) {
     if (!session || busy || sendingLocks.current.has(NEW_CONVERSATION_KEY)) return
     const previous = currentView.current
-    if (previous.thread && previous.ready) threadCache.current.remember(previous.thread)
+    if (previous.thread && previous.ready && !previous.thread.historyWindow?.browsingOlder) threadCache.current.remember(previous.thread)
     historyRequest.current?.abort()
+    olderRequest.current?.abort()
     openSequence.current++
     selectedRef.current = null
     setSelectedId(null)
@@ -1664,6 +1697,7 @@ export function App() {
     }
     await clearConversationSnapshot()
     historyRequest.current?.abort()
+    olderRequest.current?.abort()
     threadCache.current.clear()
     cacheHydrated.current = false
     setHistoryReady(false)
@@ -1846,7 +1880,7 @@ export function App() {
             }} />
         </section>}
 
-        {!showLeader && <TranscriptViewport key={`${selectedId}-conversation`} viewKey={`${selectedId}-conversation`} ready={Boolean(thread) && historyReady} positions={readingPositions.current}>
+        {!showLeader && <TranscriptViewport key={`${selectedId}-conversation`} viewKey={`${selectedId}-conversation`} ready={Boolean(thread) && historyReady} positions={readingPositions.current} onOlder={loadOlder} olderLoading={olderLoading} hasOlder={Boolean(thread?.historyWindow?.older)} onLatest={loadLatest}>
           {draftOpen && <section className="new-conversation-setup" aria-label="New conversation setup">
             <div className="new-conversation-heading"><h2>A fresh conversation</h2>
               <button type="button" className="quiet-button" disabled={busy} onClick={() => {
@@ -1883,6 +1917,7 @@ export function App() {
           {thread && !historyReady && <div className="loading-inline" role="status">
             {historyLoading ? <><span className="spinner" />Loading conversation…</> : <><span>{online ? 'Conversation could not be loaded.' : 'This conversation is not cached on this device yet.'}</span><button type="button" className="quiet-button" disabled={!online} onClick={() => void openThread(thread).catch(reason => setError(errorMessage(reason)))}>Retry</button></>}
           </div>}
+          {thread?.historyWindow?.older && <button data-load-older type="button" className="quiet-button" disabled={olderLoading} onClick={() => void loadOlder()}>{olderLoading ? 'Đang tải tin cũ…' : 'Tải tin nhắn cũ hơn'}</button>}
           {thread?.historyCacheTruncated && <p className="history-note">{thread.historyTruncation === 'head' ? 'Hội thoại vượt giới hạn 5 MB: phần cũ nhất đã được rút gọn trong bản xem/cache. Lịch sử gốc vẫn giữ nguyên.' : thread.historyTruncation === 'tail' ? 'Hội thoại vượt giới hạn 5 MB: phần cuối đã được rút gọn trong bản xem/cache. Lịch sử gốc vẫn giữ nguyên.' : 'Showing recent cached messages. Full history refreshes when connected.'}</p>}
           {thread && historyReady && <Conversation thread={thread} activeTurnId={activeTurnId} items={transcripts[thread.id] ?? EMPTY_ITEMS} pendingMessage={sentMessages[thread.id]} yoloMode={yoloMode} onOpenFile={openFile} onOpenLink={openLink} onSuggestion={suggestPrompt} />}
         </TranscriptViewport>}

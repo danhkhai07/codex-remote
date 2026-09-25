@@ -46,7 +46,14 @@ export function useUnreadMessages(threads: Thread[], readingId: string | null, e
         const version = JSON.stringify(target)
         if (versions.current.get(target.id) === version) continue
         try {
-          await api.messageIds(target.id, AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]))
+          let before: string | undefined
+          do {
+            const result = await api.messageIds(target.id, AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]), before)
+            if (controller.signal.aborted) return
+            if (result.nextCursor && result.nextCursor === before) throw Error('Read cursor did not advance')
+            before = result.nextCursor ?? undefined
+            await refresh()
+          } while (before)
           if (controller.signal.aborted) return
           versions.current.set(target.id, version)
           await refresh()

@@ -1,4 +1,4 @@
-import { secureFetch, secureIntent } from './secureApi'
+import { secureFetch, secureIntent, cachedHistoryResponse } from './secureApi'
 import { boundedBlob } from './boundedBlob'
 import { ensurePreviewMigrationReady } from './legacyPreviewWorkers'
 import type { SkillList, SkillSelection } from '../server/skills'
@@ -149,11 +149,21 @@ export const api = {
   }, csrf),
   workspaceSkills: (workspaceId: string, refresh = false, signal?: AbortSignal) => request<SkillList>(`/api/workspace-skills?workspaceId=${encodeURIComponent(workspaceId)}${refresh ? '&refresh=1' : ''}`, { signal }),
   skills: (id: string, refresh = false, signal?: AbortSignal) => request<SkillList>(`/api/threads/${encodeURIComponent(id)}/skills${refresh ? '?refresh=1' : ''}`, { signal }),
-  messageIds: (id: string, signal?: AbortSignal) => request<{ ids: string[] }>(`/api/threads/${encodeURIComponent(id)}/message-ids`, { signal }),
-  thread: (id: string, signal?: AbortSignal) => request<ThreadResponse>(`/api/threads/${encodeURIComponent(id)}`, { signal }).then(response => {
+  messageIds: (id: string, signal?: AbortSignal, before?: string) => request<{ ids: string[]; nextCursor?: string | null }>(`/api/threads/${encodeURIComponent(id)}/message-ids${before ? '?before=' + encodeURIComponent(before) : ''}`, { signal }),
+  thread: (id: string, signal?: AbortSignal) => request<ThreadResponse>(`/api/threads/${encodeURIComponent(id)}/history`, { signal }).then(response => {
     if (response?.thread?.id !== id) throw new ApiError(502, 'Conversation response was incomplete or mismatched. Please retry.')
     return { ...response, thread: limitConversation(response.thread) }
   }),
+  cachedHistory: async (id: string, before?: string): Promise<ThreadResponse | null> => {
+    const path = `/api/threads/${encodeURIComponent(id)}/history${before ? '?before=' + encodeURIComponent(before) : ''}`
+    const intent = secureIntent(); intent.assert()
+    const response = await cachedHistoryResponse(path); intent.assert()
+    if (!response) return null
+    const result = await response.json(); intent.assert()
+    return result?.thread?.id === id && result.thread.historyWindow && Array.isArray(result.thread.turns) ? result : null
+  },
+  olderHistory: (id: string, before: string, signal?: AbortSignal) => request<ThreadResponse>(`/api/threads/${encodeURIComponent(id)}/history?before=${encodeURIComponent(before)}`, { signal }),
+  historyDetail: (id: string, cursor: string, offset = 0, signal?: AbortSignal) => request<{ text: string; offset: number; next: number | null }>(`/api/threads/${encodeURIComponent(id)}/history-detail?${new URLSearchParams({ cursor, offset: String(offset) })}`, { signal }),
   createThread: (workspaceId: string, csrf: string, fullAccess = false, groupId?: string) => request<ThreadResponse>('/api/threads', {
     method: 'POST',
     body: JSON.stringify({ workspaceId, fullAccess, ...(groupId ? { groupId } : {}) }),
