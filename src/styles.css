@@ -1273,15 +1273,16 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
   margin: 0 0 0.85em;
 }
 
-.message-markdown table {
+.message-markdown table,
+.file-markdown-preview table {
   width: 100%;
+  min-width: 100%;
   border-collapse: collapse;
-  table-layout: fixed;
+  table-layout: auto;
 }
 
-.markdown-table-scroll table:has(tr > :nth-child(5)) {
-  min-width: 46rem;
-  table-layout: auto;
+.markdown-table-scroll.is-content-wide table {
+  width: max-content;
 }
 
 .message-markdown th,
@@ -1290,8 +1291,14 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
   border: 1px solid #354139;
   text-align: left;
   vertical-align: top;
-  overflow-wrap: anywhere;
+  max-width: 18rem;
+  overflow-wrap: normal;
   word-break: normal;
+}
+
+.markdown-table-scroll :is(th, td) :is(a, code) {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .message-markdown th {
@@ -2595,12 +2602,6 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
   white-space: pre;
 }
 
-.file-markdown-preview table {
-  width: 100%;
-  border-collapse: collapse;
-  table-layout: fixed;
-}
-
 .file-markdown-preview .markdown-table-scroll {
   margin: 1.1em 0 1.5em;
 }
@@ -2611,7 +2612,8 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
   border: 1px solid #2d3a30;
   text-align: left;
   vertical-align: top;
-  overflow-wrap: anywhere;
+  max-width: 18rem;
+  overflow-wrap: normal;
   word-break: normal;
 }
 

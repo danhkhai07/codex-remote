@@ -1,5 +1,9 @@
 # Markdown table wrapping — candidate
 
+> The column-count sizing described below is the original delivered behavior.
+> User feedback supersedes it with the content-based correction documented in
+> `docs/reviews/markdown-table-readable-width-2026-09-26.md`.
+
 Task `5c6a6b84-339e-4279-9191-4b688a58a181` starts from exact source
 `d6990d30b98ec4100e26752213017a90c0559853`. It is a client-only candidate;
 it has not been deployed or armed.
