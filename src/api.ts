@@ -11,6 +11,34 @@ import type { PendingSnapshot } from './pendingRequests'
 import { limitConversation } from '../server/conversation-size'
 import type { ContextTrace, KnowledgeSnapshot, NoteDocument, NoteVersion } from '../server/knowledge-types'
 
+export type PreviewShareStatus = 'active' | 'expired' | 'revoked' | 'unavailable'
+
+export type PreviewShare = {
+  id: string
+  label: string
+  serviceName: string
+  port: number
+  path: string
+  createdAt: string
+  expiresAt: string
+  revokedAt: string | null
+  status: PreviewShareStatus
+  url?: string
+}
+
+export type ShareableService = {
+  port: number
+  name: string
+  path: string
+  running: boolean | null
+}
+
+export type PreviewSharesSnapshot = {
+  links: PreviewShare[]
+  services: ShareableService[]
+  serverNow: string
+}
+
 export type ContextTraceSummary = Omit<ContextTrace, 'snippets' | 'omitted'> & { noteCount: number; omittedCount: number }
 
 export class ApiError extends Error {
@@ -71,6 +99,13 @@ async function requestBlob(path: string, signal?: AbortSignal, limit = 20 * 1024
 }
 
 export const api = {
+  previewShares: (signal?: AbortSignal) => request<PreviewSharesSnapshot>('/api/preview-shares', { signal }),
+  createPreviewShare: (body: { port: number; path?: string; label?: string; ttlSeconds: number }, csrf: string, signal?: AbortSignal) => request<{ link: PreviewShare }>('/api/preview-shares', {
+    method: 'POST', body: JSON.stringify(body), signal,
+  }, csrf),
+  revokePreviewShare: (id: string, csrf: string, signal?: AbortSignal) => request<{ ok: true }>(`/api/preview-shares/${encodeURIComponent(id)}`, {
+    method: 'DELETE', signal,
+  }, csrf),
   knowledge: () => request<KnowledgeSnapshot>('/api/knowledge'),
   knowledgeNote: (path: string, signal?: AbortSignal) => request<NoteDocument>(`/api/knowledge/note?${new URLSearchParams({ path })}`, { signal }),
   knowledgeSource: (path: string) => request<{ path: string; content: string }>(`/api/knowledge/source?${new URLSearchParams({ path })}`),

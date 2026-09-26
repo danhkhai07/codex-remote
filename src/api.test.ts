@@ -36,6 +36,31 @@ describe('conversation response failures', () => {
   })
 })
 
+describe('preview share owner API', () => {
+  it('loads through GET and sends exact CSRF mutation contracts', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ links: [], services: [], serverNow: '2026-09-27T00:00:00.000Z' }))
+      .mockResolvedValueOnce(Response.json({ link: { id: 'share' } }, { status: 201 }))
+      .mockResolvedValueOnce(Response.json({ ok: true }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.previewShares()
+    await api.createPreviewShare({ port: 4173, path: '/demo', label: 'Khách', ttlSeconds: 3600 }, 'csrf-token')
+    await api.revokePreviewShare('share / id', 'csrf-token')
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/preview-shares')
+    expect(new Headers(fetchMock.mock.calls[0][1].headers).has('X-CSRF-Token')).toBe(false)
+    const create = fetchMock.mock.calls[1]
+    expect(create[0]).toBe('/api/preview-shares')
+    expect(create[1]).toMatchObject({ method: 'POST', body: JSON.stringify({ port: 4173, path: '/demo', label: 'Khách', ttlSeconds: 3600 }) })
+    expect(new Headers(create[1].headers).get('X-CSRF-Token')).toBe('csrf-token')
+    const revoke = fetchMock.mock.calls[2]
+    expect(revoke[0]).toBe('/api/preview-shares/share%20%2F%20id')
+    expect(revoke[1].method).toBe('DELETE')
+    expect(new Headers(revoke[1].headers).get('X-CSRF-Token')).toBe('csrf-token')
+  })
+})
+
 it('does not publish a parsed cached response after its intent was locked', async () => {
   let release!: (value: unknown) => void, entered!: () => void
   const waiting = new Promise<void>(resolve => { entered = resolve })
