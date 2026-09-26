@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { workflow, atomic, publicationLock, hash, same } from './core.mjs'
 import { allReadiness, orchestrationBusy } from './readiness.mjs'
+import { facebookIndexHash } from './deploy.mjs'
 
 const ready = { ready: true, busy: 0, pending: 0, incomplete: false, queued: 0 }
 function fixture() {
@@ -99,4 +100,34 @@ test('API and global guard jointly fail closed on incomplete, active or queued d
   team.tasks = []; state.notices.push({ status: 'sending' }); assert.equal((await allReadiness(api, async () => ready, () => state)).ready, false)
   await assert.rejects(allReadiness(async () => ({}), async () => ready, () => state), /Incomplete/)
   assert.equal((await allReadiness(api, async () => ({ ...ready, incomplete: true, ready: false }), () => state)).ready, false)
+})
+
+
+test('Facebook caption edit during ALL-idle wait aborts before backup, publication or restart', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'share-caption-drift-')), file = join(root, 'index.html')
+  try {
+    writeFileSync(file, '<html>previous reviewed caption</html>')
+    const baseline = { facebookIndex: facebookIndexHash(file) }, f = fixture()
+    f.ops.assertBaseline = () => same(facebookIndexHash(file), baseline.facebookIndex, 'Facebook content')
+    f.ops.sleep = async () => writeFileSync(file, '<html>concurrent caption update</html>')
+    await assert.rejects(workflow(f.ops), /Facebook content drift/)
+    assert(!f.events.includes('backup')); assert(!f.events.includes('publish')); assert(!f.events.includes('restart'))
+    assert.equal(f.statuses.at(-1)[1].published, false)
+    assert.equal(readFileSync(file, 'utf8'), '<html>concurrent caption update</html>')
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('fresh Facebook baseline accepts current captions without restoring a historical HTML snapshot', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'share-caption-fresh-')), file = join(root, 'index.html')
+  try {
+    writeFileSync(file, '<html>old caption</html>'); const historical = facebookIndexHash(file)
+    writeFileSync(file, '<html>new approved caption with icons</html>')
+    const baseline = { facebookIndex: facebookIndexHash(file) }, f = fixture()
+    assert.notEqual(baseline.facebookIndex, historical)
+    f.ops.assertBaseline = f.ops.assertPublished = () => same(facebookIndexHash(file), baseline.facebookIndex, 'Facebook content')
+    await workflow(f.ops)
+    assert.equal(f.events.filter(x => x === 'restart').length, 1)
+    assert.equal(f.statuses.at(-1)[0], 'complete')
+    assert.equal(readFileSync(file, 'utf8'), '<html>new approved caption with icons</html>')
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })

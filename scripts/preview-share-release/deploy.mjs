@@ -19,6 +19,7 @@ const NGINX = '/etc/nginx/sites-enabled/codex-preview-ports'
 const LIVE_MARKER = S + '/releases/markdown-table-readable-7649f0c/LIVE.json'
 const CERT = '/etc/letsencrypt/live/codex-preview-ports/fullchain.pem'
 const FACEBOOK_PATH = '/flint-facebook-review-083af9e9522a0dbbf813/'
+export const facebookIndexHash = (path = '/srv/flint-social-previews' + FACEBOOK_PATH + 'index.html') => hash(path)
 // Read-only pins added after the Facebook migration. Never install Nginx here.
 export function facebookBoundary(enabled = '/etc/nginx/sites-enabled') {
   return Object.fromEntries(['cns.danhkhai.io.vn', 'flint-facebook-preview'].map(name => {
@@ -72,7 +73,7 @@ function snapshot() {
   return { backend: tree(R + '/dist-server'), client: tree(R + '/dist'), scripts: tree(R + '/scripts'),
     template: hash(R + '/working-hours/dashboard.template.html'), isolatedTemplate: hash(S + '/hours/dashboard.template.html'), generator: hash(R + '/working-hours/update.py'),
     registry: fileMark(env.CODEX_REMOTE_SERVICES_FILE), grants: fileMark(CONFIG_PATCH.CODEX_REMOTE_PREVIEW_SHARE_STATE),
-    liveMarker: hash(LIVE_MARKER), nginx: hash(NGINX), facebookNginx: facebookBoundary(), certificate: hash(CERT), hosts: hash('/etc/hosts'),
+    liveMarker: hash(LIVE_MARKER), nginx: hash(NGINX), facebookNginx: facebookBoundary(), facebookIndex: facebookIndexHash(), certificate: hash(CERT), hosts: hash('/etc/hosts'),
     env: hash(ENV), key: identity(KEY), vapid: sha(JSON.stringify(push.keys)),
     dependencies: { path: realpathSync(R + '/node_modules'), package: hash(R + '/package.json'), lock: hash(R + '/package-lock.json') }, units: service }
 }
@@ -282,7 +283,7 @@ async function adapter(release) {
     assert.equal(old.status, 410, 'Retired Facebook URL'); await old.arrayBuffer()
     const privatePreview = await fetch('https://p5211.danhkhai.io.vn' + FACEBOOK_PATH, { redirect: 'manual', signal: AbortSignal.timeout(10000) })
     assert.equal(privatePreview.status, 401, 'Facebook anonymous preview denial'); await privatePreview.arrayBuffer()
-    await response('http://127.0.0.1:5211' + FACEBOOK_PATH, '03341a7b243b50604b5f0c710fd4eb678f257a8a76f8e418b490f07f844b2eae')
+    await response('http://127.0.0.1:5211' + FACEBOOK_PATH, b.facebookIndex)
     same(sha(await response('https://cns.danhkhai.io.vn/')), sha(await response('http://127.0.0.1:2345/')), 'Portfolio preserved')
     assertSnapshot('complete', true)
     const evidence = { status: 'verified', source: m.source, units: units(), at: new Date().toISOString(), codeAndIdentitiesPreserved: true, facebookBoundaryVerified: true, registryRecordsPreserved: true, realSharesCreated: false, physicalIOS: false }
