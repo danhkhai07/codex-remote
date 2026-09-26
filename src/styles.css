@@ -652,6 +652,7 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
 .preview-shares-options { color: var(--muted); font-size: 0.76rem; }
 .preview-shares-options summary { min-height: 40px; padding: 10px 0; cursor: pointer; }
 .preview-shares-options p { margin: 7px 0 0; line-height: 1.45; }
+.preview-share-path-help.is-error { color: #f6a498; }
 .preview-shares-submit { justify-self: start; min-height: 44px; }
 .preview-shares-empty { margin: 0; color: var(--muted); font-size: 0.8rem; }
 .preview-share-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }

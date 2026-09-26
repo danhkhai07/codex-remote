@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PreviewShare } from './api'
-import { clockNow, previewShareIsActive, previewShareStatusLabel, previewShareTimeLeft, serverClock } from './previewShares'
+import { PREVIEW_SHARE_PATH_MAX_BYTES, clockNow, previewShareIsActive, previewShareStatusLabel, previewShareTimeLeft, serverClock, utf8ByteLength } from './previewShares'
 
 const link = (overrides: Partial<PreviewShare> = {}): PreviewShare => ({
   id: 'share', label: 'Demo', serviceName: 'Preview', port: 4173, path: '/',
@@ -28,5 +28,10 @@ describe('preview share presentation', () => {
     const now = Date.parse('2026-09-27T00:00:00.000Z')
     expect(previewShareTimeLeft('2026-09-27T00:00:01.000Z', now)).toBe('Còn 1 phút')
     expect(previewShareTimeLeft('2026-09-27T02:15:00.000Z', now)).toBe('Còn 2 giờ 15 phút')
+  })
+
+  it('counts the backend path limit in UTF-8 bytes without truncating text', () => {
+    expect(utf8ByteLength('/demo')).toBe(5)
+    expect(utf8ByteLength('/' + 'đ'.repeat(512))).toBe(PREVIEW_SHARE_PATH_MAX_BYTES + 1)
   })
 })

@@ -6,6 +6,11 @@ export const PREVIEW_SHARE_LIFETIMES = [
   { seconds: 6 * 60 * 60, label: '6 giờ' },
   { seconds: 24 * 60 * 60, label: '24 giờ' },
 ] as const
+export const PREVIEW_SHARE_PATH_MAX_BYTES = 1024
+
+export function utf8ByteLength(value: string) {
+  return new TextEncoder().encode(value).byteLength
+}
 
 export type ServerClock = { serverAt: number; clientAt: number }
 

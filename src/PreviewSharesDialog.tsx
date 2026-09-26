@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { api, type PreviewShare, type PreviewSharesSnapshot } from './api'
 import {
   PREVIEW_SHARE_LIFETIMES,
+  PREVIEW_SHARE_PATH_MAX_BYTES,
   clockNow,
   previewShareIsActive,
   previewShareStatusLabel,
   previewShareTimeLeft,
   serverClock,
+  utf8ByteLength,
   type ServerClock,
 } from './previewShares'
 
@@ -24,10 +26,12 @@ export function PreviewSharesDialog({ csrf, online, trigger, onClose }: {
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const serviceSelect = useRef<HTMLSelectElement>(null)
-  const lifetime = useRef(new AbortController())
+  const lifetime = useRef<AbortController | null>(null)
   const loadRequest = useRef<AbortController | null>(null)
   const createLocked = useRef(false)
   const revokeLocked = useRef(new Set<string>())
+  const mutationCount = useRef(0)
+  const mutationRevision = useRef(0)
   const [snapshot, setSnapshot] = useState<PreviewSharesSnapshot | null>(null)
   const [clock, setClock] = useState<ServerClock>(() => serverClock(new Date().toISOString()))
   const [now, setNow] = useState(Date.now())
@@ -42,15 +46,19 @@ export function PreviewSharesDialog({ csrf, online, trigger, onClose }: {
   const [notice, setNotice] = useState('')
 
   const load = useCallback(async () => {
+    const activeLifetime = lifetime.current
+    if (!activeLifetime || activeLifetime.signal.aborted || mutationCount.current > 0) return
     loadRequest.current?.abort()
     const controller = new AbortController()
     loadRequest.current = controller
-    const signal = AbortSignal.any([lifetime.current.signal, controller.signal])
+    const revision = mutationRevision.current
+    const signal = AbortSignal.any([activeLifetime.signal, controller.signal])
+    const current = () => !signal.aborted && lifetime.current === activeLifetime && mutationCount.current === 0 && mutationRevision.current === revision
     setLoading(true)
     setError('')
     try {
       const value = await api.previewShares(signal)
-      if (signal.aborted) return
+      if (!current()) return
       const nextClock = serverClock(value.serverNow)
       setSnapshot(value)
       setClock(nextClock)
@@ -60,21 +68,25 @@ export function PreviewSharesDialog({ csrf, online, trigger, onClose }: {
         : String(value.services.find(service => service.running !== false)?.port ?? value.services[0]?.port ?? ''))
       requestAnimationFrame(() => serviceSelect.current?.focus())
     } catch (reason) {
-      if (!signal.aborted) setError(message(reason))
+      if (current()) setError(message(reason))
     } finally {
-      if (!signal.aborted) setLoading(false)
+      if (loadRequest.current === controller) loadRequest.current = null
+      if (!activeLifetime.signal.aborted && lifetime.current === activeLifetime) setLoading(false)
     }
   }, [])
 
   useEffect(() => {
+    const activeLifetime = new AbortController()
+    lifetime.current = activeLifetime
     const element = dialog.current
     element?.showModal()
     void load()
     return () => {
       loadRequest.current?.abort()
-      lifetime.current.abort()
+      activeLifetime.abort()
+      if (lifetime.current === activeLifetime) lifetime.current = null
       element?.close()
-      if (trigger?.isConnected) requestAnimationFrame(() => trigger.focus({ preventScroll: true }))
+      requestAnimationFrame(() => { if (!lifetime.current && trigger?.isConnected) trigger.focus({ preventScroll: true }) })
     }
   }, [load, trigger])
 
@@ -87,62 +99,79 @@ export function PreviewSharesDialog({ csrf, online, trigger, onClose }: {
 
   const selectedService = snapshot?.services.find(service => String(service.port) === servicePort)
   useEffect(() => { if (selectedService) setPath(selectedService.path || '/') }, [selectedService])
+  const submittedPath = path || selectedService?.path || '/'
+  const pathBytes = utf8ByteLength(submittedPath)
+  const pathTooLong = pathBytes > PREVIEW_SHARE_PATH_MAX_BYTES
 
   const activeLinks = useMemo(() => snapshot?.links.filter(link => previewShareIsActive(link, now)) ?? [], [snapshot, now])
   const closedLinks = useMemo(() => snapshot?.links.filter(link => !previewShareIsActive(link, now)) ?? [], [snapshot, now])
 
   async function create(event: FormEvent) {
     event.preventDefault()
-    if (createLocked.current || !online || !csrf || !selectedService) return
+    const activeLifetime = lifetime.current
+    if (createLocked.current || !activeLifetime || activeLifetime.signal.aborted || !online || !csrf || !selectedService || pathTooLong) return
     createLocked.current = true
+    mutationCount.current++
+    mutationRevision.current++
     setCreating(true)
     setError('')
     setNotice('')
     try {
       const result = await api.createPreviewShare({
         port: selectedService.port,
-        path: path.trim() || selectedService.path || '/',
+        path: submittedPath,
         label: label.trim() || undefined,
         ttlSeconds,
-      }, csrf, lifetime.current.signal)
+      }, csrf, activeLifetime.signal)
+      if (activeLifetime.signal.aborted || lifetime.current !== activeLifetime) return
       setSnapshot(current => current ? { ...current, links: [result.link, ...current.links.filter(link => link.id !== result.link.id)] } : current)
       setLabel('')
       setNotice('Đã tạo link chia sẻ.')
     } catch (reason) {
-      if (!lifetime.current.signal.aborted) setError(message(reason))
+      if (!activeLifetime.signal.aborted && lifetime.current === activeLifetime) setError(message(reason))
     } finally {
       createLocked.current = false
-      if (!lifetime.current.signal.aborted) setCreating(false)
+      mutationCount.current = Math.max(0, mutationCount.current - 1)
+      mutationRevision.current++
+      if (!activeLifetime.signal.aborted && lifetime.current === activeLifetime) setCreating(false)
     }
   }
 
   async function revoke(link: PreviewShare) {
-    if (revokeLocked.current.has(link.id) || !online || !csrf) return
+    const activeLifetime = lifetime.current
+    if (revokeLocked.current.has(link.id) || !activeLifetime || activeLifetime.signal.aborted || !online || !csrf) return
     revokeLocked.current.add(link.id)
+    mutationCount.current++
+    mutationRevision.current++
     setRevoking(current => new Set(current).add(link.id))
     setError('')
     setNotice('')
     try {
-      await api.revokePreviewShare(link.id, csrf, lifetime.current.signal)
+      await api.revokePreviewShare(link.id, csrf, activeLifetime.signal)
+      if (activeLifetime.signal.aborted || lifetime.current !== activeLifetime) return
       const revokedAt = new Date(clockNow(clock)).toISOString()
       setSnapshot(current => current ? { ...current, links: current.links.map(item => item.id === link.id ? { ...item, status: 'revoked', revokedAt, url: undefined } : item) } : current)
       setNotice(`Đã ngắt chia sẻ ${link.label || link.serviceName}.`)
     } catch (reason) {
-      if (!lifetime.current.signal.aborted) setError(message(reason))
+      if (!activeLifetime.signal.aborted && lifetime.current === activeLifetime) setError(message(reason))
     } finally {
       revokeLocked.current.delete(link.id)
-      if (!lifetime.current.signal.aborted) setRevoking(current => { const next = new Set(current); next.delete(link.id); return next })
+      mutationCount.current = Math.max(0, mutationCount.current - 1)
+      mutationRevision.current++
+      if (!activeLifetime.signal.aborted && lifetime.current === activeLifetime) setRevoking(current => { const next = new Set(current); next.delete(link.id); return next })
     }
   }
 
   async function copy(link: PreviewShare) {
-    if (!link.url) return
+    const activeLifetime = lifetime.current
+    if (!link.url || !activeLifetime || activeLifetime.signal.aborted) return
     setError('')
     try {
       await navigator.clipboard.writeText(link.url)
+      if (activeLifetime.signal.aborted || lifetime.current !== activeLifetime) return
       setNotice(`Đã sao chép link ${link.label || link.serviceName}.`)
     } catch (reason) {
-      setError(message(reason) || 'Trình duyệt không cho phép sao chép link')
+      if (!activeLifetime.signal.aborted && lifetime.current === activeLifetime) setError(message(reason) || 'Trình duyệt không cho phép sao chép link')
     }
   }
 
@@ -155,11 +184,11 @@ export function PreviewSharesDialog({ csrf, online, trigger, onClose }: {
     </header>
     <p className="preview-shares-intro">Người có link có thể dùng dịch vụ cho đến khi link hết hạn hoặc bị ngắt. Đăng nhập riêng của dịch vụ vẫn áp dụng.</p>
 
-    {error && <div className="error-banner preview-shares-error" role="alert"><span>{error}</span>{!snapshot && <button type="button" onClick={() => void load()} disabled={loading}>Thử lại</button>}</div>}
+    {error && <div className="error-banner preview-shares-error" role="alert"><span>{error}</span>{!snapshot && <button type="button" onClick={() => void load()} disabled={loading || creating || revoking.size > 0}>Thử lại</button>}</div>}
     {notice && <p className="preview-shares-notice" role="status">{notice}</p>}
 
     <section className="preview-shares-create" aria-labelledby="preview-shares-create-title">
-      <div className="preview-shares-section-heading"><h3 id="preview-shares-create-title">Tạo link mới</h3><button className="quiet-button" type="button" onClick={() => void load()} disabled={loading}>{loading ? 'Đang tải…' : 'Làm mới'}</button></div>
+      <div className="preview-shares-section-heading"><h3 id="preview-shares-create-title">Tạo link mới</h3><button className="quiet-button" type="button" onClick={() => void load()} disabled={loading || creating || revoking.size > 0}>{loading ? 'Đang tải…' : 'Làm mới'}</button></div>
       {!snapshot && loading ? <p role="status" className="muted">Đang tải dịch vụ và link hiện có…</p> : <form onSubmit={event => void create(event)}>
         <label>Dịch vụ
           <select aria-label="Dịch vụ" ref={serviceSelect} value={servicePort} disabled={creating || !online || !snapshot?.services.length} onChange={event => setServicePort(event.target.value)} required>
@@ -178,11 +207,11 @@ export function PreviewSharesDialog({ csrf, online, trigger, onClose }: {
         <details className="preview-shares-options">
           <summary>Đường dẫn mở</summary>
           <label>Đường dẫn ban đầu
-            <input aria-label="Đường dẫn ban đầu" value={path} maxLength={2048} disabled={creating} inputMode="url" placeholder="/" onChange={event => setPath(event.target.value)} />
+            <input aria-label="Đường dẫn ban đầu" aria-invalid={pathTooLong || undefined} aria-describedby="preview-share-path-help" value={path} disabled={creating} inputMode="url" placeholder="/" onChange={event => setPath(event.target.value)} />
           </label>
-          <p>Đường dẫn chỉ chọn màn hình mở đầu, không giới hạn các trang khác trong cùng dịch vụ.</p>
+          <p id="preview-share-path-help" className={pathTooLong ? 'preview-share-path-help is-error' : 'preview-share-path-help'}>{pathBytes.toLocaleString('vi-VN')} / {PREVIEW_SHARE_PATH_MAX_BYTES.toLocaleString('vi-VN')} byte UTF-8. Đường dẫn chỉ chọn màn hình mở đầu, không giới hạn các trang khác trong cùng dịch vụ.</p>
         </details>
-        <button className="primary-button preview-shares-submit" disabled={creating || !online || !csrf || !selectedService || selectedService.running === false}>{creating ? 'Đang tạo…' : 'Tạo link chia sẻ'}</button>
+        <button className="primary-button preview-shares-submit" disabled={creating || !online || !csrf || !selectedService || selectedService.running === false || pathTooLong}>{creating ? 'Đang tạo…' : 'Tạo link chia sẻ'}</button>
       </form>}
       {!online && <p className="muted">Đang offline — kết nối lại để tạo hoặc ngắt link.</p>}
     </section>

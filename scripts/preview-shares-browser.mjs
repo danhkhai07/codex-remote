@@ -16,13 +16,14 @@ const dist = join(root, 'dist'), files = join(root, 'files'), ownerFile = join(r
 const random = size => randomBytes(size).toString('base64url')
 const material = { version: 1, app: random(18), generation: random(18), key: random(32) }
 const issued = createSession('preview-shares-browser-secret'.repeat(3), 600, 'fixture-password')
+const devMode = process.env.PREVIEW_SHARES_DEV === '1'
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
 const waitFor = async predicate => { for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 20)) } throw new Error('Timed out waiting for fixture request') }
 const readJson = async req => { const parts = []; for await (const part of req) parts.push(part); return JSON.parse(Buffer.concat(parts).toString() || '{}') }
 const json = (res, status, value) => { res.statusCode = status; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(value)) }
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml' }
 
-let browser, server, secure
+let browser, server, secure, vite
 try {
   await cp(resolve('dist'), dist, { recursive: true })
   await mkdir(files)
@@ -34,6 +35,7 @@ try {
   }
   const sessions = new SessionRegistry(config.sessionSecret, config.sessionStateFile, config.password)
   secure = new SecureApi(config, sessions, [files])
+  if (devMode) vite = await (await import('vite')).createServer({ root: resolve('.'), appType: 'spa', server: { middlewareMode: true } })
   const thread = {
     id: 'fixture-thread', name: 'Preview share fixture', cwd: files, createdAt: 1, updatedAt: 1, status: { type: 'idle' },
     turns: [{ id: 'history', status: 'completed', items: Array.from({ length: 42 }, (_, index) => ({ id: `message-${index}`, type: 'agentMessage', text: `Fixture message ${index} ${'keeps the transcript scrollable. '.repeat(8)}` })) }],
@@ -65,10 +67,11 @@ try {
     if (url.pathname === '/api/events' && method === 'GET') return json(res, 503, { error: 'Fixture stream disabled' })
     if (url.pathname === '/api/preview-shares' && method === 'GET') {
       getCount++
+      const captured = { links: structuredClone(links), services: structuredClone(services), serverNow: new Date().toISOString() }
       if (readGate) await readGate.promise
       if (res.destroyed) return
       if (failNextGet) { failNextGet = false; return json(res, 503, { error: 'Không tải được fixture' }) }
-      return json(res, 200, { links, services, serverNow: new Date().toISOString() })
+      return json(res, 200, captured)
     }
     if (url.pathname === '/api/preview-shares' && method === 'POST') {
       assert.equal(req.headers['x-csrf-token'], issued.payload.csrf); createCount++
@@ -78,6 +81,7 @@ try {
       const service = services.find(item => item.port === body.port)
       assert(service && service.running)
       assert([900, 3600, 21600, 86400].includes(body.ttlSeconds))
+      assert(Buffer.byteLength(body.path) <= 1024)
       const createdAt = new Date(), link = { id: `created-${createCount}`, label: body.label || '', serviceName: service.name, port: service.port, path: body.path || service.path,
         createdAt: createdAt.toISOString(), expiresAt: new Date(createdAt.getTime() + body.ttlSeconds * 1000).toISOString(), revokedAt: null, status: 'active', url: `https://share.fixture.test/s/created-${createCount}#secret` }
       links.unshift(link); return json(res, 201, { link })
@@ -96,6 +100,7 @@ try {
     const url = new URL(req.url, 'http://fixture.local')
     if (url.pathname.startsWith('/api/secure/')) { void secure.handle(req, res, dispatch); return }
     if (url.pathname.startsWith('/api/')) { json(res, 403, { error: 'Encrypted owner API required' }); return }
+    if (vite) { vite.middlewares(req, res, error => { if (error) json(res, 500, { error: error.message }) }); return }
     void (async () => {
       const relative = url.pathname === '/' ? 'index.html' : normalize(url.pathname).replace(/^[/\\]+/, '')
       let path = join(dist, relative)
@@ -109,7 +114,8 @@ try {
   const screenshots = process.env.PREVIEW_SHARES_SCREENSHOTS
   if (screenshots) await mkdir(screenshots, { recursive: true })
 
-  for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }, { width: 320, height: 700 }]) {
+  const viewports = devMode ? [{ width: 1280, height: 900 }] : [{ width: 1280, height: 900 }, { width: 390, height: 844 }, { width: 320, height: 700 }]
+  for (const viewport of viewports) {
     reset()
     const context = await browser.newContext({ viewport, serviceWorkers: 'allow', permissions: ['clipboard-read', 'clipboard-write'] })
     await context.addCookies([{ name: 'codex_remote_session', value: issued.token, url: config.publicOrigin.origin, httpOnly: true, sameSite: 'Strict' }])
@@ -117,7 +123,7 @@ try {
     const page = await context.newPage(), errors = []
     page.setDefaultTimeout(20_000); page.on('pageerror', error => errors.push(error.message))
     await page.goto(config.publicOrigin.origin)
-    await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller))
+    if (!devMode) await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller))
     const unlock = page.getByLabel('Khóa mã hóa riêng', { exact: true })
     try { await unlock.waitFor() } catch (error) { console.error(JSON.stringify({ url: page.url(), body: await page.locator('body').innerText(), errors })); throw error }
     await unlock.fill(material.key)
@@ -148,25 +154,58 @@ try {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), false)
     if (screenshots) await page.screenshot({ path: join(screenshots, `preview-shares-${viewport.width}.png`), fullPage: true })
 
+    await dialog.locator('.preview-shares-options > summary').click()
+    const pathInput = dialog.getByLabel('Đường dẫn ban đầu', { exact: true })
+    await pathInput.fill('/' + 'đ'.repeat(512))
+    assert.equal(await pathInput.getAttribute('aria-invalid'), 'true')
+    assert.match(await dialog.locator('#preview-share-path-help').innerText(), /1[.,]025 \/ 1[.,]024 byte UTF-8/)
+    assert.equal(await dialog.locator('.preview-shares-submit').isDisabled(), true)
+    await pathInput.fill('/demo')
+    assert.equal(await pathInput.getAttribute('aria-invalid'), null)
+
+    // Capture a list before creation, then deliver it after POST succeeds. It must not erase the new link.
+    const staleCreateRead = deferred(); readGate = staleCreateRead
+    const staleCreateCount = getCount + 1
+    await dialog.getByRole('button', { name: 'Làm mới', exact: true }).click(); await waitFor(() => getCount === staleCreateCount)
     createGate = deferred()
     await dialog.getByLabel(/Tên gợi nhớ/).fill('Bản gửi khách')
     await lifetimeSelect.selectOption('900')
     const create = dialog.locator('.preview-shares-submit')
     await create.click(); await create.dispatchEvent('click'); await waitFor(() => createCount === 1)
     assert.equal(await create.isDisabled(), true); createGate.resolve(); await dialog.getByText('Bản gửi khách', { exact: true }).waitFor()
+    createGate = undefined
     assert.equal(createCount, 1, 'double submit creates only one link')
+    staleCreateRead.resolve(); readGate = undefined
+    await page.waitForTimeout(100)
+    assert.equal(await dialog.locator('.preview-shares-active .preview-share-list > li').filter({ hasText: 'Bản gửi khách' }).count(), 1, 'a late pre-create list must not hide the created link')
     await dialog.locator('.preview-share-list > li').filter({ hasText: 'Bản gửi khách' }).getByRole('button', { name: 'Sao chép', exact: true }).click()
     await dialog.getByText(/Đã sao chép link Bản gửi khách/).waitFor()
     const popupPromise = context.waitForEvent('page')
     await dialog.locator('.preview-share-list > li').filter({ hasText: 'Bản gửi khách' }).getByRole('link', { name: 'Mở', exact: true }).click()
     const popup = await popupPromise; await popup.getByText('Shared fixture', { exact: true }).waitFor(); await popup.close()
 
+    // Refresh cannot start while a mutation is pending, even through a synthetic second click.
     revokeGate = deferred()
     const active = dialog.locator('.preview-shares-active .preview-share-list > li').filter({ hasText: 'Khách hàng' })
     const revoke = active.locator('.danger-button')
     await revoke.click(); await revoke.dispatchEvent('click'); await waitFor(() => revokeCount === 1)
-    assert.equal(await revoke.isDisabled(), true); revokeGate.resolve(); await active.waitFor({ state: 'detached' })
+    assert.equal(await revoke.isDisabled(), true)
+    const refresh = dialog.getByRole('button', { name: 'Làm mới', exact: true }), getWhileMutating = getCount
+    assert.equal(await refresh.isDisabled(), true, 'refresh is disabled while a revoke is pending')
+    await refresh.dispatchEvent('click'); await page.waitForTimeout(50)
+    assert.equal(getCount, getWhileMutating, 'refresh handler does not start a request while mutation is pending')
+    revokeGate.resolve(); revokeGate = undefined; await active.waitFor({ state: 'detached' })
     assert.equal(revokeCount, 1, 'double revoke sends only one mutation')
+
+    // Capture the created link as active, revoke it, then release the old list. It must stay closed.
+    const staleRevokeRead = deferred(); readGate = staleRevokeRead
+    const staleRevokeCount = getCount + 1
+    await refresh.click(); await waitFor(() => getCount === staleRevokeCount)
+    const created = dialog.locator('.preview-shares-active .preview-share-list > li').filter({ hasText: 'Bản gửi khách' })
+    await created.locator('.danger-button').click(); await waitFor(() => revokeCount === 2); await created.waitFor({ state: 'detached' })
+    staleRevokeRead.resolve(); readGate = undefined
+    await page.waitForTimeout(100)
+    assert.equal(await dialog.locator('.preview-shares-active .preview-share-list > li').filter({ hasText: 'Bản gửi khách' }).count(), 0, 'a late pre-revoke list must not restore the revoked link')
 
     await page.keyboard.press('Escape'); await dialog.waitFor({ state: 'detached' })
     await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Settings')
@@ -174,16 +213,17 @@ try {
     assert.equal(await transcript.evaluate(element => element.scrollTop), scrollBefore)
 
     // A request held past popup lifetime is aborted and cannot repaint a closed dialog.
-    readGate = deferred(); await openMenu(); await page.getByRole('button', { name: 'Link chia sẻ', exact: true }).click(); await waitFor(() => getCount === requestsAfterLoad + 1)
+    readGate = deferred(); const closeRequestCount = getCount + 1; await openMenu(); await page.getByRole('button', { name: 'Link chia sẻ', exact: true }).click(); await waitFor(() => getCount === closeRequestCount)
     await page.getByRole('button', { name: 'Đóng quản lý link chia sẻ', exact: true }).click(); readGate.resolve()
     await page.waitForTimeout(80); assert.equal(await page.getByRole('dialog', { name: 'Link chia sẻ', exact: true }).count(), 0)
     assert.deepEqual(errors, [])
     await context.close()
-    console.log(`PASS ${viewport.width}: encrypted lazy load, retry, create/copy/open/revoke, focus, draft and abort`)
+    console.log(`PASS ${viewport.width}${devMode ? ' dev StrictMode' : ''}: encrypted lazy load, stale-list create/revoke, retry, copy/open, focus, draft and abort`)
   }
-  console.log(JSON.stringify({ encryptedOwnerApi: true, realShares: 0, realModelTurns: 0, viewports: [1280, 390, 320] }))
+  console.log(JSON.stringify({ encryptedOwnerApi: true, strictModeDevelopment: devMode, realShares: 0, realModelTurns: 0, viewports: viewports.map(viewport => viewport.width) }))
 } finally {
   await browser?.close()
+  await vite?.close()
   secure?.close()
   if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
   await rm(root, { recursive: true, force: true })
