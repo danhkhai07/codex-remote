@@ -37,6 +37,7 @@ import { FileBrowser } from './FileBrowser'
 import { EventAssembler, shouldKeepEventStream } from './eventStream'
 import { scheduleHistorySync } from './historySync'
 import { TranscriptViewport, type ReadingPosition } from './TranscriptViewport'
+import { PreviewSharesDialog } from './PreviewSharesDialog'
 import { matchingSlashCommands, parseSlashCommand, slashCommands } from './slashCommands'
 import { clearConversationSnapshot, loadConversationSnapshot, saveConversationSnapshot } from './deviceCache'
 import {
@@ -165,6 +166,7 @@ function ThreadSidebar({
   groupsDisabled,
   onOpenContext,
   onOpenVault,
+  onOpenPreviewShares,
 }: {
   threads: Thread[]
   unreadCounts: Record<string, number>
@@ -189,6 +191,7 @@ function ThreadSidebar({
   groupsDisabled: boolean
   onOpenContext: (path: string) => void
   onOpenVault: (path: string) => void
+  onOpenPreviewShares: (trigger: HTMLElement) => void
 }) {
   const [query, setQuery] = useState('')
   const actionsRef = useRef<HTMLDetailsElement>(null)
@@ -265,6 +268,10 @@ function ThreadSidebar({
                 <span>Notifications</span>
                 <span className="notification-state">{notificationBusy ? 'Saving…' : notificationsEnabled ? 'On' : 'Off'}</span>
               </button>
+              <button className="quiet-button" type="button" onClick={event => {
+                actionsRef.current?.removeAttribute('open')
+                onOpenPreviewShares(actionsTrigger.current ?? event.currentTarget)
+              }}>Link chia sẻ</button>
               <button className="quiet-button" type="button" onClick={() => {
                 actionsRef.current?.removeAttribute('open')
                 onLock()
@@ -649,6 +656,8 @@ export function App() {
     setBrowserTargets(current => ({ ...current, [browserScope]: url }))
   }, [browserScope, setBrowserTargets])
   const [renamingThread, setRenamingThread] = useState<Thread | null>(null)
+  const [previewSharesOpen, setPreviewSharesOpen] = useState(false)
+  const previewSharesTrigger = useRef<HTMLElement | null>(null)
   const { counts: unreadCounts, refresh: refreshUnread, clear: clearUnread } = useUnreadMessages(
     threads,
     session && pageVisible && historyReady && thread?.id === selectedId && !drawerOpen &&
@@ -1825,6 +1834,7 @@ export function App() {
         groupsDisabled={!online || !session.csrf}
         onOpenContext={path => { setDrawerOpen(false); openFile({ path }) }}
         onOpenVault={path => { setDrawerOpen(false); setFileBrowserPath(path) }}
+        onOpenPreviewShares={trigger => { previewSharesTrigger.current = trigger; setPreviewSharesOpen(true) }}
       />
 
       <main className="workspace-shell">
@@ -2094,6 +2104,7 @@ export function App() {
         {fileViewer && <FileViewer key={fileViewer.path} reference={fileViewer} onClose={closeFileViewer} onOpenFile={setFileViewer} onOpenLink={openLink} />}
         {localhostPreview !== null && <LocalhostPreview key={browserScope} scope={browserScope} onNavigate={setLocalhostPreview} csrf={session.csrf} initialUrl={localhostPreview || undefined} onClose={closeLocalhostPreview} />}
         {renamingThread && <RenameConversation key={renamingThread.id} thread={renamingThread} online={online && Boolean(session.csrf)} onSave={renameConversation} onClose={closeRename} />}
+        {previewSharesOpen && <PreviewSharesDialog csrf={session.csrf} online={online} trigger={previewSharesTrigger.current} onClose={() => setPreviewSharesOpen(false)} />}
       </main>
     </div>
   )
