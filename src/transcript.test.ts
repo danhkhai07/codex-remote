@@ -65,6 +65,30 @@ describe('live conversation', () => {
     expect(conversationItems({ ...thread, turns: [{ id: 'turn', status: 'completed', items: completed }] }, completed)).toHaveLength(4)
   })
 
+  it('omits empty reasoning and internal placeholders without changing visible order or IDs', () => {
+    const stored = {
+      ...thread,
+      turns: [{ id: 'turn', status: 'completed', items: [
+        { id: 'user', type: 'userMessage', text: 'Question' },
+        { id: 'answer', type: 'agentMessage', text: 'Final answer' },
+        ...Array.from({ length: 12 }, (_, index) => ({ id: `reasoning-${index}`, type: 'reasoning', summary: [] })),
+        { id: 'compaction', type: 'contextCompaction' },
+        { id: 'unknown-empty', type: 'internalBookkeeping' },
+        { id: 'public-summary', type: 'reasoning', summary: [{ text: 'Published summary' }] },
+        { id: 'tool', type: 'commandExecution', command: 'npm test', status: 'completed' },
+        { id: 'mcp', type: 'mcpToolCall', status: 'completed' },
+      ] }],
+    }
+    const live: TranscriptItem[] = [
+      { id: 'answer', turnId: 'turn', type: 'agentMessage', text: 'Final answer' },
+      { id: 'late-empty', turnId: 'turn', type: 'reasoning', summary: [] },
+    ]
+
+    const visible = conversationItems(stored, live)
+    expect(visible.map(item => item.id)).toEqual(['user', 'answer', 'public-summary', 'tool', 'mcp'])
+    expect(visible.map(item => item.type)).toEqual(['userMessage', 'agentMessage', 'reasoning', 'commandExecution', 'mcpToolCall'])
+  })
+
   it('retains early output through more than 600 deltas and replaces completed snapshots', () => {
     let items = updateTranscript([], event('item/agentMessage/delta', { itemId: 'one', delta: 'Start ' }))
     for (let i = 0; i < 700; i++) items = updateTranscript(items, event('item/agentMessage/delta', { itemId: 'one', delta: 'x' }))

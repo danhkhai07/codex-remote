@@ -59,3 +59,19 @@ it('shows a native plan as readable Markdown without opening an activity disclos
   expect(html).toContain('<h1>Proposed plan</h1>')
   expect(html).not.toContain('activity-card')
 })
+
+it('does not render empty reasoning or internal placeholders after the final answer', () => {
+  const items: TranscriptItem[] = [
+    { id: 'answer', turnId: 'turn', type: 'agentMessage', text: 'Final answer' },
+    ...Array.from({ length: 12 }, (_, index): TranscriptItem => ({ id: `reasoning-${index}`, turnId: 'turn', type: 'reasoning', summary: [] })),
+    { id: 'compaction', turnId: 'turn', type: 'contextCompaction' },
+    { id: 'public-summary', turnId: 'turn', type: 'reasoning', summary: [{ text: 'Published summary' }] },
+  ]
+  const html = renderToStaticMarkup(<Conversation thread={thread} items={items} activeTurnId={null}
+    yoloMode={false} onSuggestion={() => {}} />)
+  expect(html).toContain('Final answer')
+  expect(html).toContain('Published summary')
+  expect(html.match(/Reasoning summary/g)).toHaveLength(1)
+  expect(html).not.toContain('contextCompaction')
+  expect(html).not.toContain('View details')
+})

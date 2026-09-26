@@ -38,6 +38,9 @@ try {
     await fd.write(item(`u${n}`, 'userMessage', n === 78 ? giantUser : `Question ${n}`))
     for (let k = 0; k < 2; k++) await fd.write(item(`tool${n}-${k}`, 'commandExecution', n === 79 && k === 1 ? giantTool : tool))
     await fd.write(item(`a${n}`, 'agentMessage', n === 78 ? giantAssistant : `Answer ${n}\n\n${'Readable fixture content. '.repeat(15)}`))
+    if (n === 79) {
+      for (let k = 0; k < 12; k++) await fd.write(event('agent_reasoning', { text: `synthetic-internal-${k}` }))
+    }
   }
   await fd.write(event('task_complete', { turn_id: 't' })); await fd.close()
   const originalSize = (await stat(sourcePath)).size, originalOrdinal = ordinals.get('window')
@@ -84,7 +87,7 @@ try {
   server.listen(0, '127.0.0.1'); await once(server, 'listening'); config.publicOrigin = new URL(`http://127.0.0.1:${server.address().port}`)
   browser = await chromium.launch({ headless: true })
   const results = []
-  for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 600 }]) {
+  for (const viewport of [{ width: 1280, height: 900 }, { width: 768, height: 800 }, { width: 390, height: 600 }]) {
     // Each fresh profile gets identical input. The previous profile's odd final
     // append otherwise shifts the twenty-message boundary by one message.
     await truncate(sourcePath, originalSize); ordinals.set('window', originalOrdinal); version = 1
@@ -106,6 +109,27 @@ try {
     await login()
     await unlock(); await page.getByText('Question 79', { exact: true }).waitFor()
     assert.equal(await page.locator('.conversation-stream article.message').count(), 20)
+    assert.equal(await page.getByText('Reasoning summary', { exact: true }).count(), 0, 'Cold history hides native reasoning bookkeeping')
+    for (let n = 0; n < 12; n++) controller.events.publish('codex', { method: 'item/completed', params: {
+      threadId: 'window', turnId: 'reasoning-live', item: { id: `reasoning-${viewport.width}-${n}`, type: 'reasoning', summary: [] },
+    } })
+    controller.events.publish('codex', { method: 'item/completed', params: {
+      threadId: 'window', turnId: 'reasoning-live', item: { id: `internal-${viewport.width}`, type: 'contextCompaction' },
+    } })
+    await page.waitForTimeout(200)
+    assert.equal(await page.getByText('Reasoning summary', { exact: true }).count(), 0, 'Empty SSE reasoning does not render cards')
+    assert.equal(await page.getByText('View details', { exact: true }).count(), 0, 'Internal SSE metadata does not render fallback cards')
+    controller.events.publish('codex', { method: 'item/completed', params: {
+      threadId: 'window', turnId: 'reasoning-live', item: { id: `public-${viewport.width}`, type: 'reasoning', summary: [{ text: 'Published summary fixture' }] },
+    } })
+    await page.locator('.activity-card').filter({ hasText: 'Published summary fixture' }).waitFor()
+    assert.equal(await page.getByText('Reasoning summary', { exact: true }).count(), 1, 'A nonempty public summary remains available')
+    await composer.fill('Reasoning fixture draft')
+    await select('Other fixture'); await page.getByText('Other cached answer', { exact: true }).waitFor()
+    await select('History window fixture'); await page.locator('.activity-card').filter({ hasText: 'Published summary fixture' }).waitFor()
+    assert.equal(await page.getByText('Reasoning summary', { exact: true }).count(), 1, 'Warm reopen does not restore empty placeholders')
+    assert.equal(await composer.inputValue(), 'Reasoning fixture draft')
+    if (process.env.HISTORY_SCREENSHOTS) { await mkdir(process.env.HISTORY_SCREENSHOTS, { recursive: true }); await page.screenshot({ path: join(process.env.HISTORY_SCREENSHOTS, `reasoning-summary-${viewport.width}.png`) }) }
     assert(controller.historyPages.source.metrics.malformedRecords > 0)
     const detailCard = page.locator('.activity-card.has-history-detail').last()
     await detailCard.waitFor()
@@ -266,7 +290,7 @@ try {
     releaseDetail(); await page.getByLabel('Khóa mã hóa riêng', { exact: true }).waitFor()
     assert.equal(await page.locator('.conversation-stream').count(), 0)
     assert.deepEqual(errors, [])
-    results.push({ viewport, collapsedDetailRequests: 0, clippedUserAndAssistantDetails: true, disclosureLoadsTarget: true, collapseAbortsLatePaint: true, cachedReopen: true, backwardsRetryChain: true, repeatedRetryStable: true, inlineErrorRetry: true, boundedDetailChunks: true, detailSwitchAndLockDenied: true, oldDetailButtonAbsent: true, frozenBottomRetainsLatest: true, pointerRestoresSameSse: true, pausedLatestRefresh: true, deep240Eviction: true, anchorPreserved: true, noAutoDrain: true, keyboardEnd: true, draftPreserved: true, staleSwitchAndLockDenied: true, cookieOnlyDenied: true })
+    results.push({ viewport, coldReasoningHidden: true, emptySseReasoningHidden: true, publicSummaryPreserved: true, reasoningWarmReopen: true, collapsedDetailRequests: 0, clippedUserAndAssistantDetails: true, disclosureLoadsTarget: true, collapseAbortsLatePaint: true, cachedReopen: true, backwardsRetryChain: true, repeatedRetryStable: true, inlineErrorRetry: true, boundedDetailChunks: true, detailSwitchAndLockDenied: true, oldDetailButtonAbsent: true, frozenBottomRetainsLatest: true, pointerRestoresSameSse: true, pausedLatestRefresh: true, deep240Eviction: true, anchorPreserved: true, noAutoDrain: true, keyboardEnd: true, draftPreserved: true, staleSwitchAndLockDenied: true, cookieOnlyDenied: true })
     await context.close()
   }
   assert(!calls.some(c => c.method === 'turn/start' || c.method === 'thread/items/list' || c.includeTurns === true))

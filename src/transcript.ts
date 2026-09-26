@@ -1,8 +1,26 @@
 import type { RemoteEvent, Thread, ThreadItem } from './types'
-import { eventMethod, eventTurnId } from './model'
+import { commandText, eventMethod, eventTurnId, itemText } from './model'
 import { limitItems, MAX_CONVERSATION_BYTES } from '../server/conversation-size'
 
 export type TranscriptItem = ThreadItem & { turnId: string; streaming?: boolean }
+
+const INTERNAL_ITEM_TYPES = new Set(['contextcompaction', 'enteredreviewmode', 'exitedreviewmode'])
+const PUBLIC_ACTIVITY_TYPES = new Set([
+  'commandexecution', 'filechange', 'mcptoolcall', 'websearch', 'historytools',
+  'dynamictoolcall', 'collabagenttoolcall', 'subagentactivity', 'extension',
+  'functioncalloutput', 'hookprompt',
+])
+
+/** Keep private bookkeeping out of the conversation without discarding source data. */
+export function isVisibleTranscriptItem(item: ThreadItem): boolean {
+  const type = String(item.type ?? '').toLocaleLowerCase()
+  if (['usermessage', 'agentmessage', 'plan'].includes(type)) return true
+  if (type === 'reasoning') return Boolean(itemText(item).trim())
+  if (INTERNAL_ITEM_TYPES.has(type)) return false
+  if (itemText(item).trim() || commandText(item).trim() || (Array.isArray(item.changes) && item.changes.length > 0)) return true
+  if (typeof item.historyDetail === 'string' && item.historyDetail) return true
+  return PUBLIC_ACTIVITY_TYPES.has(type)
+}
 
 /** Completed server history supersedes partial deltas cached before a disconnect. */
 export function reconcileTranscript(items: TranscriptItem[], thread: Thread): TranscriptItem[] {
@@ -54,9 +72,10 @@ export function conversationItems(thread: Thread, live: TranscriptItem[]): Trans
     const storedIds = new Set(stored.map(item => item.id))
     for (const item of stored) {
       const current = byId.get(item.id)
-      result.push(current ?? { ...item, turnId })
+      const selected = current ?? { ...item, turnId }
+      if (isVisibleTranscriptItem(selected)) result.push(selected)
     }
-    result.push(...updates.filter(item => !storedIds.has(item.id)))
+    result.push(...updates.filter(item => !storedIds.has(item.id) && isVisibleTranscriptItem(item)))
   }
   return limitItems(thread.historyWindow ? result.slice(-240) : result, MAX_CONVERSATION_BYTES).items
 }
