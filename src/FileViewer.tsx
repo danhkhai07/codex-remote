@@ -7,6 +7,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { api, ApiError, serverFileUrl } from './api'
 import { parseLocalFileReference, type LocalFileReference, type WebLinkReference } from './MarkdownMessage'
+import { MarkdownTable } from './MarkdownTable'
 import type { ServerFileInfo } from './types'
 import { SvgPreview } from './SvgPreview'
 import { DocxPreview } from './DocxPreview'
@@ -124,6 +125,7 @@ function MarkdownPreview({ text, currentPath, onOpenFile, onOpenLink }: {
       remarkPlugins={[remarkGfm]}
       skipHtml
       components={{
+        table: MarkdownTable,
         a: ({ children, href, title }) => {
           const localFile = resolveMarkdownFileReference(href, currentPath)
           const external = Boolean(href?.startsWith('https://') || href?.startsWith('http://'))

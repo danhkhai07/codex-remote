@@ -1,6 +1,7 @@
 import { fileViewerReference, fileViewerUrl, regularLinkClick } from './fileViewerLink'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { MarkdownTable } from './MarkdownTable'
 
 export type LocalFileReference = { path: string; line?: number }
 export type WebLinkReference = { url: string; label?: string }
@@ -73,6 +74,7 @@ export function MarkdownMessage({ children, streaming = false, onOpenFile, onOpe
         remarkPlugins={[remarkGfm]}
         skipHtml
         components={{
+          table: MarkdownTable,
           a: ({ children: linkChildren, href, title }) => {
             const internalPage = Boolean(href && /^\/(?:knowledge|services|working-hours|workboard|preview)(?:[/?#]|$)/.test(href))
             const external = href?.startsWith('http://') || href?.startsWith('https://')
