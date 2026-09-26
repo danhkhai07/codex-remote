@@ -49,8 +49,8 @@ try {
   const reset = () => {
     const now = Date.now()
     links = [
-      { id: 'active', label: 'Khách hàng', serviceName: 'Website demo', port: 4173, path: '/demo', createdAt: new Date(now - 60_000).toISOString(), expiresAt: new Date(now + 3_600_000).toISOString(), revokedAt: null, status: 'active', url: 'https://share.fixture.test/s/active#secret' },
-      { id: 'expired', label: 'Bản cũ', serviceName: 'Website demo', port: 4173, path: '/', createdAt: new Date(now - 7_200_000).toISOString(), expiresAt: new Date(now - 3_600_000).toISOString(), revokedAt: null, status: 'expired' },
+      { id: 'active', label: 'Client', serviceName: 'Website demo', port: 4173, path: '/demo', createdAt: new Date(now - 60_000).toISOString(), expiresAt: new Date(now + 3_600_000).toISOString(), revokedAt: null, status: 'active', url: 'https://share.fixture.test/s/active#secret' },
+      { id: 'expired', label: 'Older link', serviceName: 'Website demo', port: 4173, path: '/', createdAt: new Date(now - 7_200_000).toISOString(), expiresAt: new Date(now - 3_600_000).toISOString(), revokedAt: null, status: 'expired' },
     ]
     failNextGet = true; getCount = 0; createCount = 0; revokeCount = 0; createGate = undefined; revokeGate = undefined; readGate = undefined
   }
@@ -70,7 +70,7 @@ try {
       const captured = { links: structuredClone(links), services: structuredClone(services), serverNow: new Date().toISOString() }
       if (readGate) await readGate.promise
       if (res.destroyed) return
-      if (failNextGet) { failNextGet = false; return json(res, 503, { error: 'Không tải được fixture' }) }
+      if (failNextGet) { failNextGet = false; return json(res, 503, { error: 'Unable to load fixture' }) }
       return json(res, 200, captured)
     }
     if (url.pathname === '/api/preview-shares' && method === 'POST') {
@@ -139,26 +139,27 @@ try {
     }
 
     assert.equal(getCount, 0, 'collapsed gear menu must not load private share data')
-    await openMenu(); await page.getByRole('button', { name: 'Link chia sẻ', exact: true }).click()
-    const dialog = page.getByRole('dialog', { name: 'Link chia sẻ', exact: true }); await dialog.waitFor()
-    await dialog.getByRole('alert').filter({ hasText: 'Không tải được fixture' }).waitFor()
-    await dialog.getByRole('button', { name: 'Thử lại', exact: true }).click()
+    await openMenu(); await page.getByRole('button', { name: 'Share links', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: 'Share links', exact: true }); await dialog.waitFor()
+    await dialog.getByRole('alert').filter({ hasText: 'Unable to load fixture' }).waitFor()
+    await dialog.getByRole('button', { name: 'Retry', exact: true }).click()
     const serviceSelect = dialog.locator('select').nth(0), lifetimeSelect = dialog.locator('select').nth(1)
     try { await serviceSelect.waitFor() } catch (error) { console.error(JSON.stringify({ stage: 'shares-retry', getCount, body: await dialog.innerText(), errors })); throw error }
     assert.equal(await serviceSelect.inputValue(), '4173')
     assert.equal(await lifetimeSelect.inputValue(), '3600')
-    assert.equal(await dialog.getByRole('button', { name: 'Ngắt chia sẻ', exact: true }).count(), 1)
+    assert.equal(await dialog.getByRole('button', { name: 'Revoke', exact: true }).count(), 1)
     const history = dialog.locator('.preview-shares-history'); assert.equal(await history.getAttribute('open'), null)
-    assert.equal(await history.getByText('Bản cũ', { exact: true }).isVisible(), false)
+    assert.equal(await history.getByText('Older link', { exact: true }).isVisible(), false)
+    assert.doesNotMatch(await dialog.innerText(), /Link chia sẻ|Tạo link|Dịch vụ|Thời hạn|Tên gợi nhớ|Đường dẫn|Đang chia sẻ|Sao chép|Ngắt chia sẻ|Hết hạn|Lịch sử đã đóng/)
     const requestsAfterLoad = getCount; await page.waitForTimeout(120); assert.equal(getCount, requestsAfterLoad, 'clock must not poll the API')
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), false)
     if (screenshots) await page.screenshot({ path: join(screenshots, `preview-shares-${viewport.width}.png`), fullPage: true })
 
     await dialog.locator('.preview-shares-options > summary').click()
-    const pathInput = dialog.getByLabel('Đường dẫn ban đầu', { exact: true })
+    const pathInput = dialog.getByLabel('Initial path', { exact: true })
     await pathInput.fill('/' + 'đ'.repeat(512))
     assert.equal(await pathInput.getAttribute('aria-invalid'), 'true')
-    assert.match(await dialog.locator('#preview-share-path-help').innerText(), /1[.,]025 \/ 1[.,]024 byte UTF-8/)
+    assert.match(await dialog.locator('#preview-share-path-help').innerText(), /1[.,]025 \/ 1[.,]024 UTF-8 bytes/)
     assert.equal(await dialog.locator('.preview-shares-submit').isDisabled(), true)
     await pathInput.fill('/demo')
     assert.equal(await pathInput.getAttribute('aria-invalid'), null)
@@ -166,31 +167,31 @@ try {
     // Capture a list before creation, then deliver it after POST succeeds. It must not erase the new link.
     const staleCreateRead = deferred(); readGate = staleCreateRead
     const staleCreateCount = getCount + 1
-    await dialog.getByRole('button', { name: 'Làm mới', exact: true }).click(); await waitFor(() => getCount === staleCreateCount)
+    await dialog.getByRole('button', { name: 'Refresh', exact: true }).click(); await waitFor(() => getCount === staleCreateCount)
     createGate = deferred()
-    await dialog.getByLabel(/Tên gợi nhớ/).fill('Bản gửi khách')
+    await dialog.getByLabel('Label', { exact: true }).fill('Client handoff')
     await lifetimeSelect.selectOption('900')
     const create = dialog.locator('.preview-shares-submit')
     await create.click(); await create.dispatchEvent('click'); await waitFor(() => createCount === 1)
-    assert.equal(await create.isDisabled(), true); createGate.resolve(); await dialog.getByText('Bản gửi khách', { exact: true }).waitFor()
+    assert.equal(await create.isDisabled(), true); createGate.resolve(); await dialog.getByText('Client handoff', { exact: true }).waitFor()
     createGate = undefined
     assert.equal(createCount, 1, 'double submit creates only one link')
     staleCreateRead.resolve(); readGate = undefined
     await page.waitForTimeout(100)
-    assert.equal(await dialog.locator('.preview-shares-active .preview-share-list > li').filter({ hasText: 'Bản gửi khách' }).count(), 1, 'a late pre-create list must not hide the created link')
-    await dialog.locator('.preview-share-list > li').filter({ hasText: 'Bản gửi khách' }).getByRole('button', { name: 'Sao chép', exact: true }).click()
-    await dialog.getByText(/Đã sao chép link Bản gửi khách/).waitFor()
+    assert.equal(await dialog.locator('.preview-shares-active .preview-share-list > li').filter({ hasText: 'Client handoff' }).count(), 1, 'a late pre-create list must not hide the created link')
+    await dialog.locator('.preview-share-list > li').filter({ hasText: 'Client handoff' }).getByRole('button', { name: 'Copy', exact: true }).click()
+    await dialog.getByText(/Copied link for Client handoff/).waitFor()
     const popupPromise = context.waitForEvent('page')
-    await dialog.locator('.preview-share-list > li').filter({ hasText: 'Bản gửi khách' }).getByRole('link', { name: 'Mở', exact: true }).click()
+    await dialog.locator('.preview-share-list > li').filter({ hasText: 'Client handoff' }).getByRole('link', { name: 'Open', exact: true }).click()
     const popup = await popupPromise; await popup.getByText('Shared fixture', { exact: true }).waitFor(); await popup.close()
 
     // Refresh cannot start while a mutation is pending, even through a synthetic second click.
     revokeGate = deferred()
-    const active = dialog.locator('.preview-shares-active .preview-share-list > li').filter({ hasText: 'Khách hàng' })
+    const active = dialog.locator('.preview-shares-active').getByText('Client', { exact: true }).locator('..').locator('..')
     const revoke = active.locator('.danger-button')
     await revoke.click(); await revoke.dispatchEvent('click'); await waitFor(() => revokeCount === 1)
     assert.equal(await revoke.isDisabled(), true)
-    const refresh = dialog.getByRole('button', { name: 'Làm mới', exact: true }), getWhileMutating = getCount
+    const refresh = dialog.getByRole('button', { name: 'Refresh', exact: true }), getWhileMutating = getCount
     assert.equal(await refresh.isDisabled(), true, 'refresh is disabled while a revoke is pending')
     await refresh.dispatchEvent('click'); await page.waitForTimeout(50)
     assert.equal(getCount, getWhileMutating, 'refresh handler does not start a request while mutation is pending')
@@ -201,11 +202,11 @@ try {
     const staleRevokeRead = deferred(); readGate = staleRevokeRead
     const staleRevokeCount = getCount + 1
     await refresh.click(); await waitFor(() => getCount === staleRevokeCount)
-    const created = dialog.locator('.preview-shares-active .preview-share-list > li').filter({ hasText: 'Bản gửi khách' })
+    const created = dialog.locator('.preview-shares-active .preview-share-list > li').filter({ hasText: 'Client handoff' })
     await created.locator('.danger-button').click(); await waitFor(() => revokeCount === 2); await created.waitFor({ state: 'detached' })
     staleRevokeRead.resolve(); readGate = undefined
     await page.waitForTimeout(100)
-    assert.equal(await dialog.locator('.preview-shares-active .preview-share-list > li').filter({ hasText: 'Bản gửi khách' }).count(), 0, 'a late pre-revoke list must not restore the revoked link')
+    assert.equal(await dialog.locator('.preview-shares-active .preview-share-list > li').filter({ hasText: 'Client handoff' }).count(), 0, 'a late pre-revoke list must not restore the revoked link')
 
     await page.keyboard.press('Escape'); await dialog.waitFor({ state: 'detached' })
     await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Settings')
@@ -213,9 +214,9 @@ try {
     assert.equal(await transcript.evaluate(element => element.scrollTop), scrollBefore)
 
     // A request held past popup lifetime is aborted and cannot repaint a closed dialog.
-    readGate = deferred(); const closeRequestCount = getCount + 1; await openMenu(); await page.getByRole('button', { name: 'Link chia sẻ', exact: true }).click(); await waitFor(() => getCount === closeRequestCount)
-    await page.getByRole('button', { name: 'Đóng quản lý link chia sẻ', exact: true }).click(); readGate.resolve()
-    await page.waitForTimeout(80); assert.equal(await page.getByRole('dialog', { name: 'Link chia sẻ', exact: true }).count(), 0)
+    readGate = deferred(); const closeRequestCount = getCount + 1; await openMenu(); await page.getByRole('button', { name: 'Share links', exact: true }).click(); await waitFor(() => getCount === closeRequestCount)
+    await page.getByRole('button', { name: 'Close share links', exact: true }).click(); readGate.resolve()
+    await page.waitForTimeout(80); assert.equal(await page.getByRole('dialog', { name: 'Share links', exact: true }).count(), 0)
     assert.deepEqual(errors, [])
     await context.close()
     console.log(`PASS ${viewport.width}${devMode ? ' dev StrictMode' : ''}: encrypted lazy load, stale-list create/revoke, retry, copy/open, focus, draft and abort`)

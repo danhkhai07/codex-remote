@@ -80,16 +80,16 @@ try {
     await page.getByRole('button', { name: 'Mở khóa', exact: true }).click()
     try { await page.locator('#instruction').waitFor() } catch (e) { console.error(JSON.stringify({ body: await page.locator('body').innerText(), nativeReads, errors })); throw e };  await page.locator('#instruction').fill('Draft preserved')
     const openMenu = async () => { if (width < 800 && !await page.locator('.thread-sidebar').evaluate(e => e.classList.contains('is-open'))) await page.getByRole('button', { name: 'Open conversations', exact: true }).click(); await page.getByLabel('Settings', { exact: true }).click() }
-    await openMenu(); await page.getByRole('button', { name: 'Link chia sẻ', exact: true }).click()
-    const dialog = page.getByRole('dialog', { name: 'Link chia sẻ', exact: true }); await dialog.waitFor()
-    await dialog.getByLabel('Dịch vụ', { exact: true }).selectOption(String(appPort))
+    await openMenu(); await page.getByRole('button', { name: 'Share links', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: 'Share links', exact: true }); await dialog.waitFor()
+    await dialog.getByLabel('Service', { exact: true }).selectOption(String(appPort))
     const label = `Review ${engine} ${width}`
-    await dialog.getByLabel(/Tên gợi nhớ/).fill(label); await dialog.getByRole('button', { name: 'Tạo link chia sẻ', exact: true }).click()
+    await dialog.getByLabel('Label', { exact: true }).fill(label); await dialog.getByRole('button', { name: 'Create share link', exact: true }).click()
     const row = dialog.locator('.preview-shares-active li').filter({ hasText: label }); await row.waitFor()
-    await row.getByRole('button', { name: 'Sao chép', exact: true }).click(); await dialog.getByRole('status').filter({ hasText: 'Đã sao chép' }).waitFor()
-    const link = await row.getByRole('link', { name: 'Mở', exact: true }).getAttribute('href')
+    await row.getByRole('button', { name: 'Copy', exact: true }).click(); await dialog.getByRole('status').filter({ hasText: 'Copied link' }).waitFor()
+    const link = await row.getByRole('link', { name: 'Open', exact: true }).getAttribute('href')
     if (engine === 'chromium') assert.equal(await page.evaluate(() => navigator.clipboard.readText()), link)
-    const tabWait = context.waitForEvent('page'); await row.getByRole('link', { name: 'Mở', exact: true }).click(); const tab = await tabWait
+    const tabWait = context.waitForEvent('page'); await row.getByRole('link', { name: 'Open', exact: true }).click(); const tab = await tabWait
     await tab.getByRole('heading', { name: 'Shared app opened' }).waitFor(); await tab.close()
     const recipient = await browser.newContext({ viewport: { width, height: 700 }, ignoreHTTPSErrors: true }), target = await recipient.newPage()
     assert.equal((await recipient.cookies()).length, 0)
@@ -99,7 +99,7 @@ try {
     const screenshots = process.env.SHARE_SCREENSHOTS
     if (screenshots) { mkdirSync(screenshots, { recursive: true }); await page.screenshot({ path: join(screenshots, `${engine}-owner-${width}.png`) }); await target.screenshot({ path: join(screenshots, `${engine}-recipient-${width}.png`) }) }
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), false)
-    await row.getByRole('button', { name: 'Ngắt chia sẻ', exact: true }).click(); await row.waitFor({ state: 'detached' })
+    await row.getByRole('button', { name: 'Revoke', exact: true }).click(); await row.waitFor({ state: 'detached' })
     assert.equal((await target.reload()).status(), 401)
     // Real server expiry, short TTL through encrypted owner API; all state is under the temp root.
     const short = (await ownerApi('/api/preview-shares', 'POST', { port: appPort, ttlSeconds: 2, label: 'Expiry fixture' })).link

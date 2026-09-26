@@ -1,10 +1,10 @@
 import type { PreviewShare } from './api'
 
 export const PREVIEW_SHARE_LIFETIMES = [
-  { seconds: 15 * 60, label: '15 phút' },
-  { seconds: 60 * 60, label: '1 giờ' },
-  { seconds: 6 * 60 * 60, label: '6 giờ' },
-  { seconds: 24 * 60 * 60, label: '24 giờ' },
+  { seconds: 15 * 60, label: '15 minutes' },
+  { seconds: 60 * 60, label: '1 hour' },
+  { seconds: 6 * 60 * 60, label: '6 hours' },
+  { seconds: 24 * 60 * 60, label: '24 hours' },
 ] as const
 export const PREVIEW_SHARE_PATH_MAX_BYTES = 1024
 
@@ -29,16 +29,18 @@ export function previewShareIsActive(link: PreviewShare, now: number) {
 
 export function previewShareTimeLeft(expiresAt: string, now: number) {
   const milliseconds = Date.parse(expiresAt) - now
-  if (!Number.isFinite(milliseconds) || milliseconds <= 0) return 'Đã hết hạn'
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) return 'Expired'
   const minutes = Math.max(1, Math.ceil(milliseconds / 60_000))
-  if (minutes < 60) return `Còn ${minutes} phút`
+  if (minutes < 60) return `${minutes} ${minutes === 1 ? 'minute' : 'minutes'} left`
   const hours = Math.floor(minutes / 60), remainder = minutes % 60
-  return remainder ? `Còn ${hours} giờ ${remainder} phút` : `Còn ${hours} giờ`
+  const hoursLabel = `${hours} ${hours === 1 ? 'hour' : 'hours'}`
+  const minutesLabel = `${remainder} ${remainder === 1 ? 'minute' : 'minutes'}`
+  return remainder ? `${hoursLabel} ${minutesLabel} left` : `${hoursLabel} left`
 }
 
 export function previewShareStatusLabel(link: PreviewShare, now: number) {
-  if (link.status === 'revoked') return 'Đã ngắt'
-  if (link.status === 'unavailable') return 'Dịch vụ không khả dụng'
-  if (!previewShareIsActive(link, now)) return 'Đã hết hạn'
+  if (link.status === 'revoked') return 'Revoked'
+  if (link.status === 'unavailable') return 'Service unavailable'
+  if (!previewShareIsActive(link, now)) return 'Expired'
   return previewShareTimeLeft(link.expiresAt, now)
 }

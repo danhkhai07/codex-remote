@@ -271,7 +271,7 @@ function ThreadSidebar({
               <button className="quiet-button" type="button" onClick={event => {
                 actionsRef.current?.removeAttribute('open')
                 onOpenPreviewShares(actionsTrigger.current ?? event.currentTarget)
-              }}>Link chia sẻ</button>
+              }}>Share links</button>
               <button className="quiet-button" type="button" onClick={() => {
                 actionsRef.current?.removeAttribute('open')
                 onLock()
