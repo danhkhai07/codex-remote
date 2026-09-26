@@ -1,0 +1,67 @@
+{
+  "base": "177e812c2f9b441f201bbdba365a252fdba63cf3",
+  "backend": "5b7f4765a19291640830e7dd443461c53009b3ea",
+  "ui": "a1d6f0f508934d31cfdb502a2e8e0c90b874bb65",
+  "mergedSource": "bad178de4abb98da0be1e6166894670ff29ad538",
+  "mergeConflicts": false,
+  "semanticDeltaFromPair": false,
+  "productFiles": {
+    "server/config.ts": {
+      "commit": "5b7f4765a19291640830e7dd443461c53009b3ea",
+      "sha256": "7c9e3d6ababe592d0aed84cccd3c42b434d532b30ed5da2bae54302a898c0771"
+    },
+    "server/http-app.ts": {
+      "commit": "5b7f4765a19291640830e7dd443461c53009b3ea",
+      "sha256": "ebe6a3dd50944b6267a3d905101f106d6c6d40cf8ec9d8c773a014c92d269da3"
+    },
+    "server/localhost-preview.ts": {
+      "commit": "5b7f4765a19291640830e7dd443461c53009b3ea",
+      "sha256": "135a8d0d6cec5b89cd418daf6a248bc3b8d66c203517f88559945c8cc2920547"
+    },
+    "server/preview-share-page.ts": {
+      "commit": "5b7f4765a19291640830e7dd443461c53009b3ea",
+      "sha256": "276f3e281d64e2076db82fd51a8d0c2ddec634ca6ee5e19f25b7e6c4306ee894"
+    },
+    "server/preview-shares.ts": {
+      "commit": "5b7f4765a19291640830e7dd443461c53009b3ea",
+      "sha256": "f373a1d58d3006bedc884d5853deaacee39b2525703aa53e65835ed2aea85a32"
+    },
+    "server/services.ts": {
+      "commit": "5b7f4765a19291640830e7dd443461c53009b3ea",
+      "sha256": "b113aceff4dbf15d502bbc90fac3b3109174284a82e33a1b8534e40b9ddc0adf"
+    },
+    "src/App.tsx": {
+      "commit": "a1d6f0f508934d31cfdb502a2e8e0c90b874bb65",
+      "sha256": "8c26e56ab41ee41975a3601a387efb85061a2c6c28c0e2aa46cf6c01062af396"
+    },
+    "src/PreviewSharesDialog.tsx": {
+      "commit": "a1d6f0f508934d31cfdb502a2e8e0c90b874bb65",
+      "sha256": "5cff80f9e71e5487f415dde5668b25d97798df26ce20703fe11b25bd652a681e"
+    },
+    "src/api.ts": {
+      "commit": "a1d6f0f508934d31cfdb502a2e8e0c90b874bb65",
+      "sha256": "d1078af73f8bd544dda200f9cc1386e19761403f1ca8eecf9e79ce9b676c5c5d"
+    },
+    "src/previewShares.ts": {
+      "commit": "a1d6f0f508934d31cfdb502a2e8e0c90b874bb65",
+      "sha256": "dbfca764edd1dcbbd6131ddf721a5d9869e9bb05f9fe3b89ce95d45a1025a9f3"
+    },
+    "src/styles.css": {
+      "commit": "a1d6f0f508934d31cfdb502a2e8e0c90b874bb65",
+      "sha256": "55ea1453ed724be22b276ecac055f79cbb748026ab36b469e2009ee199f19556"
+    }
+  },
+  "preservedFiles": {
+    "public/sw.js": "9ad9451e7533fd8b0f3d0b11691a43216aef0da43b1aae1eef985d5c26a21316",
+    "server/secure-api.ts": "4f000a98efc3564db9794269b84ff507315312139030d9e7f00b304a76af52cc",
+    "server/secure-response.ts": "32e1385f43d683ec1d88fdfe2ca2eb3fd4626fbd130caca833f1abd914b460da",
+    "server/preview-cache.ts": "2738f754d2db2689c209dd52586ff3c198bf912172d6788b58623d0bce95504e",
+    "server/work-hours.ts": "b9bd2803acafb294ca07e4c050e94d7b0ed1ad370309b219e696a4d53af0e42e",
+    "src/LocalhostPreview.tsx": "59c2c883c13939fd95f8c78dccbee25c53771843d072158742ca8abbe3025f02",
+    "src/TranscriptViewport.tsx": "0e15f8b512f72e851b7954e811efd320e98d3cfbba7a85dba53da711d6354b4e",
+    "src/FileViewer.tsx": "93b67c9d488f8a7dcd12987ade393516d00aba46d284d831b7df3656b9664986",
+    "package-lock.json": "69edca67f6da0ca9c5c52a75c9000be52fed0b1b69e49ca8275b7e6e0db8d7a4"
+  },
+  "reviewProductEdits": [],
+  "scope": "Source acceptance only; runner/combined fullcheck and fresh deployment baseline are separate integration work."
+}
