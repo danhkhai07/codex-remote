@@ -5,6 +5,8 @@ import { SecureApi } from './secure-api.js'
 import { requestIp } from './request-ip.js'
 import { SessionRegistry } from './session-registry.js'
 import { LocalhostPreview, LocalhostPreviewError } from './localhost-preview.js'
+import { PreviewShares, PreviewShareError } from './preview-shares.js'
+import { publicShareRequest, SHARE_EXCHANGE } from './preview-share-page.js'
 import { ServiceError, type ServicesStore } from './services.js'
 import { ContextVaultError } from './context-vault.js'
 import { KnowledgeError } from './vault-files.js'
@@ -14,7 +16,7 @@ import { HoursError, type WorkHoursStore } from './work-hours.js'
 import type { WorkPresence } from './work-presence.js'
 import { createReadStream, promises as fs } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { extname, resolve, sep } from 'node:path'
+import { dirname, extname, resolve, sep } from 'node:path'
 import type { ViteDevServer } from 'vite'
 import {
   clearSessionCookie,
@@ -206,12 +208,16 @@ export function createRemoteHttpServer(
   const headers = securityHeaders(config)
   const sessions = new SessionRegistry(config.sessionSecret, config.sessionStateFile, config.password)
   const secureCookie = config.publicOrigin.protocol === 'https:'
+  const shares = services ? new PreviewShares({ services, secret: config.sessionSecret, publicOrigin: config.publicOrigin.origin,
+    originTemplate: config.previewOriginTemplate, ports: config.previewSharePorts ?? [], blockedPorts: [config.port, Number(config.publicOrigin.port || (secureCookie ? 443 : 80))],
+    file: config.previewShareStateFile ?? (config.sessionStateFile ? resolve(dirname(config.sessionStateFile), 'preview-shares.json') : undefined) }) : undefined
 
   const preview = new LocalhostPreview({
     publicOrigin: config.publicOrigin.origin,
     originTemplate: config.previewOriginTemplate,
     sessionSecret: config.sessionSecret,
     sessions,
+    shares,
     blockedPorts: [config.port, Number(config.publicOrigin.port || (secureCookie ? 443 : 80))],
   })
   if (preview?.matchesHost(config.publicOrigin.host)) throw new Error('Preview apps must use a separate origin from Codex Remote')
@@ -349,6 +355,15 @@ export function createRemoteHttpServer(
           else { const body = await readJson(req); live(); json(res, 200, { service: services.upsert(body) }) }
         } catch (error) { if (error instanceof ServiceError) throw new HttpError(error.status, error.message); throw error }
         return
+      }
+
+      if (url.pathname === '/api/preview-shares' || url.pathname.startsWith('/api/preview-shares/')) {
+        if (!shares) throw new HttpError(503, 'Preview sharing needs a service registry')
+        if (url.pathname === '/api/preview-shares' && method === 'GET') { const result = await shares.list(live); live(); json(res, 200, result); return }
+        if (url.pathname === '/api/preview-shares' && method === 'POST') { const body = await readJson(req, 12_000); live(); json(res, 201, { link: shares.create(body) }); return }
+        const id = url.pathname.match(/^\/api\/preview-shares\/([a-f0-9-]{36})$/)?.[1]
+        if (id && method === 'DELETE') { live(); shares.revoke(id); json(res, 200, { ok: true }); return }
+        throw new HttpError(405, 'Invalid preview share operation')
       }
       if (url.pathname === '/api/localhost-preview' && method === 'GET') {
         json(res, 200, { enabled: preview.enabled })
@@ -682,7 +697,7 @@ export function createRemoteHttpServer(
         res.destroy(error instanceof Error ? error : undefined)
         return
       }
-      const status = error instanceof HttpError || error instanceof AttachmentError || error instanceof ServerFileError || error instanceof ThreadNameError || error instanceof ContextVaultError || error instanceof KnowledgeError || error instanceof LocalhostPreviewError ? error.status : 500
+      const status = error instanceof HttpError || error instanceof AttachmentError || error instanceof ServerFileError || error instanceof ThreadNameError || error instanceof ContextVaultError || error instanceof KnowledgeError || error instanceof LocalhostPreviewError || error instanceof PreviewShareError ? error.status : 500
       const message = error instanceof Error ? error.message : 'Unexpected server error'
       json(res, status, { error: status === 500 ? 'Unexpected server error' : message })
       if (status === 500) {
@@ -697,6 +712,7 @@ export function createRemoteHttpServer(
     if (secureCookie) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
     if (!isAllowedHost(req, config)) { json(res, 400, { error: 'Unrecognized host' }); return }
     const path = new URL(req.url ?? '/', config.publicOrigin).pathname
+    if (path === '/preview/share' || path === SHARE_EXCHANGE) { await publicShareRequest(req, res, config.publicOrigin.origin, shares); return }
     if (req.method === 'GET' && ['/secure-viewer', '/secure-docx-frame'].includes(path)) {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': path === '/secure-viewer' ? SECURE_VIEWER_CSP : DOCX_FRAME_CSP, 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'SAMEORIGIN' })
       res.end(path === '/secure-viewer' ? SECURE_VIEWER_HTML : DOCX_FRAME_HTML); return
@@ -709,6 +725,7 @@ export function createRemoteHttpServer(
     await dispatch(req, res)
   })
   server.on('close', () => secure?.close())
+  server.on('close', () => shares?.close())
   if (preview) {
     server.on('upgrade', (req, socket, head) => {
       if (preview.matchesHost(req.headers.host)) preview.handleUpgrade(req, socket, head)

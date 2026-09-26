@@ -3,6 +3,8 @@ import { SessionRegistry, type SessionIdentity } from './session-registry.js'
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { request, type ClientRequest, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
+import { PreviewShareError, SHARE_COOKIE, SHARE_REDEEM, type PreviewShares, type ShareAccess } from './preview-shares.js'
+import { readShareBody } from './preview-share-page.js'
 
 const LAUNCH_PATH = '/__codex_preview__/launch'
 const HTTP_COOKIE = 'codex_preview_session'
@@ -66,7 +68,7 @@ function unsafePathCharacters(value: string): boolean {
   return value.includes('\\') || Array.from(value).some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
 }
 
-function relativePath(value: unknown): string {
+export function previewPath(value: unknown): string {
   if (value === undefined) return '/'
   if (typeof value !== 'string' || value.length > 8192 || !value.startsWith('/') || value.startsWith('//') || unsafePathCharacters(value)) {
     throw new LocalhostPreviewError(400, 'Preview path must be a relative path beginning with /')
@@ -81,8 +83,8 @@ function relativePath(value: unknown): string {
 function httpError(res: ServerResponse, error: unknown): void {
   if (res.destroyed || res.writableEnded) return
   if (res.headersSent) { res.destroy(); return }
-  const status = error instanceof LocalhostPreviewError ? error.status : 502
-  const message = error instanceof LocalhostPreviewError ? error.message : 'Could not reach the app on localhost. Check that its server is running.'
+  const status = error instanceof LocalhostPreviewError || error instanceof PreviewShareError ? error.status : 502
+  const message = error instanceof LocalhostPreviewError || error instanceof PreviewShareError ? error.message : 'Could not reach the app on localhost. Check that its server is running.'
   res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' })
   res.end(message)
 }
@@ -103,8 +105,10 @@ export class LocalhostPreview {
   readonly #requests = new Set<ClientRequest>()
   readonly #sockets = new Set<Duplex>()
   readonly #secure: boolean
+  readonly #shares?: PreviewShares
+  readonly #publicOrigin?: string
 
-  constructor(options: { originTemplate?: string; publicOrigin?: string; sessionSecret: string; blockedPorts: number[]; sessions?: SessionRegistry }) {
+  constructor(options: { originTemplate?: string; publicOrigin?: string; sessionSecret: string; blockedPorts: number[]; sessions?: SessionRegistry; shares?: PreviewShares }) {
     this.#enabled = Boolean(options.originTemplate)
     this.#sessions = options.sessions ?? new SessionRegistry(options.sessionSecret)
     this.#template = options.originTemplate ? validatePreviewOriginTemplate(options.originTemplate) : 'http://p{port}.unused.invalid'
@@ -114,6 +118,8 @@ export class LocalhostPreview {
     this.#secret = options.sessionSecret
     this.#blockedPorts = new Set(options.blockedPorts)
     this.#secure = new URL(this.#template.replace('{port}', '3000')).protocol === 'https:'
+    this.#shares = options.shares
+    this.#publicOrigin = options.publicOrigin
   }
 
   matchesHost(host: string | undefined): boolean {
@@ -136,7 +142,7 @@ export class LocalhostPreview {
     if (!this.#enabled) throw new LocalhostPreviewError(503, 'Configure a separate preview origin before opening localhost apps')
     const session = typeof sessionValue === 'number' ? { nonce: randomBytes(18).toString('base64url'), expiresAt: sessionValue, credentialVersion: this.#sessions.credentialVersion } : sessionValue
     const sessionExpiresAt = session.expiresAt
-    const port = this.#port(portValue), path = relativePath(pathValue), now = Math.floor(Date.now() / 1000)
+    const port = this.#port(portValue), path = previewPath(pathValue), now = Math.floor(Date.now() / 1000)
     if (!Number.isFinite(sessionExpiresAt) || sessionExpiresAt <= now) throw new LocalhostPreviewError(401, 'Your Codex Remote session has expired')
     if (!this.#sessions.valid(session)) throw new LocalhostPreviewError(401, 'Your Codex Remote session was revoked')
     for (const [key, ticket] of this.#tickets) if (ticket.expiresAt <= now) this.#tickets.delete(key)
@@ -176,9 +182,10 @@ export class LocalhostPreview {
     const match = this.#enabled && (req.headers.host ?? '').match(this.#hostPattern)
     if (!match) throw new LocalhostPreviewError(400, 'Invalid preview address')
     const port = this.#port(Number(match[1])), origin = this.#origin(port)
-    if (req.headers.origin !== undefined && req.headers.origin !== origin) throw new LocalhostPreviewError(403, 'Preview origin is not allowed')
     if (!req.url?.startsWith('/') || req.url.startsWith('//') || unsafePathCharacters(req.url)) throw new LocalhostPreviewError(400, 'Invalid preview request path')
     const incoming = new URL(req.url, origin)
+    const shareHandoff = incoming.pathname === SHARE_REDEEM && req.method === 'POST' && req.headers.origin === this.#publicOrigin && Boolean(this.#publicOrigin)
+    if (req.headers.origin !== undefined && req.headers.origin !== origin && !shareHandoff) throw new LocalhostPreviewError(403, 'Preview origin is not allowed')
     const upstreamPath = incoming.pathname
     if (upstreamPath.startsWith('//')) throw new LocalhostPreviewError(400, 'Invalid preview path')
     return { port, origin, url: new URL(origin + upstreamPath + incoming.search) }
@@ -232,10 +239,33 @@ export class LocalhostPreview {
     upstream.once('close', () => this.#requests.delete(upstream))
   }
 
+  #access(req: IncomingMessage, port: number): ShareAccess | null {
+    // Last explicit launch selects credentials for this host. Never silently fall
+    // back to an owner session when a share cookie is expired/revoked/invalid.
+    if ((req.headers.cookie ?? '').split(';').some(part => part.trim().startsWith(SHARE_COOKIE + '='))) return this.#shares?.access(req.headers.cookie!, port) ?? null
+    const session = this.#authenticated(req, port)
+    return session ? { valid: () => this.#sessions.valid(session), watch: close => this.#sessions.watch(session, close) } : null
+  }
+
+  async #redeemShare(req: IncomingMessage, res: ServerResponse, port: number, url: URL) {
+    try {
+      if (!this.#shares || req.method !== 'POST' || req.headers.origin !== this.#publicOrigin || url.search) throw new LocalhostPreviewError(403, 'Invalid share opening')
+      if (req.headers['content-type']?.split(';')[0].trim() !== 'application/x-www-form-urlencoded') throw new LocalhostPreviewError(415, 'Invalid share opening format')
+      const body = await readShareBody(req)
+      if (req.aborted || res.destroyed) return
+      const ticket = new URLSearchParams(body).get('ticket')
+      const result = this.#shares.redeem(ticket, port)
+      res.writeHead(303, { Location: result.path, 'Set-Cookie': [result.cookie, `${HTTPS_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`],
+        'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'" })
+      res.end()
+    } catch (error) { httpError(res, error) }
+  }
+
   handle(req: IncomingMessage, res: ServerResponse): void {
     try {
       const { port, url, origin } = this.#route(req)
       if (req.method === 'CONNECT' || req.headers.upgrade) throw new LocalhostPreviewError(405, 'Use HTTP or a WebSocket upgrade for this preview')
+      if (url.pathname === SHARE_REDEEM) { void this.#redeemShare(req, res, port, url); return }
       if (url.pathname === LAUNCH_PATH) {
         if (req.method !== 'GET') throw new LocalhostPreviewError(405, 'Open preview links with GET')
         const key = url.searchParams.get('ticket') ?? '', ticket = this.#tickets.get(key)
@@ -248,18 +278,20 @@ export class LocalhostPreview {
         const cookieName = this.#secure ? HTTPS_COOKIE : HTTP_COOKIE
         res.writeHead(303, {
           Location: ticket.path,
-          'Set-Cookie': `${cookieName}=${this.#cookie(port, ticket.session)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.max(0, ticket.session.expiresAt - Math.floor(Date.now() / 1000))}${this.#secure ? '; Secure' : ''}`,
+          'Set-Cookie': [`${cookieName}=${this.#cookie(port, ticket.session)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.max(0, ticket.session.expiresAt - Math.floor(Date.now() / 1000))}${this.#secure ? '; Secure' : ''}`,
+            ...(this.#secure ? [`${SHARE_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`] : [])],
           'Cache-Control': 'no-store',
           'Referrer-Policy': 'no-referrer',
         })
         res.end()
         return
       }
-      const session = this.#authenticated(req, port)
-      if (!session) throw new LocalhostPreviewError(401, 'Open this localhost preview from Codex Remote to sign in.')
+      const access = this.#access(req, port)
+      if (!access) throw new LocalhostPreviewError(401, 'Open this preview from Codex Remote or use an active share link.')
       if (url.pathname.startsWith('/__codex_preview__/')) throw new LocalhostPreviewError(404, 'Unknown preview endpoint')
-      const unwatch = this.#sessions.watch(session, () => res.destroy())
+      const unwatch = access.watch(() => res.destroy())
       res.once('close', unwatch)
+      if (res.destroyed || !access.valid()) return
       const upstream = request({ hostname: '127.0.0.1', port, path: `${url.pathname}${url.search}`, method: req.method === 'HEAD' ? 'GET' : req.method, headers: this.#requestHeaders(req, port, origin), agent: false })
       this.#track(upstream)
       const timeout = setTimeout(() => upstream.destroy(new LocalhostPreviewError(504, 'The localhost app took too long to respond.')), 30_000)
@@ -270,7 +302,7 @@ export class LocalhostPreview {
         const status = response.statusCode ?? 502
         const cacheable = previewCacheable(req, url.pathname, status, response.headers)
         const authorized = () => {
-          if (res.destroyed || res.writableEnded || !this.#sessions.valid(session)) { res.destroy(); return false }
+          if (res.destroyed || res.writableEnded || !access.valid()) { res.destroy(); return false }
           return true
         }
         noPreviewCache(headers)
@@ -325,11 +357,12 @@ export class LocalhostPreview {
     try {
       const { port, url, origin } = this.#route(req)
       if (req.method !== 'GET' || req.headers.upgrade?.toLowerCase() !== 'websocket') throw new LocalhostPreviewError(400, 'Only WebSocket upgrades are supported')
-      const session = this.#authenticated(req, port)
-      if (!session) throw new LocalhostPreviewError(401, 'Open this localhost preview from Codex Remote to sign in.')
+      const access = this.#access(req, port)
+      if (!access) throw new LocalhostPreviewError(401, 'Open this preview from Codex Remote or use an active share link.')
       if (url.pathname.startsWith('/__codex_preview__/')) throw new LocalhostPreviewError(404, 'Unknown preview endpoint')
-      const unwatch = this.#sessions.watch(session, () => socket.destroy())
+      const unwatch = access.watch(() => socket.destroy())
       socket.once('close', unwatch)
+      if (socket.destroyed || !access.valid()) return
       const headers = this.#requestHeaders(req, port, origin)
       headers.connection = 'Upgrade'
       headers.upgrade = 'websocket'
@@ -339,7 +372,7 @@ export class LocalhostPreview {
       timeout.unref()
       upstream.once('upgrade', (response, upstreamSocket, upstreamHead) => {
         clearTimeout(timeout)
-        if (socket.destroyed || !this.#sessions.valid(session)) { upstreamSocket.destroy(); socket.destroy(); return }
+        if (socket.destroyed || !access.valid()) { upstreamSocket.destroy(); socket.destroy(); return }
         const responseHeaders = this.#responseHeaders(response, port, origin)
         responseHeaders.connection = 'Upgrade'
         responseHeaders.upgrade = 'websocket'
@@ -371,7 +404,7 @@ export class LocalhostPreview {
       socket.once('error', () => upstream.destroy())
       upstream.end()
     } catch (error) {
-      socketError(socket, error instanceof LocalhostPreviewError ? error.status : 502, error instanceof Error ? error.message : 'Preview unavailable')
+      socketError(socket, error instanceof LocalhostPreviewError || error instanceof PreviewShareError ? error.status : 502, error instanceof Error ? error.message : 'Preview unavailable')
     }
   }
 
