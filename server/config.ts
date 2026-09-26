@@ -21,6 +21,8 @@ export type RemoteConfig = {
   sessionStateFile?: string
   trustedProxies?: string[]
   previewOriginTemplate?: string
+  previewSharePorts?: number[]
+  previewShareStateFile?: string
   historyNativeHome?: string
   historyIndexPath?: string
   contextVaultPath?: string
@@ -88,11 +90,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RemoteConfig {
   const trustedProxies = (env.CODEX_REMOTE_TRUSTED_PROXIES ?? '').split(',').map(value => value.trim()).filter(Boolean)
   if (trustedProxies.some(value => !isIP(value))) throw Error('Trusted proxies must be exact IP addresses')
   if (env.CODEX_REMOTE_SECURE_API && !['required', 'off'].includes(env.CODEX_REMOTE_SECURE_API)) throw Error('CODEX_REMOTE_SECURE_API must be required or off')
+  const previewSharePorts = (env.CODEX_REMOTE_PREVIEW_SHARE_PORTS ?? '').split(',').map(value => value.trim()).filter(Boolean).map(value => {
+    if (!/^[1-9][0-9]{3,4}$/.test(value) || Number(value) < 1024 || Number(value) > 65535) throw Error('Preview share ports must be exact ports between 1024 and 65535')
+    return Number(value)
+  })
   return {
     secureApiRequired,
     fileAccess,
     secureKeyFile: resolve(env.CODEX_REMOTE_SECURE_KEY_FILE?.trim() || resolve(homedir(), '.local/state/codex-remote/owner-key.json')),
     previewOriginTemplate: env.CODEX_REMOTE_PREVIEW_ORIGIN_TEMPLATE?.trim() ? validatePreviewOriginTemplate(env.CODEX_REMOTE_PREVIEW_ORIGIN_TEMPLATE.trim()) : undefined,
+    previewSharePorts: [...new Set(previewSharePorts)],
+    ...(env.CODEX_REMOTE_PREVIEW_SHARE_STATE?.trim() ? { previewShareStateFile: resolve(env.CODEX_REMOTE_PREVIEW_SHARE_STATE.trim()) } : {}),
     contextVaultPath: resolve(contextVaultPath),
     historyNativeHome: resolve(env.CODEX_HOME || resolve(homedir(), '.codex')),
     historyIndexPath: resolve(contextVaultPath, '..', 'history-index'),

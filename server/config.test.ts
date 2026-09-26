@@ -31,3 +31,12 @@ it('keeps previews disabled by default and accepts only origin templates with on
     expect(() => loadConfig({ ...env, CODEX_REMOTE_PREVIEW_ORIGIN_TEMPLATE: template })).toThrow()
   }
 })
+
+it('requires an explicit exact preview share port allowlist independently of the origin template', () => {
+  expect(loadConfig(env).previewSharePorts).toEqual([])
+  expect(loadConfig({ ...env, CODEX_REMOTE_PREVIEW_SHARE_PORTS: '5180, 5210,5180' }).previewSharePorts).toEqual([5180, 5210])
+  for (const value of ['*', '5180-5200', '80', '1e4', '65536', 'abc', '05180']) {
+    expect(() => loadConfig({ ...env, CODEX_REMOTE_PREVIEW_SHARE_PORTS: value })).toThrow(/exact ports/)
+  }
+  expect(loadConfig({ ...env, CODEX_REMOTE_PREVIEW_SHARE_STATE: '/tmp/owned-shares.json' }).previewShareStateFile).toBe('/tmp/owned-shares.json')
+})
