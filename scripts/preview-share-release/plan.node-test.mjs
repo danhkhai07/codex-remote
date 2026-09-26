@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { BACKEND, CONFIG_PATCH, patchEnvironment, publicationStages, assertDelta, PRESERVED_BUILD_DIFFERENCES } from './plan.mjs'
 import { metadataReadiness } from './readiness.mjs'
-import { validate, exclusive } from './deploy.mjs'
+import { validate, exclusive, facebookBoundary, assertRegistryMigration } from './deploy.mjs'
 import { hash } from './core.mjs'
 
 test('exact 12 backend files and backend-healthy-before-SW/index-last ordering', () => {
@@ -58,4 +58,32 @@ test('sealed payload/runner/candidate hashes and exclusive attempt marker reject
     writeFileSync(join(root, 'payload/dist/sw.js'), 'tampered'); assert.throws(() => validate(root), /payload bytes drift/)
     exclusive(join(root, 'attempt.json'), { attempt: 1 }); assert.throws(() => exclusive(join(root, 'attempt.json'), { attempt: 2 }), /EEXIST/)
   } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+
+test('Facebook baseline detects either vhost bytes or enabled-target changes on owned paths', () => {
+  const root = mkdtempSync(join(tmpdir(), 'share-facebook-boundary-'))
+  try {
+    for (const name of ['cns.danhkhai.io.vn', 'flint-facebook-preview']) writeFileSync(join(root, name), name)
+    const before = facebookBoundary(root)
+    writeFileSync(join(root, 'cns.danhkhai.io.vn'), 'old public path accidentally reopened')
+    assert.notDeepEqual(facebookBoundary(root), before)
+    writeFileSync(join(root, 'cns.danhkhai.io.vn'), 'cns.danhkhai.io.vn')
+    assert.deepEqual(facebookBoundary(root), before)
+    writeFileSync(join(root, 'alternate'), 'flint-facebook-preview')
+    rmSync(join(root, 'flint-facebook-preview')); symlinkSync(join(root, 'alternate'), join(root, 'flint-facebook-preview'))
+    assert.notDeepEqual(facebookBoundary(root), before, 'Same bytes at a different enabled target must drift')
+    rmSync(join(root, 'flint-facebook-preview'))
+    assert.throws(() => facebookBoundary(root), /ENOENT/)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('registry migration permits only identities/order, preserving Facebook and every unrelated record', () => {
+  const before = { version: 1, services: [{ port: 5211, path: '/campaign/', name: 'Facebook', updatedAt: 'same' }, { port: null, path: '/', name: 'Owner app' }] }
+  const after = { version: 1, services: before.services.map(s => ({ ...s, identity: 'fixture-' + s.port })).reverse() }
+  assertRegistryMigration(before, after)
+  assert.throws(() => assertRegistryMigration(before, { ...after, services: after.services.slice(1) }), /Services records/)
+  assert.throws(() => assertRegistryMigration(before, { ...after, services: after.services.map(s => ({ ...s, name: 'changed' })) }), /Services records/)
+  assert.throws(() => assertRegistryMigration(before, before), /Missing migrated/)
+  assert.throws(() => assertRegistryMigration(before, { ...after, version: 2 }), /Registry schema/)
 })

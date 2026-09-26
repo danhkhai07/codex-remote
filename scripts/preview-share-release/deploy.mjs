@@ -18,6 +18,21 @@ const HOURS_TEMPLATE = '703ad317215c7b1b9e7059169c1613d0128cb2a0d993a94e601f33e3
 const NGINX = '/etc/nginx/sites-enabled/codex-preview-ports'
 const LIVE_MARKER = S + '/releases/markdown-table-readable-7649f0c/LIVE.json'
 const CERT = '/etc/letsencrypt/live/codex-preview-ports/fullchain.pem'
+const FACEBOOK_PATH = '/flint-facebook-review-083af9e9522a0dbbf813/'
+// Read-only pins added after the Facebook migration. Never install Nginx here.
+export function facebookBoundary(enabled = '/etc/nginx/sites-enabled') {
+  return Object.fromEntries(['cns.danhkhai.io.vn', 'flint-facebook-preview'].map(name => {
+    const path = join(enabled, name)
+    return [name, { target: realpathSync(path), sha256: hash(path) }]
+  }))
+}
+export function assertRegistryMigration(before, after) {
+  assert(before.version === 1 && after.version === 1 && Array.isArray(before.services) && Array.isArray(after.services), 'Registry schema')
+  assert(after.services.every(s => typeof s.identity === 'string' && s.identity.length > 0), 'Missing migrated registry identity')
+  const publicRecords = store => store.services.map(({ identity: _identity, ...service }) => service)
+    .sort((a, b) => JSON.stringify([a.port, a.path]).localeCompare(JSON.stringify([b.port, b.path])))
+  same(publicRecords(after), publicRecords(before), 'Services records after identity migration; inspect edits, never restore state')
+}
 const fileMark = p => existsSync(p) ? { sha256: hash(p) } : { absent: true }
 const runnerNames = ['deploy.mjs', 'core.mjs', 'readiness.mjs', 'plan.mjs']
 const json = p => JSON.parse(readFileSync(p, 'utf8'))
@@ -57,7 +72,7 @@ function snapshot() {
   return { backend: tree(R + '/dist-server'), client: tree(R + '/dist'), scripts: tree(R + '/scripts'),
     template: hash(R + '/working-hours/dashboard.template.html'), isolatedTemplate: hash(S + '/hours/dashboard.template.html'), generator: hash(R + '/working-hours/update.py'),
     registry: fileMark(env.CODEX_REMOTE_SERVICES_FILE), grants: fileMark(CONFIG_PATCH.CODEX_REMOTE_PREVIEW_SHARE_STATE),
-    liveMarker: hash(LIVE_MARKER), nginx: hash(NGINX), certificate: hash(CERT), hosts: hash('/etc/hosts'),
+    liveMarker: hash(LIVE_MARKER), nginx: hash(NGINX), facebookNginx: facebookBoundary(), certificate: hash(CERT), hosts: hash('/etc/hosts'),
     env: hash(ENV), key: identity(KEY), vapid: sha(JSON.stringify(push.keys)),
     dependencies: { path: realpathSync(R + '/node_modules'), package: hash(R + '/package.json'), lock: hash(R + '/package-lock.json') }, units: service }
 }
@@ -256,14 +271,21 @@ async function adapter(release) {
       const shares = await api(c, '/api/preview-shares'); assert(Array.isArray(shares.links) && Array.isArray(shares.services) && typeof shares.serverNow === 'string');
       const ports = CONFIG_PATCH.CODEX_REMOTE_PREVIEW_SHARE_PORTS.split(',').map(Number); assert(shares.services.every(s => ports.includes(s.port)));
       // Read schema without restoring its mutable contents.
-      const registry = json(environment().CODEX_REMOTE_SERVICES_FILE); assert(registry.version === 1 && registry.services.every(s => typeof s.identity === 'string')); 
+      const registry = json(environment().CODEX_REMOTE_SERVICES_FILE); assertRegistryMigration(json(release + '/backup/private-registry'), registry);
       const roots = await api(c, '/api/files/roots'); assert(roots.roots.includes('/'))
       const hosts = await c.fetch('/api/files/content?download=1&path=%2Fetc%2Fhosts', { signal: AbortSignal.timeout(15000) }); assert(hosts.ok); same(sha(Buffer.from(await hosts.arrayBuffer())), hash('/etc/hosts'), 'Owner Files read')
       const hours = await c.fetch('/api/files/content?download=1&path=' + encodeURIComponent(S + '/hours/index.html'), { signal: AbortSignal.timeout(15000) }); assert(hours.ok)
       const content = await hours.text(); assert(content.length > 1000); assert(!content.includes('id="today-worked"'), 'Old Hours chip served')
     })
+    // No launch ticket or real share: verify the retained public access boundary.
+    const old = await fetch('https://cns.danhkhai.io.vn' + FACEBOOK_PATH, { redirect: 'manual', signal: AbortSignal.timeout(10000) })
+    assert.equal(old.status, 410, 'Retired Facebook URL'); await old.arrayBuffer()
+    const privatePreview = await fetch('https://p5211.danhkhai.io.vn' + FACEBOOK_PATH, { redirect: 'manual', signal: AbortSignal.timeout(10000) })
+    assert.equal(privatePreview.status, 401, 'Facebook anonymous preview denial'); await privatePreview.arrayBuffer()
+    await response('http://127.0.0.1:5211' + FACEBOOK_PATH, '03341a7b243b50604b5f0c710fd4eb678f257a8a76f8e418b490f07f844b2eae')
+    same(sha(await response('https://cns.danhkhai.io.vn/')), sha(await response('http://127.0.0.1:2345/')), 'Portfolio preserved')
     assertSnapshot('complete', true)
-    const evidence = { status: 'verified', source: m.source, units: units(), at: new Date().toISOString(), codeAndIdentitiesPreserved: true, realSharesCreated: false, physicalIOS: false }
+    const evidence = { status: 'verified', source: m.source, units: units(), at: new Date().toISOString(), codeAndIdentitiesPreserved: true, facebookBoundaryVerified: true, registryRecordsPreserved: true, realSharesCreated: false, physicalIOS: false }
     atomic(release + '/verified.json', JSON.stringify(evidence, null, 2) + '\n'); return evidence
   }
   return { preflight: async () => assertSnapshot(false), assertBaseline: () => assertSnapshot(false), assertPublished: () => assertSnapshot(true), readiness, backup, publish, state, sleep,
