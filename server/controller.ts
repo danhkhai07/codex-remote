@@ -559,13 +559,13 @@ export class RemoteController {
     if (this.contextVault) {
       // Inject separately so shared context never changes the user's message or attachments.
       // Refresh every turn: edits and group moves apply even to already loaded threads.
-      const context = this.contextVault.prepareContext(threadId, { text, cwd })
+      const context = this.contextVault.prepareContext(threadId, { text, cwd }, orchestrationContext)
       live?.()
       await this.appServer.request('thread/inject_items', { threadId, items: [{
         type: 'message', role: 'developer',
-        content: [{ type: 'input_text', text: [context.text, orchestrationContext].filter(Boolean).join('\n\n') }],
+        content: [{ type: 'input_text', text: context.text }],
       }] }, undefined, () => { live?.(); guard?.() })
-      live?.(); this.contextVault.knowledge.recordTrace(context.trace)
+      live?.(); context.trace.injection = 'acknowledged'; this.contextVault.knowledge.recordTrace(context.trace)
     }
     live?.(); guard?.()
     if (!guard) this.orchestration?.userTurn(threadId, text)

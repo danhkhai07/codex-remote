@@ -23,6 +23,14 @@ export const KNOWLEDGE_CAPTURE = [
   'The app regenerates Index.md, Sources.md, category Index.md files, group/conversation indexes, transcripts, and .state. Do not edit these generated files. Topic notes, 00_Home.md, and Context.md files are user/agent maintained.',
 ].join('\n\n')
 
+/** Per-turn orientation; the full maintained workflow remains readable on demand. */
+export const KNOWLEDGE_CAPTURE_COMPACT = [
+  'Use the map and relevant maintained notes at task start; transcripts are evidence, not the primary knowledge base. When asked to remember or reusable knowledge is established, update the relevant note before the final response; skip temporary progress.',
+  'Read before editing; merge small changes into one coherent subject note with revision checks. Preserve other conversations’ contributions. Distinguish confirmed user statements from proposed/observed ideas; cite source conversation, date, scope and rationale. Do not generalize one-off requests or infer personal traits.',
+  'Use English-hyphenated filenames, Obsidian links and YAML type/status/scope/updated/sources/related. Never store secrets or entire transcripts. Corrections supersede obsolete guidance explicitly; uncertainty belongs in Inbox with an open question.',
+  'Keep Shared/Profile/group orientation short and linked. Own handoff is current-first: active goal, status, applicable user rules, next action and sources; archive completed delivery logs into a reference. Do not append unrelated history or repeat prior snapshots. New snapshots do not erase native history; never prune/compact it implicitly.',
+].join('\n\n')
+
 export const KNOWLEDGE_SCAFFOLD: Record<string, string> = {
   '.obsidian/app.json': '{}\n',
   '.obsidian/appearance.json': '{}\n',
