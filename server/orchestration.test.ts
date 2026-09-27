@@ -130,8 +130,30 @@ it('starts the eighth worker, queues the ninth, and reports the same limit in st
   expect(f.orchestra.snapshot('leader').tasks.map(task => task.status)).toEqual([...Array(8).fill('running'), 'queued'])
   const help = f.orchestra.context('leader', settings, false)
   expect(MAX_CONCURRENT_WORKERS).toBe(8)
-  expect(help).toContain(`Maximum ${MAX_CONCURRENT_WORKERS} delegated worker turns per folder at a time (leader excluded)`)
+  expect(help).toContain(`Maximum ${MAX_CONCURRENT_WORKERS} worker turns per folder (leader excluded)`)
   expect(f.orchestra.snapshot('leader').limits).toEqual({ concurrent: MAX_CONCURRENT_WORKERS, dispatchesLeft: 11, wakeupsLeft: 8 })
+})
+
+it('injects the bounded delegation, model, report and task-boundary policy without changing dispatch behavior', async () => {
+  const f = setup()
+  const leader = f.orchestra.context('leader', settings, true, 'Implement the requested change')
+  expect(leader).toContain('Default to one worker for routine implementation plus checks')
+  expect(leader).toContain('Prefer Sol/medium for routine bounded work when supported')
+  expect(leader).toContain('Security or high-risk data work keeps Astra with xhigh/max when supported')
+  expect(leader).toContain('outcome; source/commit; checks; candidate or live; blocker; one evidence link')
+  expect(leader).toContain('supported native compaction mechanism when safe')
+  expect(leader).not.toContain('Packaging by itself requires independent review')
+  expect(Buffer.byteLength(leader)).toBeLessThan(6_000)
+
+  const worker = f.orchestra.context('worker', settings, false)
+  expect(worker).toContain('Final report only: outcome; source/commit; checks; candidate or live; blocker; one evidence link')
+  expect(worker).toContain('Rename/archive neither clears context nor deletes native history')
+
+  const cap = leader.match(/--capability ([\w-]+)/)![1]
+  await f.delegate(cap)
+  await f.orchestra.start(); await f.orchestra.pump()
+  const dispatched = vi.mocked(f.driver.start).mock.calls.find(([threadId]) => threadId === 'worker')?.[1] ?? ''
+  expect(dispatched).toContain('Follow the concise report and handoff policy in your role instructions.')
 })
 
 it.each(['complete', 'cancel'])('releases exactly one of eight slots on %s', async action => {

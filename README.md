@@ -94,22 +94,26 @@ state lives in the vault's generated `.state/Orchestration.json`, separate from
 knowledge notes. Use stable `requestId` values when retrying commands. Code tasks
 must follow the existing rule of separate worktrees and hosted-service registration.
 
-Before assigning work, use the capability command `{"action":"models"}` to inspect
-the runtime catalog, filtered to **gpt-6-astra** and **gpt-5.6-sol**, with supported
-efforts for each. Add top-level `model` and `effort` to a `spawn` or `delegate`
-command, for example `"model":"gpt-5.6-sol","effort":"high"` **only if the catalog
-lists that pair**. Omitted fields inherit the leader turn. Missing, unavailable,
-disallowed or unsupported values fail before task reservation or conversation
-creation; no fallback or effort reduction occurs. Queued tasks are revalidated
-before dispatch. Stable request IDs retain the original choice even on retries.
+Before assigning work, use `{"action":"models"}` to inspect the filtered Astra/Sol
+catalog. Prefer Sol/medium for routine bounded work when supported, Astra for harder
+architecture or complex logic, and Astra xhigh/max for security or high-risk data
+work when supported. Honor explicit user/manual choices. Every override must be in
+the live catalog; unavailable values fail without fallback or silent effort
+reduction. Omitted fields inherit the leader turn, retries keep the committed pair,
+and wakeups keep leader settings. Overrides never change access or Plan/Code mode.
 
-Choose Sol for routine bounded work and Astra for security, architecture or
-high-risk work, with a brief explanation based on the task. Security work should
-plan carefully and use xhigh/max when listed in the catalog; do not assume high
-meets that requirement or invent supported efforts. This is a leader decision,
-not keyword-based routing. Task snapshots and result reports include the chosen
-model/effort. Overrides do not change user/global settings, active turns, access
-permissions or Plan/Code mode. Automatic wakeups keep the leader's settings.
+Routine work normally uses one worker for implementation and checks. Add an
+independent review when security, data integrity/migration, complex
+concurrency/lifecycle, or an explicit user requirement justifies it. Packaging by
+itself does not require another source-review loop, and worker capacity is never a
+target to fill. Worker reports stay short: outcome, source/commit, checks,
+candidate/live state, blocker, and one evidence link. Store full hashes and logs in
+the linked artifact without hiding errors or the overall user outcome.
+
+At task boundaries, keep the conversation handoff current-first: objective,
+status, decisions, next step, and sources. Use only the supported native compaction
+mechanism when safe. Rename and Archive organize conversations; they do not compact
+context or delete native transcripts.
 
 Leaders in **Code** mode can also manage conversations through that same private
 command capability:
