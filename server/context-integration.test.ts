@@ -178,3 +178,31 @@ it('notifies only a completed final answer from the exact thread and turn', asyn
   complete('inline', [{ type: 'agentMessage', phase: 'final_answer', text: 'INLINE' }, { type: 'agentMessage', phase: 'commentary', text: 'LATE PROGRESS' }])
   expect(callback.mock.lastCall?.[2]).toBe('INLINE')
 })
+
+it('labels accepted injection truthfully when native turn/start fails, and never records rejected injection', async () => {
+  const { request, vault, controller } = setup()
+  await controller.createThread('0')
+  const normal = request.getMockImplementation()!
+  request.mockImplementation(async (method, ...args) => {
+    if (method === 'turn/start') throw Error('start result unavailable')
+    return normal(method, ...args)
+  })
+  await expect(controller.startTurn('new-chat', 'current task')).rejects.toThrow('start result unavailable')
+  const traces = vault.knowledge.traces('new-chat')
+  expect(traces).toHaveLength(1)
+  expect(traces[0]).toMatchObject({ injection: 'acknowledged', execution: 'not-observed' })
+  expect(traces[0].assembledBytes).toBeLessThanOrEqual(24000)
+  request.mockRejectedValueOnce(Error('inject failed'))
+  await expect(controller.startTurn('new-chat', 'retry')).rejects.toThrow('inject failed')
+  expect(vault.knowledge.traces('new-chat')).toHaveLength(1)
+  expect(request.mock.calls.some(([method]) => /compact|rollback/.test(method))).toBe(false)
+})
+
+it('never truncates role authority to fit a note budget and fails before native injection/start', async () => {
+  const { request, controller } = setup()
+  await controller.createThread('0')
+  vi.spyOn(controller.orchestration!, 'context').mockReturnValue('mandatory-role '.repeat(2000))
+  request.mockClear()
+  await expect(controller.startTurn('new-chat', 'task')).rejects.toThrow(/Mandatory context/)
+  expect(request.mock.calls.some(([method]) => method === 'turn/start' || method === 'thread/inject_items')).toBe(false)
+})

@@ -87,10 +87,13 @@ export class KnowledgeStore {
     return { ...meta, path, title: titleOf(path, content), revision: revisionOf(content), bytes: stat.size, modifiedAt: stat.mtime.toISOString(), issues, content }
   }
 
-  documents(): NoteDocument[] {
+  documents(omitted?: Array<{ path: string; reason: string }>): NoteDocument[] {
     const notes: NoteDocument[] = []
     for (const path of this.paths()) {
-      try { notes.push(this.read(path)) } catch (error) { if (!(error instanceof KnowledgeError && error.status === 413)) throw error }
+      try { notes.push(this.read(path)) } catch (error) {
+        if (!(error instanceof KnowledgeError && error.status === 413)) throw error
+        omitted?.push({ path, reason: 'Note exceeds 256 KB; split by subject before retrieval' })
+      }
     }
     return notes
   }
