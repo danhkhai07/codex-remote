@@ -61,6 +61,27 @@ it('injects fresh shared and group context separately on every turn and preserve
   expect(request.mock.calls.filter(([method]) => method === 'thread/resume')).toHaveLength(0)
 })
 
+it('keeps the actual leader role and current task inside the assembled 24 KB context', async () => {
+  const { root, request, vault, controller } = setup()
+  const group = vault.createGroup('Large project').groups[0]
+  await controller.createThread('0', false, group.id)
+  vault.setLeader(group.id, 'new-chat')
+  writeFileSync(join(root, 'Shared/Context.md'), '# Current\n\n' + 'shared background '.repeat(1800))
+  writeFileSync(group.contextPath, '# Project\n\n' + 'project history '.repeat(1800))
+
+  await controller.startTurn('new-chat', 'CURRENT_TASK_SENTINEL')
+
+  const injected = request.mock.calls.find(([method]) => method === 'thread/inject_items')![1] as {
+    items: Array<{ content: Array<{ text: string }> }>
+  }
+  const text = injected.items[0].content[0].text
+  expect(text).toContain('You are the leader of "Large project"')
+  expect(text).toContain('Default to one worker for routine implementation plus checks')
+  expect(text).toContain('CURRENT_TASK_SENTINEL')
+  expect(text).toMatch(/omitted|partial/i)
+  expect(Buffer.byteLength(text)).toBeLessThanOrEqual(24_000)
+})
+
 it('exports complete live messages even when native full history is unavailable', async () => {
   const { root, app, controller } = setup()
   await controller.createThread('0')
