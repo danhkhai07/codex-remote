@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { isDeepStrictEqual } from 'node:util'
-export const LIVE_SOURCE = '177e812c2f9b441f201bbdba365a252fdba63cf3'
-export const BACKEND = ['config', 'http-app', 'localhost-preview', 'services', 'preview-shares', 'preview-share-page'].flatMap(n => [`dist-server/${n}.js`, `dist-server/${n}.js.map`])
+export const LIVE_SOURCE = '75fefb22690d03a006905a3b70f0d5a8dec27607'
+export const PRODUCT_SOURCE = '5378c9330a2711c0e52a86ee6b44698b93fda38a'
+export const BACKEND = ['http-app', 'localhost-preview', 'preview-shares'].flatMap(n => [`dist-server/${n}.js`, `dist-server/${n}.js.map`])
 // Previously reviewed source/runtime divergence from the Push release. These
 // artifacts are NOT published; both sides must match these exact known bytes.
 export const PRESERVED_BUILD_DIFFERENCES = {
@@ -36,12 +37,12 @@ export const CONFIG_PATCH = {
   CODEX_REMOTE_PREVIEW_SHARE_PORTS: '2345,5180,5210,5211,5212,5213,5215',
   CODEX_REMOTE_PREVIEW_SHARE_STATE: '/root/.local/state/codex-remote-secure/preview-shares.json',
 }
-// Preserve original bytes, including comments/quotes; refuse ambiguity instead of
-// replacing existing configuration. This rollout only appends two absent keys.
+// This follow-up rollout never rewrites configuration. It only verifies that the
+// existing accepted sharing settings still match the routed NEW instance.
 export function patchEnvironment(bytes, parse) {
   const before = parse(bytes.toString())
-  for (const key of Object.keys(CONFIG_PATCH)) assert(!(key in before), 'Share configuration already exists; inspect fresh baseline')
-  const patched = Buffer.from(bytes.toString() + (bytes.length && !bytes.toString().endsWith('\n') ? '\n' : '') + Object.entries(CONFIG_PATCH).map(([k, v]) => `${k}=${v}\n`).join(''))
-  assert(isDeepStrictEqual(parse(patched.toString()), { ...before, ...CONFIG_PATCH }), 'Config patch changed unrelated values')
-  return patched
+  for (const [key, value] of Object.entries(CONFIG_PATCH)) assert.equal(before[key], value, `Unexpected existing ${key}`)
+  const unchanged = Buffer.from(bytes)
+  assert(isDeepStrictEqual(parse(unchanged.toString()), before), 'Configuration verification changed values')
+  return unchanged
 }

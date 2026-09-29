@@ -7,7 +7,7 @@ import { parseEnv } from 'node:util'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { hash, sha, same, tree, identity, atomic, publicationLock, workflow } from './core.mjs'
 import { allReadiness, metadataReadiness } from './readiness.mjs'
-import { BACKEND, publicationStages, assertDelta, LIVE_SOURCE, CONFIG_PATCH, patchEnvironment } from './plan.mjs'
+import { BACKEND, publicationStages, assertDelta, LIVE_SOURCE, PRODUCT_SOURCE, CONFIG_PATCH, patchEnvironment } from './plan.mjs'
 export { BACKEND } from './plan.mjs'
 
 const R = '/root/RUNNING-SERVICES/codex-remote-secure'
@@ -16,7 +16,7 @@ const SERVICE = 'codex-remote-secure.service', ORIGIN = 'https://remote.danhkhai
 const ENV = S + '/instance.env', KEY = S + '/secure-owner/owner-key.json'
 const HOURS_TEMPLATE = '703ad317215c7b1b9e7059169c1613d0128cb2a0d993a94e601f33e352e06df0'
 const NGINX = '/etc/nginx/sites-enabled/codex-preview-ports'
-const LIVE_MARKER = S + '/releases/markdown-table-readable-7649f0c/LIVE.json'
+const LIVE_MARKER = S + '/releases/context-prompt-75fefb2/status.json'
 const CERT = '/etc/letsencrypt/live/codex-preview-ports/fullchain.pem'
 const FACEBOOK_PATH = '/flint-facebook-review-083af9e9522a0dbbf813/'
 export const facebookIndexHash = (path = '/srv/flint-social-previews' + FACEBOOK_PATH + 'index.html') => hash(path)
@@ -94,15 +94,15 @@ function prepare(release, artifacts, evidencePath) {
   const worktree = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
   assert.equal(git(worktree, 'status', '--porcelain', '--untracked-files=no'), '', 'Dirty source')
   const evidence = json(evidencePath)
-  assert.equal(evidence.source, git(worktree, 'rev-parse', 'HEAD'), 'Evidence must match this candidate')
+  assert.equal(evidence.source, PRODUCT_SOURCE, 'Evidence must match the accepted product')
   assert.equal(evidence.liveSource, LIVE_SOURCE, 'Expected previously verified LIVE release')
   assert.equal(git(worktree, 'diff', evidence.liveSource, '--', 'server/secure-client.ts', 'server/event-hub.ts'), '', 'Preserved historical source changed')
   assert.equal(evidence.checks?.status, 'passed', 'Build/check/browser evidence required before packaging')
   for (const log of evidence.checks.logs ?? []) same(hash(log.path), log.sha256, 'Check log')
   assert((evidence.checks.logs?.length ?? 0) >= 2, 'Require app and browser check logs')
-  assert.equal(git(artifacts, 'rev-parse', 'HEAD'), evidence.source)
-  // Reuse verified app artifacts only if runtime code/source remains identical.
-  assert.equal(git(worktree, 'diff', evidence.source, '--', 'src', 'public', 'server', 'package.json', 'package-lock.json', 'vite.config.ts', 'index.html'), '')
+  const runnerSource = git(worktree, 'rev-parse', 'HEAD')
+  // Runner/docs may follow the accepted product. Product inputs must remain exact.
+  assert.equal(git(worktree, 'diff', evidence.source, runnerSource, '--', 'src', 'public', 'server', 'package.json', 'package-lock.json', 'vite.config.ts', 'index.html'), '')
   same(tree(artifacts + '/dist'), evidence.candidateFrontend, 'Complete client artifact inventory')
   for (const [p, h] of Object.entries(evidence.candidateFrontend)) same(hash(artifacts + '/dist/' + p), h, 'Frontend artifact')
   for (const p of BACKEND) same(hash(artifacts + '/' + p), evidence.backendDelta[p.slice(12)].candidate, 'Backend artifact')
@@ -117,11 +117,11 @@ function prepare(release, artifacts, evidencePath) {
   }
   const frozen = freeze(release + '/frozen'), runner = {}
   for (const p of runnerNames) { const bytes = readFileSync(dirname(fileURLToPath(import.meta.url)) + '/' + p); atomic(release + '/' + p, bytes); runner[p] = sha(bytes) }
-  const manifest = { version: 1, status: 'prepared-pending-fresh-baseline-and-review', source: git(worktree, 'rev-parse', 'HEAD'), worktree,
+  const manifest = { version: 1, status: 'prepared-for-authorized-rollout', source: evidence.source, runnerSource, worktree,
     appSource: evidence.source, sourceTemplate: hash(worktree + '/working-hours/dashboard.template.html'), payload, frozen, runner,
     expectedBackendBaseline: evidence.observedRuntimeBackend, expectedClientBaseline: evidence.observedRuntimeFrontend,
     dependencies: realpathSync(R + '/node_modules'), artifactEvidence: { path: evidencePath, sha256: hash(evidencePath) },
-    pending: ['Leader and independent review of exact share source, package and runner', 'Fresh ALL-idle; no own-task exemptions'] }
+    pending: ['Fresh ALL-idle; no own-task exemptions'] }
   exclusive(release + '/manifest.json', manifest)
   console.log(JSON.stringify({ status: manifest.status, release, manifest: hash(release + '/manifest.json'), source: manifest.source, armed: false }))
 }
@@ -139,7 +139,8 @@ export function validate(release) {
   }
   if (m.artifactEvidence) same(hash(m.artifactEvidence.path), m.artifactEvidence.sha256, 'Artifact evidence')
   same(realpathSync(release + '/frozen/node_modules'), m.dependencies, 'Frozen dependency path')
-  same(git(m.worktree, 'rev-parse', 'HEAD'), m.source, 'Candidate HEAD')
+  same(git(m.worktree, 'rev-parse', 'HEAD'), m.runnerSource, 'Runner HEAD')
+  assert.equal(git(m.worktree, 'diff', m.source, m.runnerSource, '--', 'src', 'public', 'server', 'package.json', 'package-lock.json', 'vite.config.ts', 'index.html'), '', 'Product changed after acceptance')
   assert.equal(git(m.worktree, 'status', '--porcelain', '--untracked-files=no'), '', 'Dirty candidate')
   return m
 }
@@ -149,7 +150,7 @@ function baseline(release) {
   const unlock = publicationLock('/root/.local/state/codex-remote/deployment.lock', { kind: 'NEW-share-baseline', pid: process.pid, release })
   try {
     const b = snapshot()
-    const live = json(LIVE_MARKER); assert.equal(live.status, 'LIVE'); assert.equal(live.source, '7649f0ce89f2782f7d03b6a38d1cf176d865f53e'); assert.equal(live.backendSource, 'd6990d30b98ec4100e26752213017a90c0559853')
+    const live = json(LIVE_MARKER); assert.equal(live.status, 'complete'); assert.equal(live.source, LIVE_SOURCE)
     same(b.backend, m.expectedBackendBaseline, 'Reviewed backend baseline'); same(b.client, m.expectedClientBaseline, 'Reviewed client baseline')
     same(b.template, HOURS_TEMPLATE, 'Accepted Hours'); same(b.template, b.isolatedTemplate, 'Hours agreement'); same(b.template, m.sourceTemplate, 'Hours source')
     const nginx = readFileSync(NGINX, 'utf8'), hosts = CONFIG_PATCH.CODEX_REMOTE_PREVIEW_SHARE_PORTS.split(',').map(p => `p${p}.danhkhai.io.vn`).sort()
@@ -159,8 +160,7 @@ function baseline(release) {
     same([...sans.matchAll(/DNS:([^,\s]+)/g)].map(x => x[1]).sort(), hosts, 'Exact TLS hosts')
     execFileSync('openssl', ['x509', '-in', CERT, '-noout', '-checkend', '86400'], { stdio: 'ignore' })
     for (const [p, h] of Object.entries(m.frozen)) same(hash(R + '/' + p), h, 'Frozen runtime closure')
-    const patched = patchEnvironment(readFileSync(ENV), parseEnv)
-    atomic(release + '/config/instance.env', patched)
+    const unchangedConfig = patchEnvironment(readFileSync(ENV), parseEnv)
     const preimages = {}
     for (const [label, path] of Object.entries({ env: ENV, registry: environment().CODEX_REMOTE_SERVICES_FILE, grants: CONFIG_PATCH.CODEX_REMOTE_PREVIEW_SHARE_STATE })) {
       preimages[label] = fileMark(path)
@@ -172,13 +172,13 @@ function baseline(release) {
     }
     same(snapshot(), b, 'Baseline capture drift')
     exclusive(release + '/baseline.json', b)
-    exclusive(release + '/seal.json', { manifest: hash(release + '/manifest.json'), baseline: hash(release + '/baseline.json'), config: sha(patched), preimages })
+    exclusive(release + '/seal.json', { manifest: hash(release + '/manifest.json'), baseline: hash(release + '/baseline.json'), config: sha(unchangedConfig), preimages })
     console.log(JSON.stringify({ status: 'baselined-not-armed', seal: hash(release + '/seal.json') }))
   } finally { unlock() }
 }
 async function adapter(release) {
   const m = validate(release), seal = json(release + '/seal.json'), b = json(release + '/baseline.json')
-  const closure = () => { validate(release); same(hash(release + '/manifest.json'), seal.manifest, 'Manifest'); same(hash(release + '/baseline.json'), seal.baseline, 'Baseline'); same(hash(release + '/config/instance.env'), seal.config, 'Patched config');
+  const closure = () => { validate(release); same(hash(release + '/manifest.json'), seal.manifest, 'Manifest'); same(hash(release + '/baseline.json'), seal.baseline, 'Baseline'); same(hash(ENV), seal.config, 'Unchanged config');
     for (const [label, mark] of Object.entries(seal.preimages)) same(fileMark(release + '/preimages/' + label), mark, 'Private preimage')
   }
   closure()
@@ -189,7 +189,7 @@ async function adapter(release) {
   const auth = async fn => { const client = await maintenanceClient(config); try { return await fn(client) } finally { client.close() } }
   const api = async (client, path) => { const r = await client.fetch(path, { signal: AbortSignal.timeout(15000) }); assert(r.ok, 'Encrypted read HTTP ' + r.status); return r.json() }
   const readiness = () => auth(c => allReadiness(p => api(c, p), metadataReadiness, () => json(S + '/vault/.state/Orchestration.json')))
-  const expected = structuredClone(b); expected.env = seal.config
+  const expected = structuredClone(b)
   const partial = structuredClone(expected), stages = publicationStages(m.payload)
   for (const [p, h] of Object.entries(m.payload)) {
     if (p.startsWith('dist/')) expected.client[p.slice(5)] = h
@@ -229,7 +229,6 @@ async function adapter(release) {
     exclusive(release + '/backup/manifest.json', files)
   }
   const publish = () => {
-    atomic(ENV, readFileSync(release + '/config/instance.env')); state('publishing-config')
     for (const p of stages.beforeRestart) {
       if (p.startsWith('dist/assets/') && existsSync(R + '/' + p)) { same(hash(R + '/' + p), m.payload[p], 'Immutable asset collision'); continue }
       atomic(R + '/' + p, readFileSync(release + '/payload/' + p)); state('publishing', { lastFile: p })
@@ -271,6 +270,7 @@ async function adapter(release) {
     await auth(async c => {
       const shares = await api(c, '/api/preview-shares'); assert(Array.isArray(shares.links) && Array.isArray(shares.services) && typeof shares.serverNow === 'string');
       const ports = CONFIG_PATCH.CODEX_REMOTE_PREVIEW_SHARE_PORTS.split(',').map(Number); assert(shares.services.every(s => ports.includes(s.port)));
+      const installed = readFileSync(R + '/dist-server/http-app.js', 'utf8'); assert(installed.includes("method === 'PATCH'"), 'Installed PATCH capability')
       // Read schema without restoring its mutable contents.
       const registry = json(environment().CODEX_REMOTE_SERVICES_FILE); assertRegistryMigration(json(release + '/backup/private-registry'), registry);
       const roots = await api(c, '/api/files/roots'); assert(roots.roots.includes('/'))
@@ -286,18 +286,18 @@ async function adapter(release) {
     await response('http://127.0.0.1:5211' + FACEBOOK_PATH, b.facebookIndex)
     same(sha(await response('https://cns.danhkhai.io.vn/')), sha(await response('http://127.0.0.1:2345/')), 'Portfolio preserved')
     assertSnapshot('complete', true)
-    const evidence = { status: 'verified', source: m.source, units: units(), at: new Date().toISOString(), codeAndIdentitiesPreserved: true, facebookBoundaryVerified: true, registryRecordsPreserved: true, realSharesCreated: false, physicalIOS: false }
+    const evidence = { status: 'verified', source: m.source, units: units(), at: new Date().toISOString(), codeAndIdentitiesPreserved: true, facebookBoundaryVerified: true, registryRecordsPreserved: true, expiryPatchCapability: true, realSharesCreated: false, physicalIOS: false }
     atomic(release + '/verified.json', JSON.stringify(evidence, null, 2) + '\n'); return evidence
   }
   return { preflight: async () => assertSnapshot(false), assertBaseline: () => assertSnapshot(false), assertPublished: () => assertSnapshot(true), readiness, backup, publish, state, sleep,
     acquirePublication: () => { unlock = publicationLock('/root/.local/state/codex-remote/deployment.lock', { kind: 'NEW-preview-sharing', pid: process.pid, release, source: m.source }) },
     releasePublication: () => { if (unlock) { unlock(); unlock = undefined } },
     restart: async () => { exclusive(release + '/restart-intent.json', { service: SERVICE, at: new Date().toISOString() }); execFileSync('systemctl', ['restart', SERVICE], { timeout: 60000, stdio: 'ignore' }) },
-    verify: () => verify(true), verifyOnly: () => verify(false), finalize: async () => {} }
+    verify: () => verify(true), verifyOnly: () => verify(false), finalize: async evidence => exclusive(release + '/LIVE.json', { status: 'LIVE', ...evidence }) }
 }
 async function main() {
   const [mode, arg, other, evidence] = process.argv.slice(2), release = resolve(arg ?? '')
-  assert(dirname(release) === S + '/releases' && release.split('/').at(-1).startsWith('preview-sharing-'), 'Expected private NEW release path')
+  assert(dirname(release) === S + '/releases' && release.split('/').at(-1).startsWith('preview-share-expiry-'), 'Expected private NEW release path')
   assert(['prepare', 'baseline', 'check', 'arm', 'apply', 'verify'].includes(mode), 'Use prepare|baseline|check|arm|apply|verify')
   if (mode === 'prepare') return prepare(release, resolve(other), resolve(evidence))
   validate(release)

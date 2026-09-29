@@ -114,3 +114,39 @@ runtime inventory/dependencies/Hours. The existing same-name docx source map use
 LIVE bytes only after all non-path fields and normalized source paths matched.
 The staged candidate lives in this worktree's `dist-server` and `dist`; those
 generated outputs and all private evidence are excluded from Git.
+
+## Authorized rollout
+
+Root accepted exact product `5378c9330a2711c0e52a86ee6b44698b93fda38a` for
+NEW deployment after independent source and evidence review. The follow-up
+`scripts/preview-share-release` runner binds that product separately from its
+runner/docs commit. It verifies the already-live sharing configuration byte for
+byte and never publishes configuration. Its backend allowlist is exactly the
+six JS/map files above; the client payload is the complete matching 25-file
+graph. Immutable assets publish before one restart; `sw.js` and `index.html`
+publish only after backend health, with index last.
+
+Use a newly named private release and never replay an existing attempt:
+
+```sh
+node scripts/preview-share-release/deploy.mjs prepare "$release" "$worktree" "$evidence"
+node "$release/deploy.mjs" baseline "$release"
+node "$release/deploy.mjs" check "$release"
+node "$release/deploy.mjs" arm "$release" "$(sha256sum "$release/seal.json" | cut -d' ' -f1)"
+systemd-run --unit=codex-preview-share-expiry-5378c93 --collect \
+  /usr/local/bin/node "$release/deploy.mjs" apply "$release"
+```
+
+The watcher uses encrypted metadata plus global orchestration state and exempts
+no conversation. If it is waiting on the coordinating turn, end that turn and
+report ARMED. Do not poll it from the same task. `apply-attempt.json` permits
+exactly one apply. After an ambiguous post-restart verification failure, inspect
+the phase and hashes and use only the sealed verify-only recovery command:
+
+```sh
+node "$release/deploy.mjs" verify "$release"
+```
+
+Verify-only never restarts and cannot publish an unsealed backend. It may finish
+sealed SW/index publication after proving a fresh healthy backend. Mutable grant
+and registry stores are evidence only after restart: never restore their backup.
