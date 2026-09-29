@@ -299,6 +299,7 @@ export class LocalhostPreview {
       upstream.once('response', response => {
         clearTimeout(timeout)
         const headers = this.#responseHeaders(response, port, origin)
+        if (access.cookie) headers['set-cookie'] = [...(Array.isArray(headers['set-cookie']) ? headers['set-cookie'] : []), access.cookie]
         const status = response.statusCode ?? 502
         const cacheable = previewCacheable(req, url.pathname, status, response.headers)
         const authorized = () => {

@@ -8,9 +8,9 @@ export const SHARE_COOKIE = '__Host-codex_preview_share'
 export const SHARE_REDEEM = '/__codex_preview__/share-redeem'
 const MAX_RECORDS = 512, MAX_ACTIVE = 128, MAX_WATCHERS = 2048, MAX_HANDOFFS = 1024
 const uuid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)
-type Grant = { id: string; label: string; serviceName: string; serviceIdentity: string; port: number; path: string; createdAt: number; expiresAt: number; revokedAt: number | null }
+type Grant = { id: string; label: string; serviceName: string; serviceIdentity: string; port: number; path: string; createdAt: number; expiresAt: number; revokedAt: number | null; tokenExpiresAt?: number }
 export type PreviewShare = { id: string; label: string; serviceName: string; port: number; path: string; createdAt: string; expiresAt: string; revokedAt: string | null; status: 'active' | 'expired' | 'revoked' | 'unavailable'; url?: string }
-export type ShareAccess = { valid: () => boolean; watch: (close: () => void) => () => void }
+export type ShareAccess = { valid: () => boolean; watch: (close: () => void) => () => void; cookie?: string }
 export class PreviewShareError extends Error { constructor(readonly status: number, message: string) { super(message) } }
 const iso = (value: number) => new Date(value).toISOString()
 
@@ -18,7 +18,7 @@ const iso = (value: number) => new Date(value).toISOString()
 export class PreviewShares {
   private grants = new Map<string, Grant>()
   private handoffs = new Map<string, { id: string; port: number; expiresAt: number }>()
-  private watchers = new Set<{ id: string; end: () => void }>()
+  private watchers = new Set<{ id: string; end: () => void; reschedule: () => void }>()
   private healthy = true
   private unwatchServices: () => void
   private readonly template?: string
@@ -41,6 +41,7 @@ export class PreviewShares {
           typeof grant.serviceName !== 'string' || grant.serviceName.length > 120 || !Number.isInteger(grant.port) || grant.port < 1024 || grant.port > 65535 ||
           typeof grant.path !== 'string' || Buffer.byteLength(grant.path) > 1024 || previewPath(grant.path) !== grant.path || !Number.isSafeInteger(grant.createdAt) || grant.createdAt < 0 ||
           grant.createdAt > Date.now() || !Number.isSafeInteger(grant.expiresAt) || grant.expiresAt > 8_640_000_000_000_000 || grant.expiresAt <= grant.createdAt || grant.expiresAt - grant.createdAt > 86400_000 ||
+          (grant.tokenExpiresAt !== undefined && (!Number.isSafeInteger(grant.tokenExpiresAt) || grant.tokenExpiresAt <= grant.createdAt || grant.tokenExpiresAt > grant.createdAt + 86400_000)) ||
           (grant.revokedAt !== null && (!Number.isSafeInteger(grant.revokedAt) || grant.revokedAt < grant.createdAt)) || this.grants.has(grant.id)) throw Error('Invalid preview share record')
         this.grants.set(grant.id, grant)
       }
@@ -56,7 +57,12 @@ export class PreviewShares {
     return grant.revokedAt !== null ? 'revoked' : grant.expiresAt <= Date.now() ? 'expired' : !this.usable(grant) ? 'unavailable' : 'active'
   }
   private mac(domain: string, value: string) { return createHmac('sha256', this.signingSecret).update(`codex-preview-share-${domain}-v1\0${value}`).digest('base64url') }
-  private token(grant: Grant) { return `${grant.id}.${this.mac('capability', JSON.stringify(grant))}` }
+  private token(grant: Grant) {
+    // Preserve the original capability, including already issued version-1 URLs.
+    const { tokenExpiresAt, ...signed } = grant
+    signed.expiresAt = tokenExpiresAt ?? grant.expiresAt
+    return `${grant.id}.${this.mac('capability', JSON.stringify(signed))}`
+  }
   private equal(left: string, right: string) { const a = Buffer.from(left), b = Buffer.from(right); return a.length === b.length && timingSafeEqual(a, b) }
   private publicGrant(grant: Grant): PreviewShare {
     const status = this.status(grant)
@@ -81,7 +87,7 @@ export class PreviewShares {
   }
   private invalidate() {
     for (const [key, ticket] of this.handoffs) if (ticket.expiresAt <= Date.now() || !this.valid(ticket.id, ticket.port)) this.handoffs.delete(key)
-    for (const watcher of this.watchers) if (!this.valid(watcher.id)) watcher.end()
+    for (const watcher of this.watchers) watcher.reschedule()
   }
   async list(live: () => void = () => {}) {
     live()
@@ -116,6 +122,21 @@ export class PreviewShares {
     next.set(grant.id, grant); this.save(next)
     return this.publicGrant(grant)
   }
+  updateExpiry(id: string, value: Record<string, unknown>): PreviewShare {
+    if (!uuid(id)) throw new PreviewShareError(400, 'Invalid share ID')
+    const timestamp = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value ? Date.parse(value) : NaN
+    const expiresAt = timestamp(value.expiresAt), expected = timestamp(value.expectedExpiresAt)
+    if (!Number.isSafeInteger(expiresAt) || !Number.isSafeInteger(expected)) throw new PreviewShareError(400, 'Use a valid expiry timestamp')
+    const grant = this.grants.get(id), now = Date.now()
+    if (!grant || this.status(grant) !== 'active') throw new PreviewShareError(409, 'This link is no longer active. Refresh the list.')
+    if (expiresAt <= now || expiresAt > grant.createdAt + 86400_000) throw new PreviewShareError(400, 'Expiry must be in the future and within 24 hours of creation')
+    // An identical retry is harmless; a stale different edit must not overwrite a newer one.
+    if (grant.expiresAt === expiresAt) return this.publicGrant(grant)
+    if (grant.expiresAt !== expected) throw new PreviewShareError(409, 'This link changed. Refresh before editing again.')
+    const updated = { ...grant, tokenExpiresAt: grant.tokenExpiresAt ?? grant.expiresAt, expiresAt }
+    this.save(new Map(this.grants).set(id, updated))
+    return this.publicGrant(updated)
+  }
   revoke(id: string) {
     if (!uuid(id)) throw new PreviewShareError(400, 'Invalid share ID')
     const grant = this.grants.get(id)
@@ -133,7 +154,7 @@ export class PreviewShares {
     this.invalidate()
     if (this.handoffs.size >= MAX_HANDOFFS) throw new PreviewShareError(429, 'Too many pending share openings. Retry shortly.')
     const ticket = randomBytes(32).toString('base64url')
-    this.handoffs.set(ticket, { id: grant.id, port: grant.port, expiresAt: Math.min(Date.now() + 60_000, grant.expiresAt) })
+    this.handoffs.set(ticket, { id: grant.id, port: grant.port, expiresAt: Date.now() + 60_000 })
     return { url: this.template!.replace('{port}', String(grant.port)) + SHARE_REDEEM, ticket }
   }
   redeem(ticket: unknown, port: number): { path: string; cookie: string } {
@@ -141,9 +162,13 @@ export class PreviewShares {
     if (!grantTicket || grantTicket.port !== port || grantTicket.expiresAt <= Date.now() || !this.valid(grantTicket.id, port)) throw new PreviewShareError(401, 'Share opening expired; open the original link again')
     this.handoffs.delete(ticket as string)
     const grant = this.grants.get(grantTicket.id)!
-    const body = `${grant.id}.${port}.${grant.expiresAt}`
-    const value = `${body}.${this.mac('cookie', body)}`
-    return { path: grant.path, cookie: `${SHARE_COOKIE}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.max(0, Math.ceil((grant.expiresAt - Date.now()) / 1000))}` }
+    return { path: grant.path, cookie: this.cookie(grant) }
+  }
+  private cookie(grant: Grant) {
+    // Cookie retention uses the immutable lifetime ceiling; authorization always
+    // checks the current grant. Shortening/revocation cannot be bypassed by it.
+    const ceiling = grant.createdAt + 86400_000, body = `${grant.id}.${grant.port}.${ceiling}`
+    return `${SHARE_COOKIE}=${body}.${this.mac('cookie', body)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.max(0, Math.ceil((ceiling - Date.now()) / 1000))}`
   }
   access(cookie: string, port: number): ShareAccess | null {
     const entries = cookie.split(';').map(part => part.trim()).filter(part => part.startsWith(SHARE_COOKIE + '='))
@@ -151,16 +176,24 @@ export class PreviewShares {
     const value = entries[0].slice(SHARE_COOKIE.length + 1), [id, p, expiry, mac, extra] = value.split('.')
     if (extra !== undefined || !uuid(id) || p !== String(port) || !mac || !this.equal(mac, this.mac('cookie', `${id}.${p}.${expiry}`))) return null
     const grant = this.grants.get(id)
-    if (!grant || expiry !== String(grant.expiresAt) || !this.valid(id, port)) return null
-    return { valid: () => this.valid(id, port), watch: close => this.watch(id, port, close) }
+    if (!grant || ![String(grant.createdAt + 86400_000), String(grant.tokenExpiresAt ?? grant.expiresAt)].includes(expiry) || !this.valid(id, port)) return null
+    // Legacy cookies are bound to the original signed expiry. An explicit owner
+    // edit changes grant authority, not its identity. Refresh their browser age.
+    return { valid: () => this.valid(id, port), watch: close => this.watch(id, port, close),
+      ...(expiry !== String(grant.createdAt + 86400_000) ? { cookie: this.cookie(grant) } : {}) }
   }
   private watch(id: string, port: number, close: () => void) {
     if (!this.valid(id, port)) { close(); return () => {} }
     if (this.watchers.size >= MAX_WATCHERS) throw new PreviewShareError(503, 'Too many active share connections')
-    const watcher = { id, end: () => { cleanup(); close() } }
-    const timer = setTimeout(watcher.end, Math.max(1, this.grants.get(id)!.expiresAt - Date.now())); timer.unref()
-    const cleanup = () => { clearTimeout(timer); this.watchers.delete(watcher) }
+    let timer: ReturnType<typeof setTimeout> | undefined, ended = false
+    const cleanup = () => { ended = true; clearTimeout(timer); this.watchers.delete(watcher) }
+    const watcher = { id, end: () => { if (ended) return; cleanup(); close() }, reschedule: () => {
+      clearTimeout(timer)
+      if (!this.valid(id, port)) { watcher.end(); return }
+      timer = setTimeout(watcher.reschedule, Math.max(1, this.grants.get(id)!.expiresAt - Date.now())); timer.unref()
+    } }
     this.watchers.add(watcher)
+    watcher.reschedule()
     return cleanup
   }
   close() { this.unwatchServices(); this.handoffs.clear(); for (const watcher of this.watchers) watcher.end() }

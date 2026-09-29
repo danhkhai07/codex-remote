@@ -638,6 +638,13 @@ dialog.folder-dialog { position: fixed; max-height: calc(100dvh - 40px); width: 
 .preview-shares-error { margin: 0 20px 12px; }
 .preview-shares-error button { min-height: 38px; margin-left: auto; }
 .preview-shares-notice { margin: 0 20px 12px; padding: 9px 11px; color: var(--accent); border: 1px solid #4b5a35; border-radius: 10px; background: #1b2419; font-size: 0.8rem; }
+.preview-shares-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin: 0 20px 14px; }
+.preview-shares-loading { margin: 0 20px 16px; }
+.preview-share-edit { grid-column: 1 / -1; min-width: 0; display: grid; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
+.preview-share-edit-time { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+.preview-share-edit label { display: grid; gap: 6px; color: var(--muted); font-size: 0.8rem; }
+.preview-share-edit input { width: 100%; min-width: 0; min-height: 44px; font-size: 16px; }
+.preview-share-edit p { margin: 0; color: var(--muted); font-size: 0.76rem; line-height: 1.5; }
 .preview-shares-create, .preview-shares-active, .preview-shares-history { margin: 0 20px 18px; }
 .preview-shares-create, .preview-shares-active { padding-top: 16px; border-top: 1px solid var(--line); }
 .preview-shares-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 11px; }

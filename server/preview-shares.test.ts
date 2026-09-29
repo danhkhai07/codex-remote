@@ -169,3 +169,66 @@ it('bounds active watched streams, releases slots and invalidates all grants on 
   expect(rotated.access(oldCookie, 5180)).toBeNull()
   expect(() => rotated.exchange(new URL(oldLink.url!).hash.slice(1))).toThrow()
 })
+
+it('edits active expiry durably within the creation ceiling, preserves legacy URL and rejects stale or terminal edits', async () => {
+  const f = fixture(), link = f.create(3600), original = JSON.parse(readFileSync(f.file, 'utf8')).grants[0]
+  const target = new Date(Date.parse(link.createdAt) + 86400_000).toISOString()
+  for (const expiresAt of [null, Infinity, 'bad', '2026-01-01', new Date(Date.now() - 1).toISOString(), new Date(Date.parse(target) + 1).toISOString()]) {
+    expect(() => f.shares.updateExpiry(link.id, { expiresAt, expectedExpiresAt: link.expiresAt })).toThrow()
+    expect(JSON.parse(readFileSync(f.file, 'utf8')).grants[0]).toEqual(original)
+  }
+  const edited = f.shares.updateExpiry(link.id, { expiresAt: target, expectedExpiresAt: link.expiresAt })
+  expect(edited).toEqual({ ...link, expiresAt: target })
+  expect(f.shares.updateExpiry(link.id, { expiresAt: target, expectedExpiresAt: link.expiresAt })).toEqual(edited)
+  expect(() => f.shares.updateExpiry(link.id, { expiresAt: new Date(Date.parse(target) - 1000).toISOString(), expectedExpiresAt: link.expiresAt })).toThrow(/changed/)
+  const restored = new PreviewShares(f.options); cleanup.push(() => restored.close())
+  expect((await restored.list()).links[0]).toEqual(edited)
+  expect(restored.exchange(new URL(link.url!).hash.slice(1)).ticket).toBeTruthy()
+  expect(JSON.parse(readFileSync(f.file, 'utf8')).grants[0]).toEqual({ ...original, tokenExpiresAt: original.expiresAt, expiresAt: Date.parse(target) })
+  f.shares.revoke(link.id)
+  expect(() => f.shares.updateExpiry(link.id, { expiresAt: target, expectedExpiresAt: target })).toThrow(/no longer active/)
+  const short = f.create(1)
+  vi.spyOn(Date, 'now').mockReturnValue(Date.parse(short.expiresAt))
+  expect(() => f.shares.updateExpiry(short.id, { expiresAt: target, expectedExpiresAt: short.expiresAt })).toThrow(/no longer active/)
+})
+
+it('reschedules existing HTTP/WS watchers and pending handoffs on extension and shortening without renewing an expired grant', () => {
+  vi.useFakeTimers(); cleanup.push(() => vi.useRealTimers())
+  const f = fixture(), link = f.create(2), cookie = f.open(link), close = vi.fn(), origin = Date.now()
+  const ticket = f.shares.exchange(new URL(link.url!).hash.slice(1))
+  f.shares.access(cookie, 5180)!.watch(close)
+  const extended = f.shares.updateExpiry(link.id, { expiresAt: new Date(origin + 10_000).toISOString(), expectedExpiresAt: link.expiresAt })
+  vi.advanceTimersByTime(3000)
+  expect(close).not.toHaveBeenCalled(); expect(f.shares.access(cookie, 5180)?.valid()).toBe(true)
+  expect(f.shares.redeem(ticket.ticket, 5180).cookie).toContain('Max-Age=')
+  const shortened = f.shares.updateExpiry(link.id, { expiresAt: new Date(origin + 4000).toISOString(), expectedExpiresAt: extended.expiresAt })
+  vi.advanceTimersByTime(1000)
+  expect(close).toHaveBeenCalledOnce(); expect(f.shares.access(cookie, 5180)).toBeNull()
+  expect(() => f.shares.updateExpiry(link.id, { expiresAt: extended.expiresAt, expectedExpiresAt: shortened.expiresAt })).toThrow(/no longer active/)
+  vi.advanceTimersByTime(10_000); expect(close).toHaveBeenCalledOnce()
+})
+
+it('retains legacy cookie binding after an explicit edit and refreshes its browser retention only within the hard ceiling', async () => {
+  const { createHmac } = await import('node:crypto')
+  const f = fixture(), link = f.create(60), body = `${link.id}.5180.${Date.parse(link.expiresAt)}`
+  const mac = createHmac('sha256', f.options.secret).update(`codex-preview-share-cookie-v1\0${body}`).digest('base64url')
+  const cookie = `${SHARE_COOKIE}=${body}.${mac}`
+  const target = new Date(Date.parse(link.createdAt) + 120_000).toISOString()
+  f.shares.updateExpiry(link.id, { expiresAt: target, expectedExpiresAt: link.expiresAt })
+  expect(f.shares.access(cookie, 5180)?.cookie).toContain(String(Date.parse(link.createdAt) + 86400_000))
+  vi.spyOn(Date, 'now').mockReturnValue(Date.parse(link.expiresAt) + 1)
+  expect(f.shares.access(cookie, 5180)?.valid()).toBe(true) // Owner extended this same grant; original signed URL/cookie identity remains.
+  vi.spyOn(Date, 'now').mockReturnValue(Date.parse(target))
+  expect(f.shares.access(cookie, 5180)).toBeNull()
+})
+
+it('expiry persistence failure fails closed and unavailable service grants cannot be edited', () => {
+  const f = fixture(), link = f.create(), update = { expiresAt: new Date(Date.parse(link.createdAt) + 7200_000).toISOString(), expectedExpiresAt: link.expiresAt }
+  const close = vi.fn(); f.shares.access(f.open(link), 5180)!.watch(close)
+  rmSync(f.root, { recursive: true }); writeFileSync(f.root, 'owned fixture obstruction')
+  expect(() => f.shares.updateExpiry(link.id, update)).toThrow(/persist/)
+  expect(close).toHaveBeenCalledOnce(); expect(f.shares.valid(link.id)).toBe(false)
+  const other = fixture(), second = other.create()
+  other.services.remove('port:5180')
+  expect(() => other.shares.updateExpiry(second.id, { ...update, expectedExpiresAt: second.expiresAt })).toThrow(/no longer active/)
+})

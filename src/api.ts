@@ -103,6 +103,9 @@ export const api = {
   createPreviewShare: (body: { port: number; path?: string; label?: string; ttlSeconds: number }, csrf: string, signal?: AbortSignal) => request<{ link: PreviewShare }>('/api/preview-shares', {
     method: 'POST', body: JSON.stringify(body), signal,
   }, csrf),
+  updatePreviewShare: (id: string, body: { expiresAt: string; expectedExpiresAt: string }, csrf: string, signal?: AbortSignal) => request<{ link: PreviewShare; serverNow: string }>(`/api/preview-shares/${encodeURIComponent(id)}`, {
+    method: 'PATCH', body: JSON.stringify(body), signal,
+  }, csrf),
   revokePreviewShare: (id: string, csrf: string, signal?: AbortSignal) => request<{ ok: true }>(`/api/preview-shares/${encodeURIComponent(id)}`, {
     method: 'DELETE', signal,
   }, csrf),

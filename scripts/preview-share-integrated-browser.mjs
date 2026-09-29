@@ -82,7 +82,14 @@ try {
     const openMenu = async () => { if (width < 800 && !await page.locator('.thread-sidebar').evaluate(e => e.classList.contains('is-open'))) await page.getByRole('button', { name: 'Open conversations', exact: true }).click(); await page.getByLabel('Settings', { exact: true }).click() }
     await openMenu(); await page.getByRole('button', { name: 'Share links', exact: true }).click()
     const dialog = page.getByRole('dialog', { name: 'Share links', exact: true }); await dialog.waitFor()
-    await dialog.getByLabel('Service', { exact: true }).selectOption(String(appPort))
+    const plus = dialog.getByRole('button', { name: 'Create link', exact: true })
+    await plus.waitFor(); await page.waitForFunction(() => !document.querySelector('[aria-label="Create link"]')?.disabled)
+    assert.equal(await dialog.getByLabel('Service', { exact: true }).count(), 0)
+    const screenshots = process.env.SHARE_SCREENSHOTS
+    if (screenshots) { mkdirSync(screenshots, { recursive: true }); await page.screenshot({ path: join(screenshots, `${engine}-list-${width}.png`) }) }
+    await plus.click(); await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+    assert.equal(await dialog.getByLabel('Service', { exact: true }).count(), 0)
+    await plus.click(); await dialog.getByLabel('Service', { exact: true }).selectOption(String(appPort))
     const label = `Review ${engine} ${width}`
     await dialog.getByLabel('Label', { exact: true }).fill(label); await dialog.getByRole('button', { name: 'Create share link', exact: true }).click()
     const row = dialog.locator('.preview-shares-active li').filter({ hasText: label }); await row.waitFor()
@@ -96,10 +103,35 @@ try {
     await target.goto(link); await target.getByRole('heading', { name: 'Shared app opened' }).waitFor()
     assert(!(await recipient.cookies()).some(c => c.name.includes('remote_session')))
     assert(!JSON.stringify(observed).includes(new URL(link).hash.slice(1))); assert(!JSON.stringify(observed).includes('__Host-codex'))
-    const screenshots = process.env.SHARE_SCREENSHOTS
     if (screenshots) { mkdirSync(screenshots, { recursive: true }); await page.screenshot({ path: join(screenshots, `${engine}-owner-${width}.png`) }); await target.screenshot({ path: join(screenshots, `${engine}-recipient-${width}.png`) }) }
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), false)
-    await row.getByRole('button', { name: 'Revoke', exact: true }).click(); await row.waitFor({ state: 'detached' })
+    assert.equal(await dialog.getByLabel('Service', { exact: true }).count(), 0, 'successful create returns to list')
+    await row.getByRole('button', { name: 'Edit expiry', exact: true }).click()
+    const expiryDate = row.getByLabel('Expiry date (local)', { exact: true }), expiryTime = row.getByLabel('Expiry time (local)', { exact: true })
+    const expiry = { fill: async value => { const [date, time] = value.split('T'); await expiryDate.fill(date); await expiryTime.fill(time) }, inputValue: async () => `${await expiryDate.inputValue()}T${await expiryTime.inputValue()}` }
+    const inputTime = time => { const d = new Date(time); return new Date(time - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 19) }
+    await expiry.fill(inputTime(Date.now() + 7200_000))
+    if (screenshots) await page.screenshot({ path: join(screenshots, `${engine}-edit-${width}.png`) })
+    await row.getByRole('button', { name: 'Save', exact: true }).click()
+    await dialog.getByRole('status').filter({ hasText: 'Expiry updated' }).waitFor()
+    assert.equal(await row.getByRole('link', { name: 'Open', exact: true }).getAttribute('href'), link)
+    assert.equal((await target.reload()).status(), 200, 'recipient cookie survives extension')
+    await row.getByRole('button', { name: 'Edit expiry', exact: true }).click()
+    await expiry.fill(inputTime(Date.now() + 3000))
+    const shortExpiry = await expiry.inputValue()
+    await row.getByRole('button', { name: 'Save', exact: true }).click()
+    await dialog.getByRole('status').filter({ hasText: 'Expiry updated' }).waitFor()
+    assert.equal(await row.getByRole('link', { name: 'Open', exact: true }).getAttribute('href'), link)
+    await new Promise(resolve => setTimeout(resolve, Math.max(0, new Date(shortExpiry).getTime() - Date.now()) + 100))
+    assert.equal((await target.reload()).status(), 401, 'edited server cutoff denies recipient')
+    await row.waitFor({ state: 'detached' })
+    // A separate active link retains ordinary early revocation.
+    await plus.click(); await dialog.getByLabel('Label', { exact: true }).fill(label + ' revoke')
+    await dialog.getByRole('button', { name: 'Create share link', exact: true }).click()
+    const revokable = dialog.locator('.preview-shares-active li').filter({ hasText: label + ' revoke' }); await revokable.waitFor()
+    await target.goto(await revokable.getByRole('link', { name: 'Open', exact: true }).getAttribute('href'))
+    await target.getByRole('heading', { name: 'Shared app opened' }).waitFor()
+    await revokable.getByRole('button', { name: 'Revoke', exact: true }).click(); await revokable.waitFor({ state: 'detached' })
     assert.equal((await target.reload()).status(), 401)
     // Real server expiry, short TTL through encrypted owner API; all state is under the temp root.
     const short = (await ownerApi('/api/preview-shares', 'POST', { port: appPort, ttlSeconds: 2, label: 'Expiry fixture' })).link
@@ -109,7 +141,7 @@ try {
     await page.keyboard.press('Escape'); await dialog.waitFor({ state: 'detached' }); assert.equal(await page.locator('#instruction').inputValue(), 'Draft preserved')
     await openMenu(); await page.getByRole('button', { name: /Khóa|Lock/ }).click(); await page.getByLabel('Khóa mã hóa riêng', { exact: true }).waitFor()
     assert.deepEqual(errors, [])
-    await recipient.close(); await context.close(); console.log(`PASS ${engine} ${width}: real encrypted owner create/copy/open/revoke, fresh recipient, expiry and Lock`); evidence.push({ width, encryptedOwnerCreateCopyOpenRevoke: true, anonymousRecipient: true, expiry: true, lock: true })
+    await recipient.close(); await context.close(); console.log(`PASS ${engine} ${width}: list/plus/cancel, real encrypted create/edit same URL/revoke, fresh recipient, edited expiry and Lock`); evidence.push({ width, encryptedOwnerCreateCopyOpenRevoke: true, anonymousRecipient: true, expiry: true, lock: true })
   }
   assert(!nativeReads.some(m => /turn\/start|thread\/start/.test(m)))
   console.log(JSON.stringify({ passed: true, engine, evidence, realModelTurns: 0, productionAccess: false }))

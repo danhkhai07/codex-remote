@@ -13,8 +13,10 @@ import {
 } from './previewShares'
 
 const formatDateTime = (value: string) => new Intl.DateTimeFormat('en-GB', {
-  dateStyle: 'short', timeStyle: 'short', timeZone: 'Asia/Ho_Chi_Minh',
+  dateStyle: 'short', timeStyle: 'short',
 }).format(new Date(value))
+
+const localInput = (time: number) => { const date = new Date(time); return new Date(time - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 19) }
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Unable to load share links'
 
@@ -25,6 +27,9 @@ export function PreviewSharesDialog({ csrf, online, trigger, onClose }: {
   onClose: () => void
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
+  const createButton = useRef<HTMLButtonElement>(null)
+  const editTrigger = useRef<HTMLButtonElement | null>(null)
+  const expiryInput = useRef<HTMLInputElement>(null)
   const serviceSelect = useRef<HTMLSelectElement>(null)
   const lifetime = useRef<AbortController | null>(null)
   const loadRequest = useRef<AbortController | null>(null)
@@ -41,6 +46,9 @@ export function PreviewSharesDialog({ csrf, online, trigger, onClose }: {
   const [ttlSeconds, setTtlSeconds] = useState(60 * 60)
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
+  const [showCreate, setShowCreate] = useState(false)
+  const [edit, setEdit] = useState<{ id: string; value: string; expected: string } | null>(null)
+  const [saving, setSaving] = useState<string | null>(null)
   const [revoking, setRevoking] = useState<Set<string>>(new Set())
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -61,12 +69,12 @@ export function PreviewSharesDialog({ csrf, online, trigger, onClose }: {
       if (!current()) return
       const nextClock = serverClock(value.serverNow)
       setSnapshot(value)
+      setEdit(null)
       setClock(nextClock)
       setNow(clockNow(nextClock))
       setServicePort(current => current && value.services.some(service => String(service.port) === current)
         ? current
         : String(value.services.find(service => service.running !== false)?.port ?? value.services[0]?.port ?? ''))
-      requestAnimationFrame(() => serviceSelect.current?.focus())
     } catch (reason) {
       if (current()) setError(message(reason))
     } finally {
@@ -93,9 +101,18 @@ export function PreviewSharesDialog({ csrf, online, trigger, onClose }: {
   useEffect(() => {
     const tick = () => setNow(clockNow(clock))
     tick()
-    const interval = window.setInterval(tick, 30_000)
+    const interval = window.setInterval(tick, 1000)
     return () => window.clearInterval(interval)
   }, [clock])
+
+  useEffect(() => { if (showCreate) serviceSelect.current?.focus() }, [showCreate])
+  useEffect(() => { if (edit) expiryInput.current?.focus() }, [edit?.id])
+  const focusBack = (element: HTMLElement | null) => {
+    const owner = lifetime.current
+    requestAnimationFrame(() => { if (owner && !owner.signal.aborted && lifetime.current === owner && element?.isConnected) element.focus({ preventScroll: true }) })
+  }
+  const hideCreate = () => { setShowCreate(false); focusBack(createButton.current) }
+  const cancelEdit = () => { setEdit(null); focusBack(editTrigger.current) }
 
   const selectedService = snapshot?.services.find(service => String(service.port) === servicePort)
   useEffect(() => { if (selectedService) setPath(selectedService.path || '/') }, [selectedService])
@@ -127,6 +144,7 @@ export function PreviewSharesDialog({ csrf, online, trigger, onClose }: {
       setSnapshot(current => current ? { ...current, links: [result.link, ...current.links.filter(link => link.id !== result.link.id)] } : current)
       setLabel('')
       setNotice('Share link created.')
+      hideCreate()
     } catch (reason) {
       if (!activeLifetime.signal.aborted && lifetime.current === activeLifetime) setError(message(reason))
     } finally {
@@ -162,6 +180,31 @@ export function PreviewSharesDialog({ csrf, online, trigger, onClose }: {
     }
   }
 
+  async function saveExpiry(event: FormEvent, link: PreviewShare) {
+    event.preventDefault()
+    const owner = lifetime.current, target = edit && new Date(edit.value).getTime()
+    if (!edit || revokeLocked.current.has(link.id) || !owner || owner.signal.aborted || !online || !csrf) return
+    if (!target || !Number.isFinite(target) || target <= clockNow(clock) || target > Date.parse(link.createdAt) + 86400_000) {
+      setError('Choose a future expiry within 24 hours of creation.'); return
+    }
+    revokeLocked.current.add(link.id)
+    mutationCount.current++; mutationRevision.current++
+    setSaving(link.id); setError(''); setNotice('')
+    try {
+      const result = await api.updatePreviewShare(link.id, { expiresAt: new Date(target).toISOString(), expectedExpiresAt: edit.expected }, csrf, owner.signal)
+      if (owner.signal.aborted || lifetime.current !== owner) return
+      setSnapshot(current => current ? { ...current, links: current.links.map(item => item.id === link.id ? result.link : item) } : current)
+      const nextClock = serverClock(result.serverNow); setClock(nextClock); setNow(clockNow(nextClock))
+      cancelEdit(); setNotice('Expiry updated. The link stays the same.')
+    } catch (reason) {
+      if (!owner.signal.aborted && lifetime.current === owner) setError(message(reason))
+    } finally {
+      revokeLocked.current.delete(link.id)
+      mutationCount.current = Math.max(0, mutationCount.current - 1); mutationRevision.current++
+      if (!owner.signal.aborted && lifetime.current === owner) setSaving(null)
+    }
+  }
+
   async function copy(link: PreviewShare) {
     const activeLifetime = lifetime.current
     if (!link.url || !activeLifetime || activeLifetime.signal.aborted) return
@@ -184,12 +227,17 @@ export function PreviewSharesDialog({ csrf, online, trigger, onClose }: {
     </header>
     <p className="preview-shares-intro">Anyone with a link can use the service until the link expires or is revoked. The service's own sign-in still applies.</p>
 
-    {error && <div className="error-banner preview-shares-error" role="alert"><span>{error}</span>{!snapshot && <button type="button" onClick={() => void load()} disabled={loading || creating || revoking.size > 0}>Retry</button>}</div>}
+    {error && <div className="error-banner preview-shares-error" role="alert"><span>{error}</span>{!snapshot && <button type="button" onClick={() => void load()} disabled={loading || creating || saving !== null || revoking.size > 0}>Retry</button>}</div>}
     {notice && <p className="preview-shares-notice" role="status">{notice}</p>}
 
-    <section className="preview-shares-create" aria-labelledby="preview-shares-create-title">
-      <div className="preview-shares-section-heading"><h3 id="preview-shares-create-title">Create a new link</h3><button className="quiet-button" type="button" onClick={() => void load()} disabled={loading || creating || revoking.size > 0}>{loading ? 'Loading…' : 'Refresh'}</button></div>
-      {!snapshot && loading ? <p role="status" className="muted">Loading services and existing links…</p> : <form onSubmit={event => void create(event)}>
+    <div className="preview-shares-toolbar">
+      <button className="quiet-button" type="button" onClick={() => void load()} disabled={loading || creating || saving !== null || revoking.size > 0}>{loading ? 'Loading…' : 'Refresh'}</button>
+      <button ref={createButton} className="icon-button" type="button" aria-label="Create link" aria-expanded={showCreate} aria-controls="preview-shares-create" disabled={showCreate || !snapshot} onClick={() => { setShowCreate(true); setError('') }}><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M5 12h14" /></svg></button>
+    </div>
+    {!snapshot && loading && <p role="status" className="muted preview-shares-loading">Loading services and existing links…</p>}
+    {showCreate && <section id="preview-shares-create" className="preview-shares-create" aria-labelledby="preview-shares-create-title">
+      <div className="preview-shares-section-heading"><h3 id="preview-shares-create-title">Create a new link</h3><button className="quiet-button" type="button" disabled={creating} onClick={hideCreate}>Cancel</button></div>
+      <form onSubmit={event => void create(event)}>
         <label>Service
           <select aria-label="Service" ref={serviceSelect} value={servicePort} disabled={creating || !online || !snapshot?.services.length} onChange={event => setServicePort(event.target.value)} required>
             {!snapshot?.services.length && <option value="">No services available to share</option>}
@@ -212,9 +260,9 @@ export function PreviewSharesDialog({ csrf, online, trigger, onClose }: {
           <p id="preview-share-path-help" className={pathTooLong ? 'preview-share-path-help is-error' : 'preview-share-path-help'}>{pathBytes.toLocaleString('en-US')} / {PREVIEW_SHARE_PATH_MAX_BYTES.toLocaleString('en-US')} UTF-8 bytes. This path only selects the opening screen; it does not limit other pages in the same service.</p>
         </details>
         <button className="primary-button preview-shares-submit" disabled={creating || !online || !csrf || !selectedService || selectedService.running === false || pathTooLong}>{creating ? 'Creating…' : 'Create share link'}</button>
-      </form>}
-      {!online && <p className="muted">You're offline — reconnect to create or revoke links.</p>}
-    </section>
+      </form>
+      {!online && <p className="muted">You're offline — reconnect to manage links.</p>}
+    </section>}
 
     <section className="preview-shares-active" aria-labelledby="preview-shares-active-title">
       <div className="preview-shares-section-heading"><h3 id="preview-shares-active-title">Active links</h3>{snapshot && <span>{activeLinks.length}</span>}</div>
@@ -226,8 +274,21 @@ export function PreviewSharesDialog({ csrf, online, trigger, onClose }: {
           <div className="preview-share-actions">
             <button className="quiet-button" type="button" disabled={!link.url} onClick={() => void copy(link)}>Copy</button>
             {link.url && <a className="quiet-button" href={link.url} target="_blank" rel="noreferrer" referrerPolicy="no-referrer">Open</a>}
-            <button className="danger-button" type="button" disabled={revoking.has(link.id) || !online} onClick={() => void revoke(link)}>{revoking.has(link.id) ? 'Revoking…' : 'Revoke'}</button>
+            <button className="quiet-button" type="button" disabled={saving !== null || revoking.has(link.id) || !online || edit?.id === link.id} onClick={event => { editTrigger.current = event.currentTarget; setEdit({ id: link.id, value: localInput(Date.parse(link.expiresAt)), expected: link.expiresAt }); setError('') }}>Edit expiry</button>
+            <button className="danger-button" type="button" disabled={revoking.has(link.id) || saving === link.id || !online} onClick={() => void revoke(link)}>{revoking.has(link.id) ? 'Revoking…' : 'Revoke'}</button>
           </div>
+          {edit?.id === link.id && <form className="preview-share-edit" onSubmit={event => void saveExpiry(event, link)}>
+            <div className="preview-share-edit-time">
+              <label>Expiry date (local)
+                <input ref={expiryInput} type="date" value={edit.value.split('T')[0]} min={localInput(now).slice(0, 10)} max={localInput(Date.parse(link.createdAt) + 86400_000).slice(0, 10)} required disabled={saving === link.id} onChange={event => setEdit({ ...edit, value: `${event.target.value}T${edit.value.split('T')[1] ?? ''}` })} />
+              </label>
+              <label>Expiry time (local)
+                <input type="time" step="1" value={edit.value.split('T')[1] ?? ''} required disabled={saving === link.id} onChange={event => setEdit({ ...edit, value: `${edit.value.split('T')[0]}T${event.target.value}` })} />
+              </label>
+            </div>
+            <p>Latest: {formatDateTime(new Date(Date.parse(link.createdAt) + 86400_000).toISOString())} · 24 hours from creation. The URL stays the same.</p>
+            <div className="preview-share-actions"><button className="primary-button" disabled={saving === link.id || revoking.has(link.id) || !online}>{saving === link.id ? 'Saving…' : 'Save'}</button><button className="quiet-button" type="button" disabled={saving === link.id} onClick={cancelEdit}>Cancel</button></div>
+          </form>}
         </li>)}
       </ul>
     </section>

@@ -45,17 +45,18 @@ try {
     { port: 4173, name: 'Website demo', path: '/demo', running: true },
     { port: 5173, name: 'Stopped demo', path: '/', running: false },
   ]
-  let links = [], failNextGet = false, getCount = 0, createCount = 0, revokeCount = 0, createGate, revokeGate, readGate
+  let links = [], failNextGet = false, getCount = 0, createCount = 0, revokeCount = 0, createGate, revokeGate, readGate, editGate, failEdit = false, editCount = 0
   const reset = () => {
     const now = Date.now()
     links = [
       { id: 'active', label: 'Client', serviceName: 'Website demo', port: 4173, path: '/demo', createdAt: new Date(now - 60_000).toISOString(), expiresAt: new Date(now + 3_600_000).toISOString(), revokedAt: null, status: 'active', url: 'https://share.fixture.test/s/active#secret' },
       { id: 'expired', label: 'Older link', serviceName: 'Website demo', port: 4173, path: '/', createdAt: new Date(now - 7_200_000).toISOString(), expiresAt: new Date(now - 3_600_000).toISOString(), revokedAt: null, status: 'expired' },
     ]
-    failNextGet = true; getCount = 0; createCount = 0; revokeCount = 0; createGate = undefined; revokeGate = undefined; readGate = undefined
+    failNextGet = true; getCount = 0; createCount = 0; revokeCount = 0; createGate = undefined; revokeGate = undefined; readGate = undefined; editGate = undefined; editCount = 0; failEdit = false
   }
   const dispatch = async (req, res) => {
     const url = new URL(req.url, 'http://fixture.local'), method = req.method || 'GET'
+    if (url.pathname === '/api/session/logout' && method === 'POST') { assert.equal(req.headers['x-csrf-token'], issued.payload.csrf); return json(res, 200, { ok: true }) }
     if (url.pathname === '/api/session' && method === 'GET') return json(res, 200, { csrf: issued.payload.csrf, expiresAt: issued.payload.expiresAt, workspaces: [{ id: 'fixture', label: 'Fixture', path: files }] })
     if (url.pathname === '/api/threads' && method === 'GET') return json(res, 200, { data: [{ ...thread, turns: [] }] })
     if (url.pathname === '/api/threads/fixture-thread/history' && method === 'GET') return json(res, 200, { thread })
@@ -87,6 +88,17 @@ try {
       links.unshift(link); return json(res, 201, { link })
     }
     const revoke = url.pathname.match(/^\/api\/preview-shares\/([^/]+)$/)
+    if (revoke && method === 'PATCH') {
+      assert.equal(req.headers['x-csrf-token'], issued.payload.csrf); editCount++
+      const body = await readJson(req)
+      if (editGate) await editGate.promise
+      if (res.destroyed) return
+      if (failEdit) { failEdit = false; return json(res, 409, { error: 'This link changed. Refresh before editing again.' }) }
+      const link = links.find(item => item.id === decodeURIComponent(revoke[1]))
+      assert.equal(body.expectedExpiresAt, link.expiresAt)
+      link.expiresAt = body.expiresAt
+      return json(res, 200, { link, serverNow: new Date().toISOString() })
+    }
     if (revoke && method === 'DELETE') {
       assert.equal(req.headers['x-csrf-token'], issued.payload.csrf); revokeCount++
       if (revokeGate) await revokeGate.promise
@@ -132,7 +144,7 @@ try {
     try { await composer.waitFor() } catch (error) { console.error(JSON.stringify({ stage: 'app', url: page.url(), body: await page.locator('body').innerText(), errors })); throw error }
     await composer.fill(`Bản nháp ${viewport.width} vẫn giữ nguyên`)
     const transcript = page.locator('.workspace-content'); await transcript.waitFor(); await transcript.evaluate(element => { element.scrollTop = 450 })
-    const scrollBefore = await transcript.evaluate(element => element.scrollTop)
+    let scrollBefore = await transcript.evaluate(element => element.scrollTop)
     const openMenu = async () => {
       if (viewport.width < 800 && !await page.locator('.thread-sidebar').evaluate(element => element.classList.contains('is-open'))) await page.getByRole('button', { name: 'Open conversations', exact: true }).click()
       await page.getByLabel('Settings', { exact: true }).click()
@@ -143,6 +155,13 @@ try {
     const dialog = page.getByRole('dialog', { name: 'Share links', exact: true }); await dialog.waitFor()
     await dialog.getByRole('alert').filter({ hasText: 'Unable to load fixture' }).waitFor()
     await dialog.getByRole('button', { name: 'Retry', exact: true }).click()
+    const plus = dialog.getByRole('button', { name: 'Create link', exact: true })
+    await page.waitForFunction(() => !document.querySelector('[aria-label="Create link"]')?.disabled)
+    assert.equal(await dialog.locator('select').count(), 0)
+    await plus.click(); await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+    assert.equal(await dialog.locator('select').count(), 0)
+    await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Create link')
+    await plus.click()
     const serviceSelect = dialog.locator('select').nth(0), lifetimeSelect = dialog.locator('select').nth(1)
     try { await serviceSelect.waitFor() } catch (error) { console.error(JSON.stringify({ stage: 'shares-retry', getCount, body: await dialog.innerText(), errors })); throw error }
     assert.equal(await serviceSelect.inputValue(), '4173')
@@ -184,6 +203,52 @@ try {
     const popupPromise = context.waitForEvent('page')
     await dialog.locator('.preview-share-list > li').filter({ hasText: 'Client handoff' }).getByRole('link', { name: 'Open', exact: true }).click()
     const popup = await popupPromise; await popup.getByText('Shared fixture', { exact: true }).waitFor(); await popup.close()
+
+    assert.equal(await dialog.getByLabel('Service', { exact: true }).count(), 0)
+    const editRow = dialog.locator('.preview-shares-active li').filter({ hasText: 'Client handoff' })
+    const originalUrl = await editRow.getByRole('link', { name: 'Open', exact: true }).getAttribute('href')
+    const staleEditRead = deferred(); readGate = staleEditRead
+    const staleEditCount = getCount + 1
+    await dialog.getByRole('button', { name: 'Refresh', exact: true }).click(); await waitFor(() => getCount === staleEditCount)
+    await editRow.getByRole('button', { name: 'Edit expiry', exact: true }).click()
+    const expiryInputDate = editRow.getByLabel('Expiry date (local)', { exact: true }), expiryInputTime = editRow.getByLabel('Expiry time (local)', { exact: true })
+    const expiryInput = { fill: async value => { const [date, time] = value.split('T'); await expiryInputDate.fill(date); await expiryInputTime.fill(time) }, inputValue: async () => `${await expiryInputDate.inputValue()}T${await expiryInputTime.inputValue()}` }
+    const targetTime = new Date(Date.now() + 7200_000); targetTime.setMilliseconds(0)
+    const local = new Date(targetTime.getTime() - targetTime.getTimezoneOffset() * 60_000).toISOString().slice(0, 19)
+    await expiryInput.fill(local)
+    failEdit = true
+    await editRow.getByRole('button', { name: 'Save', exact: true }).click()
+    await dialog.getByRole('alert').filter({ hasText: 'This link changed' }).waitFor()
+    assert.equal(await expiryInput.inputValue(), local)
+    editGate = deferred()
+    const save = editRow.locator('.preview-share-edit .primary-button'); await save.click(); await save.dispatchEvent('click')
+    await waitFor(() => editCount === 2)
+    const refreshEdit = dialog.locator('.preview-shares-toolbar .quiet-button'), beforeEditGet = getCount
+    await refreshEdit.dispatchEvent('click'); await page.waitForTimeout(50); assert.equal(getCount, beforeEditGet)
+    editGate.resolve(); editGate = undefined
+    await dialog.getByRole('status').filter({ hasText: 'Expiry updated' }).waitFor()
+    staleEditRead.resolve(); readGate = undefined; await page.waitForTimeout(100)
+    assert.equal(await editRow.getByRole('link', { name: 'Open', exact: true }).getAttribute('href'), originalUrl)
+    await editRow.getByRole('button', { name: 'Edit expiry', exact: true }).click()
+    assert.equal(await expiryInput.inputValue(), local, 'late GET cannot erase edited expiry')
+    await editRow.getByRole('button', { name: 'Cancel', exact: true }).click()
+
+    // An edit reply held across close/Lock must never update a new popup lifetime.
+    await editRow.getByRole('button', { name: 'Edit expiry', exact: true }).click()
+    await expiryInput.fill(local.replace(/:[0-9]{2}$/, ':01'))
+    editGate = deferred()
+    await editRow.getByRole('button', { name: 'Save', exact: true }).click(); await waitFor(() => editCount === 3)
+    await dialog.getByRole('button', { name: 'Close share links', exact: true }).click()
+    await openMenu(); await page.getByRole('button', { name: /Khóa|Lock/ }).click()
+    editGate.resolve(); editGate = undefined
+    await page.getByLabel('Khóa mã hóa riêng', { exact: true }).waitFor()
+    assert.equal(await page.getByRole('dialog', { name: 'Share links', exact: true }).count(), 0)
+    await page.getByLabel('Khóa mã hóa riêng', { exact: true }).fill(material.key)
+    await page.getByRole('button', { name: 'Mở khóa', exact: true }).click(); await composer.waitFor()
+    await openMenu(); await page.getByRole('button', { name: 'Share links', exact: true }).click()
+    await dialog.waitFor(); await editRow.waitFor()
+    assert.equal(await dialog.getByRole('status').filter({ hasText: 'Expiry updated' }).count(), 0)
+    scrollBefore = await transcript.evaluate(element => element.scrollTop)
 
     // Refresh cannot start while a mutation is pending, even through a synthetic second click.
     revokeGate = deferred()

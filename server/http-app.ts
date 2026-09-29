@@ -362,6 +362,7 @@ export function createRemoteHttpServer(
         if (url.pathname === '/api/preview-shares' && method === 'GET') { const result = await shares.list(live); live(); json(res, 200, result); return }
         if (url.pathname === '/api/preview-shares' && method === 'POST') { const body = await readJson(req, 12_000); live(); json(res, 201, { link: shares.create(body) }); return }
         const id = url.pathname.match(/^\/api\/preview-shares\/([a-f0-9-]{36})$/)?.[1]
+        if (id && method === 'PATCH') { const body = await readJson(req, 2048); live(); json(res, 200, { link: shares.updateExpiry(id, body), serverNow: new Date().toISOString() }); return }
         if (id && method === 'DELETE') { live(); shares.revoke(id); json(res, 200, { ok: true }); return }
         throw new HttpError(405, 'Invalid preview share operation')
       }

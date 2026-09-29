@@ -224,3 +224,41 @@ it('share selection replaces host cookie predictably and owner private launch cl
   expect(response.status).toBe(303)
   expect(response.headers['set-cookie']!.some(c => c.startsWith(SHARE_COOKIE + '=;') && c.includes('Max-Age=0'))).toBe(true)
 })
+
+it('encrypted owner PATCH preserves identity, rejects stale/invalid edits and cannot revive revoked grants', async () => {
+  const f = await fixture(), opened = await f.open(), path = '/api/preview-shares/' + opened.link.id
+  const body = { expiresAt: new Date(Date.parse(opened.link.createdAt) + 7200_000).toISOString(), expectedExpiresAt: opened.link.expiresAt }
+  expect((await raw(f.gateway, 'owner.test', path, { method: 'PATCH', headers: { cookie: f.ownerCookie, 'content-type': 'application/json' }, body: JSON.stringify(body) })).status).toBe(403)
+  expect((await f.transport.request(path, { method: 'PATCH', body: JSON.stringify(body) })).response.status).toBe(403)
+  const response = await f.api(path, 'PATCH', body); expect(response.status).toBe(200)
+  const updated = await response.json(); expect(updated.link).toEqual({ ...opened.link, expiresAt: body.expiresAt }); expect(Date.parse(updated.serverNow)).toBeGreaterThan(0)
+  expect((await f.fetch('/', opened.cookie)).status).toBe(200)
+  expect((await f.exchange(opened.link)).status).toBe(200)
+  expect((await f.api(path, 'PATCH', body)).status).toBe(200)
+  expect((await f.api(path, 'PATCH', { ...body, expiresAt: new Date(Date.parse(body.expiresAt) + 1000).toISOString() })).status).toBe(409)
+  expect((await f.api(path, 'PATCH', { ...body, expiresAt: 'invalid' })).status).toBe(400)
+  expect((await f.api(path, 'DELETE')).status).toBe(200)
+  expect((await f.api(path, 'PATCH', body)).status).toBe(409)
+  expect((await f.fetch('/', opened.cookie)).status).toBe(401)
+})
+
+it.each(['http', 'ws'])('edited expiry extends and shortens an already-open %s connection at the actual new cutoff', async kind => {
+  const f = await fixture((_req, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write('started\n') })
+  f.upstream.on('upgrade', (_req, socket) => { socket.on('error', () => {}); socket.on('end', () => socket.destroy()); socket.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\nstarted') })
+  const link = await f.create(2), opened = await f.open(link), path = '/api/preview-shares/' + link.id
+  const socket = connect(f.gateway, '127.0.0.1'); let ended = false
+  socket.on('error', () => {}); socket.setTimeout(6000, () => socket.destroy())
+  const closed = new Promise<void>(resolve => socket.once('close', () => { ended = true; resolve() }))
+  const started = new Promise<void>(resolve => socket.once('data', () => resolve()))
+  socket.on('connect', () => socket.write(`GET /stream HTTP/1.1\r\nHost: ${f.host}\r\nCookie: ${opened.cookie}\r\n${kind === 'ws' ? `Origin: https://${f.host}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n` : ''}\r\n`))
+  await started
+  const extended = new Date(Date.now() + 10_000).toISOString()
+  expect((await f.api(path, 'PATCH', { expiresAt: extended, expectedExpiresAt: link.expiresAt })).status).toBe(200)
+  await new Promise(resolve => setTimeout(resolve, Math.max(0, Date.parse(link.expiresAt) - Date.now()) + 50))
+  expect(ended).toBe(false); expect((await f.exchange(link)).status).toBe(200)
+  const cutoff = new Date(Date.now() + 200).toISOString()
+  expect((await f.api(path, 'PATCH', { expiresAt: cutoff, expectedExpiresAt: extended })).status).toBe(200)
+  await closed
+  expect(Date.now()).toBeGreaterThanOrEqual(Date.parse(cutoff)); expect(Date.now()).toBeLessThan(Date.parse(cutoff) + 2000)
+  expect((await f.fetch('/', opened.cookie)).status).toBe(401)
+})
