@@ -16,11 +16,16 @@ export function originPlan(registry, existingPorts, nginx, additions) {
   const oldNames = old.map(host).join(' '), names = ports.map(host).join(' '), newNames = added.map(host).join(' ')
   assert.equal((nginx.match(new RegExp('server_name ' + oldNames.replaceAll('.', '\\.') + ';', 'g')) || []).length, 2, 'Review unknown Nginx baseline instead of broadening it')
   assert(nginx.includes('default 0;') && nginx.includes('proxy_pass http://127.0.0.1:5174;'), 'Existing exact-host gateway boundary required')
-  assert.equal((nginx.match(/\/etc\/letsencrypt\/live\/codex-preview-ports\//g) || []).length, 2)
+  assert(ports.length <= 100, 'Preview origin plan is bounded to 100 exact hosts')
+  const certificate = nginx.match(/ssl_certificate \/etc\/letsencrypt\/live\/(codex-preview-ports(?:-v[1-9][0-9]*)?)\/fullchain\.pem;/)?.[1]
+  assert(certificate && nginx.includes(`ssl_certificate_key /etc/letsencrypt/live/${certificate}/privkey.pem;`), 'Review unknown certificate lineage')
+  const version = certificate === 'codex-preview-ports' ? 1 : Number(certificate.split('-v')[1])
+  assert(Number.isSafeInteger(version) && version < 1000, 'Certificate lineage limit')
+  const nextCertificate = `codex-preview-ports-v${version + 1}`
   for (const p of old) assert(nginx.includes(host(p) + ' 1;'), 'Existing exact map missing host')
   const active = nginx.replace('default 0;', 'default 0;\n' + added.map(p => `    ${host(p)} 1;`).join('\n'))
     .replaceAll('server_name ' + oldNames + ';', 'server_name ' + names + ';')
-    .replaceAll('/live/codex-preview-ports/', '/live/codex-preview-ports-v2/')
+    .replaceAll(`/live/${certificate}/`, `/live/${nextCertificate}/`)
     .replace('Seven isolated preview hosts', 'Explicit isolated preview hosts')
   const bootstrap = nginx + `\n# New hosts: ACME only; never bypass the preview gateway.\nserver {
     listen 80; listen [::]:80;
@@ -35,7 +40,7 @@ server {
 }
 `
   return { ports, added, hosts: ports.map(host), envPatch: { CODEX_REMOTE_PREVIEW_SHARE_PORTS: ports.join(',') }, bootstrap, active,
-    certbotArguments: ['certonly', '--webroot', '-w', '/var/lib/codex-preview-acme', '--cert-name', 'codex-preview-ports-v2', ...ports.flatMap(p => ['-d', host(p)]), '--deploy-hook', '/usr/sbin/nginx -t && /usr/bin/systemctl reload nginx'] }
+    certbotArguments: ['certonly', '--webroot', '-w', '/var/lib/codex-preview-acme', '--cert-name', nextCertificate, ...ports.flatMap(p => ['-d', host(p)]), '--deploy-hook', '/usr/sbin/nginx -t && /usr/bin/systemctl reload nginx'] }
 }
 export function patchSharePorts(bytes, existing, next) {
   const key = 'CODEX_REMOTE_PREVIEW_SHARE_PORTS', before = parseEnv(bytes.toString()), lines = bytes.toString().split('\n')

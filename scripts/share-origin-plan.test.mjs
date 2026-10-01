@@ -31,3 +31,11 @@ it('patches only the preview ports value with drift/duplicate checks and retains
   expect(() => patchSharePorts(original, [5221], [5221])).toThrow()
   expect(() => patchSharePorts(original, ports, [5221])).toThrow()
 })
+
+it('supports the next registered-port expansion after this rollout without overwriting an old certificate lineage', () => {
+  const first = originPlan(registry, ports, nginx, [5217, 5221, 5222])
+  const next = originPlan({ ...registry, services: [...registry.services, { port: 5223, identity: '22222222-2222-4222-8222-222222222222' }] }, first.ports, first.active, [5223])
+  expect(next.active).toContain('/live/codex-preview-ports-v3/fullchain.pem')
+  expect(next.certbotArguments).toContain('codex-preview-ports-v3')
+  expect(next.ports).toContain(5223); expect(next.ports).toEqual([...first.ports, 5223])
+})
