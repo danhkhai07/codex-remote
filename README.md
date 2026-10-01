@@ -355,7 +355,18 @@ npm run services -- remove --key port:5183
 The helper uses the gateway's existing `.env` locally and never prints session
 credentials. Use the API/helper for updates instead of editing the live JSON.
 Updates to the same port or internal path replace that entry. A stopped app stays
-listed as stopped until removed; register new metadata when reusing its port.
+listed as stopped until removed. Updates to the same registration retain existing
+share links, including name, summary, PR, branch and content updates. Omitted
+`directory`/`kind` retain the current ownership fields. Reusing a port for a
+**different** app requires `register --replace` (or remove then register), which
+invalidates previous share access. Changing directory/kind also defaults to replacement.
+For the same app moving worktrees, read its nonsecret `registrationId` from `list`
+and pass `--expected-identity ID --directory NEW`; a stale ID fails with409.
+
+Sharing also requires a provisioned isolated HTTPS preview origin for that exact
+registered port. Registering a service does not open arbitrary loopback ports.
+See [preview origin and continuity rollout](docs/preview-share-service-continuity-2026-10-01.md)
+for the exact-host DNS/TLS/Nginx/config preparation and migration limits.
 
 The Browser entry in conversations opens HTTP/HTTPS URLs, root-relative paths,
 or VPS localhost ports. Conversation links use the same viewer. Each conversation
