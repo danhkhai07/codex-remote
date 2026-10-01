@@ -18,3 +18,7 @@ Prepared package and exact seal are recorded in the external delivery evidence. 
 4. Trust LIVE only after `verified.json`. If publication occurred but verification failed, restore service availability and use `runner.mjs verify`; never rerun apply or restore the saved registry/grants.
 
 Checks are scoped to the runner: environment allowlist, fake ALL-idle lifecycle, immediate/locked drift, exclusive attempt and a real child SIGKILL between attempt and completion. Existing product source/browser/server evidence is reused unchanged; this task does not rerun or reinterpret CR1's independent review.
+
+## Prepared receipt
+
+Package: `/root/.local/state/codex-remote-secure/releases/share-service-continuity-activation-8217c4fa`. Runner source `6fd245eb86f19113e0cfe91fd8f27fc0f508619e`; seal SHA-256 `4db62fcd62fbefe67d65ab01f867f993842bf8b595bab9145a18185765844338`. The read-only package check observed NEW PID `1923100`, OLD disabled, all ten public/local TLS endpoints auth-gated, and readiness `busy=2`, `queued=2`, so no activation was attempted. There is no `armed.json`, `apply-attempt.json`, backup, restart intent or verified marker.
