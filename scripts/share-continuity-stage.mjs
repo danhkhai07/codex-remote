@@ -26,6 +26,12 @@ assert.equal(live['work-hours.js.map'], '6a76da381331d7a802da5d844d341da742f0bfc
 assert.equal(hash(root + '/package-lock.json'), hash(R + '/package-lock.json'))
 const env = parseEnv(readFileSync(S + '/instance.env', 'utf8'))
 assert.equal(env.CODEX_REMOTE_PORT, '5174'); assert.equal(env.CODEX_REMOTE_HOST, '127.0.0.1'); assert.equal(env.CODEX_REMOTE_PUBLIC_ORIGIN, 'https://remote.danhkhai.io.vn'); assert.equal(env.CODEX_REMOTE_SECURE_API, 'required')
+const nginxFile = realpathSync('/etc/nginx/sites-enabled/codex-preview-ports')
+const nginxBytes = readFileSync(nginxFile, 'utf8')
+const certificateLines = [...nginxBytes.matchAll(/^\s*ssl_certificate\s+(\/etc\/letsencrypt\/live\/(codex-preview-ports(?:-v[1-9][0-9]*)?)\/fullchain\.pem);\s*$/gm)]
+assert.equal(certificateLines.length, 1, 'Exactly one reviewed preview certificate must be active')
+const certificatePath = certificateLines[0][1], certificateName = certificateLines[0][2]
+assert(nginxBytes.includes(`ssl_certificate_key /etc/letsencrypt/live/${certificateName}/privkey.pem;`), 'Preview key must match active certificate')
 const units = Object.fromEntries(['codex-remote-secure.service', 'codex-remote.service'].map(unit => [unit, execFileSync('systemctl', ['show', unit, '-p', 'MainPID', '-p', 'ActiveState', '-p', 'UnitFileState', '-p', 'ExecMainStartTimestampMonotonic'], { encoding: 'utf8' })]))
 assert.match(units['codex-remote.service'], /MainPID=0\n/); assert.match(units['codex-remote.service'], /ActiveState=inactive/); assert.match(units['codex-remote.service'], /UnitFileState=disabled/)
 mkdirSync(output, { mode: 0o700 })
@@ -44,8 +50,8 @@ for (const name of ['core.mjs', 'readiness.mjs']) frozen['release/' + name] = pu
 symlinkSync(realpathSync(R + '/node_modules'), join(output, 'frozen/node_modules'))
 const mark = p => { const s = lstatSync(p); return { sha256: hash(p), dev: s.dev, ino: s.ino, mode: s.mode, uid: s.uid, gid: s.gid } }
 const baseline = { at: new Date().toISOString(), units, backend: live, frontend: tree(R + '/dist'), cli: mark(R + '/scripts/services.mjs'), env: mark(S + '/instance.env'),
-  key: mark(env.CODEX_REMOTE_SECURE_KEY_FILE), nginx: mark(realpathSync('/etc/nginx/sites-enabled/codex-preview-ports')),
-  cert: mark(realpathSync('/etc/letsencrypt/live/codex-preview-ports/fullchain.pem')),
+  key: mark(env.CODEX_REMOTE_SECURE_KEY_FILE), nginx: mark(nginxFile),
+  cert: { lineage: certificateName, path: certificatePath, ...mark(realpathSync(certificatePath)) },
   registry: mark(env.CODEX_REMOTE_SERVICES_FILE), grants: mark(env.CODEX_REMOTE_PREVIEW_SHARE_STATE),
   template: hash(R + '/working-hours/dashboard.template.html'), isolatedTemplate: hash(S + '/hours/dashboard.template.html'), generator: hash(R + '/working-hours/update.py') }
 const manifest = { version: 1, status: 'review-only-not-armable', source, base: '5378c9330a2711c0e52a86ee6b44698b93fda38a', payload, infrastructure, frozen,
