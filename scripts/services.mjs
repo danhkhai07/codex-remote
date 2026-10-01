@@ -2,9 +2,9 @@ import { parseArgs } from 'node:util'
 import { maintenanceClient } from './secure-maintenance.mjs'
 import { loadConfig } from '../dist-server/config.js'
 
-const { values, positionals } = parseArgs({ allowPositionals: true, options: Object.fromEntries(
-  ['port', 'name', 'summary', 'pr', 'pr-url', 'branch', 'directory', 'path', 'kind', 'key'].map(name => [name, { type: 'string' }]),
-) })
+const { values, positionals } = parseArgs({ allowPositionals: true, options: { replace: { type: 'boolean' }, ...Object.fromEntries(
+  ['port', 'name', 'summary', 'pr', 'pr-url', 'branch', 'directory', 'path', 'kind', 'key', 'expected-identity'].map(name => [name, { type: 'string' }]),
+) } })
 const command = positionals[0] ?? 'list'
 if (!['list', 'register', 'remove'].includes(command)) throw Error('Use list, register or remove')
 const config = loadConfig()
@@ -16,7 +16,7 @@ if (command === 'register') {
   if (!values.port && !values.path) throw Error('Provide --port for localhost or --path for a Codex Remote page')
   body = JSON.stringify({ port: values.port ? Number(values.port) : null, path: values.path ?? '/', name: values.name,
     summary: values.summary, prLabel: values.pr, prUrl: values['pr-url'] ?? '', branch: values.branch ?? '',
-    directory: values.directory ?? '', kind: values.kind ?? 'app' })
+    ...(values.directory !== undefined ? { directory: values.directory } : {}), ...(values.kind !== undefined ? { kind: values.kind } : {}), ...(values['expected-identity'] ? { expectedIdentity: values['expected-identity'] } : {}), ...(values.replace ? { replace: true } : {}) })
 }
 if (command === 'remove') {
   if (!values.key) throw Error('Provide --key port:5183 or --key path:/example')

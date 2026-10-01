@@ -181,7 +181,7 @@ it('rechecks after delayed headers and revokes an active WebSocket including bot
     socket.on('close', () => { expect(data).toContain('101 Switching Protocols'); expect(revoked).toBe(true); resolve() })
   })
 })
-it.each(['retire', 'expire'])('closes both ends of an established WebSocket on %s', async action => {
+it.each(['retire', 'expire', 'replace'])('closes both ends of an established WebSocket on %s', async action => {
   const f = await fixture()
   let upstreamClosed!: () => void
   const closed = new Promise<void>(resolve => { upstreamClosed = resolve })
@@ -194,7 +194,7 @@ it.each(['retire', 'expire'])('closes both ends of an established WebSocket on %
     const socket = connect(f.gateway, '127.0.0.1'); let data = '', seen = false
     socket.on('connect', () => socket.write(`GET /ws HTTP/1.1\r\nHost: ${f.host}\r\nOrigin: https://${f.host}\r\nCookie: ${opened.cookie}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`))
     socket.on('error', reject); socket.setTimeout(3000, () => socket.destroy(Error('WS did not close')))
-    socket.on('data', chunk => { data += chunk; if (!seen && data.includes('ready')) { seen = true; if (action === 'retire') f.services.remove('port:' + f.appPort) } })
+    socket.on('data', chunk => { data += chunk; if (!seen && data.includes('ready')) { seen = true; if (action === 'retire') f.services.remove('port:' + f.appPort); if (action === 'replace') f.services.upsert({ ...f.services.list()[0], replace: true }) } })
     socket.once('close', () => { expect(seen).toBe(true); resolve() })
   })
   await closed
@@ -261,4 +261,35 @@ it.each(['http', 'ws'])('edited expiry extends and shortens an already-open %s c
   await closed
   expect(Date.now()).toBeGreaterThanOrEqual(Date.parse(cutoff)); expect(Date.now()).toBeLessThan(Date.parse(cutoff) + 2000)
   expect((await f.fetch('/', opened.cookie)).status).toBe(401)
+})
+
+it('encrypted registry updates retain grants; explicit replacement/stale continuity fail closed', async () => {
+  const f = await fixture(), opened = await f.open(), original = f.services.list()[0]
+  expect((await f.api('/api/services', 'PUT', { ...original, name: 'V2', summary: 'Content release' })).status).toBe(200)
+  expect((await f.fetch('/app', opened.cookie)).status).toBe(200)
+  expect((await (await f.api('/api/preview-shares')).json()).links[0].url).toBe(opened.link.url)
+  expect((await f.api('/api/services', 'PUT', { ...original, replace: true, expectedIdentity: original.registrationId })).status).toBe(200)
+  expect((await f.fetch('/app', opened.cookie)).status).toBe(401)
+  expect((await f.exchange(opened.link)).status).toBe(401)
+  expect((await f.api('/api/services', 'PUT', { ...original, expectedIdentity: original.registrationId })).status).toBe(409)
+})
+
+it('keeps an established WebSocket through metadata update then closes it on replacement', async () => {
+  const f = await fixture(), opened = await f.open()
+  f.upstream.on('upgrade', (_req, socket) => {
+    socket.on('error', () => {}); socket.on('end', () => socket.destroy())
+    socket.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\nready')
+    socket.on('data', () => socket.write('after-update'))
+  })
+  await new Promise<void>((resolve, reject) => {
+    const socket = connect(f.gateway, '127.0.0.1'); let data = '', updated = false, replaced = false
+    socket.on('connect', () => socket.write(`GET /ws HTTP/1.1\r\nHost: ${f.host}\r\nOrigin: https://${f.host}\r\nCookie: ${opened.cookie}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`))
+    socket.on('error', reject); socket.setTimeout(3000, () => socket.destroy(Error('Expected replacement to close WS')))
+    socket.on('data', chunk => {
+      data += chunk
+      if (!updated && data.includes('ready')) { updated = true; f.services.upsert({ ...f.services.list()[0], summary: 'Updated live version' }); socket.write('check-after-update') }
+      if (!replaced && data.includes('after-update')) { replaced = true; f.services.upsert({ ...f.services.list()[0], replace: true }) }
+    })
+    socket.once('close', () => { try { expect(replaced).toBe(true); resolve() } catch (e) { reject(e) } })
+  })
 })

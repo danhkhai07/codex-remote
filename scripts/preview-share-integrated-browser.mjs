@@ -26,10 +26,12 @@ async function listen(server) {
 try {
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(root, 'tls.key'), '-out', join(root, 'tls.crt'), '-days', '1', '-subj', '/CN=localhost'], { stdio: 'ignore' })
   const observed = []
+  let contentRevision = 1
   const appPort = await listen(createServer((req, res) => {
     observed.push({ path: req.url, cookie: req.headers.cookie || '' })
-    res.setHeader('Content-Type', 'text/html'); res.end('<!doctype html><title>Shared fixture</title><h1>Shared app opened</h1>')
+    res.setHeader('Content-Type', 'text/html'); res.end('<!doctype html><title>Shared fixture</title><h1>Shared app opened</h1><p id="revision">Content revision ' + contentRevision + '</p>')
   }))
+  assert(![2345, 5180, 5210, 5211, 5212, 5213, 5215].includes(appPort), 'Fixture must exercise a non-seven port')
   let gateway
   const tls = httpsServer({ key: readFileSync(join(root, 'tls.key')), cert: readFileSync(join(root, 'tls.crt')) }, (req, res) => {
     const upstream = request({ host: '127.0.0.1', port: gateway, path: req.url, method: req.method, headers: req.headers }, reply => { res.writeHead(reply.statusCode, reply.headers); reply.pipe(res) })
@@ -68,7 +70,7 @@ try {
     const response = (await transport.request(path, { method, headers: { 'content-type': 'application/json', 'x-csrf-token': issued.payload.csrf }, ...(body ? { body: JSON.stringify(body) } : {}) })).response
     assert(response.ok, `Owner fixture request ${response.status}`); return response.json()
   }
-  const browser = await engines[engine].launch({ headless: true, ...(engine === 'chromium' ? { args: ['--no-sandbox', '--no-proxy-server', '--ignore-certificate-errors', '--host-resolver-rules=MAP *.localhost 127.0.0.1'] } : {}) }); cleanup.push(() => browser.close())
+  const browser = await engines[engine].launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE && engine === 'chromium' ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } : {}), ...(engine === 'chromium' ? { args: ['--no-sandbox', '--no-proxy-server', '--ignore-certificate-errors', '--host-resolver-rules=MAP *.localhost 127.0.0.1'] } : {}) }); cleanup.push(() => browser.close())
   const evidence = []
   for (const width of [1280, 390, 320]) {
     const context = await browser.newContext({ viewport: { width, height: 840 }, ignoreHTTPSErrors: true, ...(engine === 'chromium' ? { permissions: ['clipboard-read', 'clipboard-write'] } : {}) })
@@ -133,15 +135,33 @@ try {
     await target.getByRole('heading', { name: 'Shared app opened' }).waitFor()
     await revokable.getByRole('button', { name: 'Revoke', exact: true }).click(); await revokable.waitFor({ state: 'detached' })
     assert.equal((await target.reload()).status(), 401)
+    // Same registration update keeps the original public URL/cookie and updated content.
+    const stable = (await ownerApi('/api/preview-shares', 'POST', { port: appPort, ttlSeconds: 60, label: 'Continuity' })).link
+    await target.goto(stable.url); await target.getByRole('heading', { name: 'Shared app opened' }).waitFor()
+    const entry = services.list().find(s => s.port === appPort), registration = entry.registrationId
+    await ownerApi('/api/services', 'PUT', { ...entry, name: 'Updated service title', summary: 'New version', branch: 'new-branch' })
+    contentRevision++
+    assert.equal(services.identity(appPort), registration)
+    assert.equal((await ownerApi('/api/preview-shares')).links.find(l => l.id === stable.id).url, stable.url)
+    assert.equal((await target.reload()).status(), 200)
+    assert.equal(await target.locator('#revision').textContent(), 'Content revision ' + contentRevision)
+    await ownerApi('/api/services', 'PUT', { ...entry, replace: true, expectedIdentity: registration })
+    assert.equal((await target.reload()).status(), 401)
+    assert.equal((await target.goto(stable.url)).status(), 200) // Bootstrap is public; exchange must reject.
+    await target.getByText(/Link không hợp lệ, đã hết hạn hoặc bị ngắt/).waitFor()
+    // The rejection control leaves the same /preview/share document open. Reset
+    // it so a new fragment is a fresh recipient navigation, not a hash-only goto.
+    await target.goto('about:blank')
     // Real server expiry, short TTL through encrypted owner API; all state is under the temp root.
-    const short = (await ownerApi('/api/preview-shares', 'POST', { port: appPort, ttlSeconds: 2, label: 'Expiry fixture' })).link
-    await target.goto(short.url); await target.getByRole('heading', { name: 'Shared app opened' }).waitFor()
+    const short = (await ownerApi('/api/preview-shares', 'POST', { port: appPort, ttlSeconds: 6, label: 'Expiry fixture' })).link
+    await target.goto(short.url)
+    try { await target.getByRole('heading', { name: 'Shared app opened' }).waitFor({ timeout: 8000 }) } catch (error) { console.error(JSON.stringify({ fixture: 'short expiry', msAfterExpiry: Date.now() - Date.parse(short.expiresAt), body: (await target.locator('body').innerText()).slice(0, 300) })); throw error }
     await new Promise(resolve => setTimeout(resolve, Math.max(0, Date.parse(short.expiresAt) - Date.now()) + 50))
     assert.equal((await target.reload()).status(), 401)
     await page.keyboard.press('Escape'); await dialog.waitFor({ state: 'detached' }); assert.equal(await page.locator('#instruction').inputValue(), 'Draft preserved')
     await openMenu(); await page.getByRole('button', { name: /Khóa|Lock/ }).click(); await page.getByLabel('Khóa mã hóa riêng', { exact: true }).waitFor()
     assert.deepEqual(errors, [])
-    await recipient.close(); await context.close(); console.log(`PASS ${engine} ${width}: list/plus/cancel, real encrypted create/edit same URL/revoke, fresh recipient, edited expiry and Lock`); evidence.push({ width, encryptedOwnerCreateCopyOpenRevoke: true, anonymousRecipient: true, expiry: true, lock: true })
+    await recipient.close(); await context.close(); console.log(`PASS ${engine} ${width}: list/plus/cancel, real encrypted create/edit same URL/revoke, fresh recipient, edited expiry and Lock`); evidence.push({ width, metadataUpdateKeepsUrl: true, replacementDenied: true, nonSevenEphemeralPort: true, encryptedOwnerCreateCopyOpenRevoke: true, anonymousRecipient: true, expiry: true, lock: true })
   }
   assert(!nativeReads.some(m => /turn\/start|thread\/start/.test(m)))
   console.log(JSON.stringify({ passed: true, engine, evidence, realModelTurns: 0, productionAccess: false }))

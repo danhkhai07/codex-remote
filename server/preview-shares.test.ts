@@ -143,7 +143,7 @@ it('rechecks owner liveness and registry after asynchronous service probes', asy
   services.upsert(service)
   const link = shares.create({ port: 5180, ttlSeconds: 60 }), before = services.list()
   const replaced = shares.list(); services.remove('port:5180'); services.upsert(service)
-  expect(services.list()).toEqual(before) // Identical public metadata and timestamp.
+  expect(services.list().map(({ registrationId: _id, ...entry }) => entry)).toEqual(before.map(({ registrationId: _id, ...entry }) => entry)) // Same metadata/time, different generation.
   finish(true)
   const resultAfterRecreate = await replaced
   expect(resultAfterRecreate.services).toEqual([])
@@ -231,4 +231,48 @@ it('expiry persistence failure fails closed and unavailable service grants canno
   const other = fixture(), second = other.create()
   other.services.remove('port:5180')
   expect(() => other.shares.updateExpiry(second.id, { ...update, expectedExpiresAt: second.expiresAt })).toThrow(/no longer active/)
+})
+
+it('metadata and content updates retain exact URL/cookie/handoff across restart; replacement never adopts old grants', async () => {
+  const f = fixture(), link = f.create(), cookie = f.open(link), cap = new URL(link.url!).hash.slice(1)
+  const identity = f.services.identity(5180), waiting = f.shares.exchange(cap), close = vi.fn()
+  f.shares.access(cookie, 5180)!.watch(close)
+  f.services.upsert({ ...service, name: 'Version 2', summary: 'Updated content', prLabel: 'PR 2', branch: 'next', path: '/new-start' })
+  expect(f.services.identity(5180)).toBe(identity); expect(close).not.toHaveBeenCalled()
+  expect(f.shares.redeem(waiting.ticket, 5180).path).toBe('/app')
+  expect((await f.shares.list()).links[0].url).toBe(link.url)
+  const store = new ServicesStore(f.servicesFile, async () => true)
+  const restart = new PreviewShares({ ...f.options, services: store }); cleanup.push(() => restart.close())
+  expect((await restart.list()).links[0].url).toBe(link.url)
+  expect(restart.access(cookie, 5180)?.valid()).toBe(true)
+  const stale = restart.exchange(cap)
+  store.upsert({ ...service, replace: true, expectedIdentity: identity })
+  expect(() => restart.redeem(stale.ticket, 5180)).toThrow()
+  expect(() => restart.exchange(cap)).toThrow()
+  expect(() => store.upsert({ ...service, expectedIdentity: identity })).toThrow(/registration changed/)
+})
+it('does not repair invalidated legacy grants, including registries missing generations', async () => {
+  const f = fixture(), link = f.create(), token = new URL(link.url!).hash.slice(1), contents = readFileSync(f.file, 'utf8')
+  const old = JSON.parse(readFileSync(f.servicesFile, 'utf8')); delete old.services[0].identity
+  writeFileSync(f.servicesFile, JSON.stringify(old))
+  const services = new ServicesStore(f.servicesFile, async () => true)
+  const restart = new PreviewShares({ ...f.options, services }); cleanup.push(() => restart.close())
+  services.upsert({ ...service, summary: 'Updated after legacy migration' })
+  expect(() => restart.exchange(token)).toThrow(); expect((await restart.list()).links[0].status).toBe('unavailable')
+  expect(readFileSync(f.file, 'utf8')).toBe(contents)
+})
+it('registered ports outside the original seven require explicit isolated HTTPS provisioning', async () => {
+  const f = fixture(), outside = 5221
+  f.services.upsert({ ...service, port: outside })
+  expect(() => f.shares.create({ port: outside, ttlSeconds: 60 })).toThrow(/allowed/)
+  const ready = new PreviewShares({ ...f.options, ports: [...f.options.ports, outside] }); cleanup.push(() => ready.close())
+  expect((await ready.list()).services.map(s => s.port)).toContain(outside)
+  const link = ready.create({ port: outside, ttlSeconds: 60 })
+  const launch = ready.exchange(new URL(link.url!).hash.slice(1))
+  expect(new URL(launch.url).origin).toBe('https://p5221.preview.test')
+  expect(() => ready.redeem(launch.ticket, 5180)).toThrow()
+  const cookie = ready.redeem(launch.ticket, outside).cookie.split(';')[0]
+  expect(ready.access(cookie, outside)?.valid()).toBe(true)
+  expect(ready.access(cookie, 5180)).toBeNull()
+  expect(() => ready.create({ port: 5222, ttlSeconds: 60 })).toThrow()
 })

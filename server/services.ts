@@ -14,8 +14,9 @@ export type HostedService = {
   path: string
   kind: 'app' | 'prototype' | 'api'
   updatedAt: string
+  registrationId?: string
 }
-export type ServiceInput = Omit<HostedService, 'updatedAt'>
+export type ServiceInput = Omit<HostedService, 'updatedAt' | 'registrationId'>
 export type ServicesSnapshot = {
   services: (HostedService & { running: boolean | null })[]
   checkedAt: string
@@ -104,7 +105,7 @@ export class ServicesStore {
     this.entries = entries
     for (const changed of this.listeners) changed()
   }
-  list(): HostedService[] { return this.entries.map(({ identity: _identity, ...entry }) => ({ ...entry })).sort((a, b) => (a.port ?? 0) - (b.port ?? 0) || a.path.localeCompare(b.path)) }
+  list(): HostedService[] { return this.entries.map(({ identity, ...entry }) => ({ ...entry, registrationId: identity })).sort((a, b) => (a.port ?? 0) - (b.port ?? 0) || a.path.localeCompare(b.path)) }
   identity(port: number): string | undefined { return this.identityHealthy ? this.entries.find(entry => entry.port === port)?.identity : undefined }
   watch(changed: () => void): () => void { this.listeners.add(changed); return () => { this.listeners.delete(changed) } }
   upsert(value: unknown): HostedService {
@@ -112,11 +113,23 @@ export class ServicesStore {
     if (input.port !== null && this.blockedPorts.includes(input.port)) throw new ServiceError(400, 'Port này dành cho Codex Remote')
     if (this.entries.length >= 100 && !this.entries.some(entry => serviceKey(entry) === serviceKey(input))) throw new ServiceError(400, 'Tối đa 100 dịch vụ')
     const previous = this.entries.find(entry => serviceKey(entry) === serviceKey(input))
-    const unchanged = previous && JSON.stringify(validateService(previous)) === JSON.stringify(input)
-    const service = { ...input, updatedAt: new Date().toISOString(), identity: unchanged ? previous.identity : randomUUID() }
+    const controls = value as Record<string, unknown>
+    // Omitted ownership fields mean a metadata update, not a silent reassignment.
+    if (previous && controls.directory === undefined) input.directory = previous.directory
+    if (previous && controls.kind === undefined) input.kind = previous.kind
+    if (controls.replace !== undefined && typeof controls.replace !== 'boolean') throw new ServiceError(400, 'replace must be boolean')
+    if (controls.expectedIdentity !== undefined && !serviceIdentity(controls.expectedIdentity)) throw new ServiceError(400, 'Invalid expected service identity')
+    // An explicit owner continuity claim may move the SAME registration between
+    // worktrees. It must compare the current generation, never resurrect a removed
+    // entry or attach stale grants to a replacement. Ordinary metadata/content
+    // updates keep identity; changing the owner directory/kind defaults to replacement.
+    if (controls.expectedIdentity !== undefined && previous?.identity !== controls.expectedIdentity) throw new ServiceError(409, 'Service registration changed; refresh before updating')
+    const sameRegistration = previous && controls.replace !== true && (controls.expectedIdentity === previous.identity ||
+      (previous.directory === input.directory && previous.kind === input.kind))
+    const service = { ...input, updatedAt: new Date().toISOString(), identity: sameRegistration ? previous.identity : randomUUID() }
     this.save([...this.entries.filter(entry => serviceKey(entry) !== serviceKey(input)), service])
-    const { identity: _identity, ...publicService } = service
-    return publicService
+    const { identity, ...publicService } = service
+    return { ...publicService, registrationId: identity }
   }
   remove(key: string) {
     if (!this.entries.some(entry => serviceKey(entry) === key)) throw new ServiceError(404, 'Không tìm thấy dịch vụ')
