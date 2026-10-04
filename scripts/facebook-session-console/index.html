@@ -3,65 +3,43 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Facebook session</title>
+  <meta name="theme-color" content="#f5f7fb">
+  <title>Facebook sessions</title>
   <link rel="stylesheet" href="/app.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
+  <header class="site-header"><div class="header-inner"><span class="brand-mark" aria-hidden="true">f</span><div><strong>Facebook sessions</strong><span>Shared account manager</span></div><button id="lock" type="button" class="button ghost" hidden>Lock</button></div></header>
   <main>
-    <h1>Facebook session</h1>
-    <p class="note">One account. Save a verified browser session and check its status here.</p>
-    <form id="access-form" class="row">
-      <label>Access code <input id="access-code" type="password" autocomplete="off" required></label>
-      <button>Unlock</button>
-    </form>
-    <section id="manager" hidden>
-      <div class="status">
-        <div><span>Account</span><strong id="account">Not configured</strong></div>
-        <div><span>State</span><strong id="phase">Not started</strong></div>
-        <div><span>Saved session</span><strong id="saved">No</strong></div>
-        <div><span>Last update</span><strong id="updated">—</strong></div>
-      </div>
-      <p id="result" role="status"></p>
-      <div class="actions">
-        <button id="login" type="button">Start login</button>
-        <button id="check" type="button">Check saved session</button>
-        <button id="stop" type="button" disabled>Stop browser</button>
-      </div>
-      <label class="manual-choice"><input id="manual-captcha" type="checkbox" checked> Let me control the browser after login (no 2Captcha charge)</label>
-      <section id="manual-panel" hidden aria-label="Manual login browser">
-        <h2>Continue in browser</h2>
-        <p class="note">Complete CAPTCHA, 2FA and any further steps here. Click or drag on the image, then type into the selected field. The browser stays open until login completes, you stop it or 30 minutes pass.</p>
-        <section id="totp-panel" hidden aria-label="Authenticator code">
-          <strong>Authenticator code: <span id="totp-code" aria-live="polite"></span></strong>
-          <span id="totp-expiry"></span>
-          <p class="note">Enter this code yourself in the browser image. It changes every 30 seconds.</p>
-        </section>
-        <img id="browser-frame" alt="Live login browser" draggable="false">
-        <div class="manual-controls">
-          <input id="manual-text" aria-label="Text for the focused browser field" placeholder="Text for selected field" autocomplete="off">
-          <button id="send-text" type="button">Type text</button>
-          <button id="send-enter" type="button">Enter</button>
-          <button id="send-backspace" type="button">Backspace</button>
-          <button id="send-tab" type="button">Tab</button>
-          <button id="scroll-up" type="button">Scroll up</button>
-          <button id="scroll-down" type="button">Scroll down</button>
-        </div>
-        <p id="manual-result" role="status"></p>
-      </section>
-      <details>
-        <summary>Account and 2Captcha settings</summary>
-        <form id="config-form">
-          <label>Account ID or email <input name="account" autocomplete="username" required></label>
-          <label>Password <input name="password" type="password" autocomplete="new-password" required></label>
-          <label>2FA authenticator secret <input name="totpSecret" type="password" autocomplete="off" required></label>
-          <label>2Captcha API key (optional for manual mode) <input name="captchaKey" type="password" autocomplete="off"></label>
-          <button>Save settings</button>
-          <p class="note">Secrets stay on this VPS in root-only files. The app never sends them back to the browser. Saving replaces the previous account settings.</p>
-        </form>
-      </details>
-      <p class="note">Manual mode leaves all verification steps to you and shows the authenticator code when 2FA appears. If you turn it off, the app uses at most one paid 2Captcha task and auto-enters 2FA. A saved session still requires a fresh-browser check.</p>
+    <section id="access-panel" class="access-card" aria-labelledby="access-title">
+      <div class="section-icon" aria-hidden="true">⌘</div>
+      <h1 id="access-title">Open account manager</h1>
+      <p class="muted">Enter the shared access code to view saved accounts and continue a login in the browser.</p>
+      <form id="access-form"><label for="access-code">Access code</label><div class="access-fields"><input id="access-code" type="password" autocomplete="off" required><button class="button primary" type="submit">Unlock</button></div><p id="access-error" class="error" role="alert"></p></form>
     </section>
+    <div id="manager" hidden>
+      <div class="page-heading"><div><p class="eyebrow">SESSION CONSOLE</p><h1>Accounts</h1><p class="muted">Manage saved sessions and complete sign-in steps yourself.</p></div><button id="add-account" class="button primary" type="button">+ Add account</button></div>
+      <div id="capacity-note" class="capacity-note" role="status"></div>
+      <p id="page-error" class="error" role="alert"></p>
+      <section class="card accounts-card" aria-labelledby="accounts-heading"><div class="card-heading"><h2 id="accounts-heading">Saved accounts</h2><span id="account-count" class="count"></span></div><div id="account-list" class="account-list"></div><p id="empty-accounts" class="empty" hidden>No accounts yet. Add one to start a manual session.</p></section>
+      <section id="selected-panel" class="card selected-card" aria-labelledby="selected-heading" hidden>
+        <div class="selected-heading"><div><p class="eyebrow">SELECTED ACCOUNT</p><h2 id="selected-heading"></h2><p id="selected-identifier" class="muted"></p></div><span id="selected-status" class="badge"></span></div>
+        <div class="detail-grid"><div><span>Session</span><strong id="selected-session"></strong></div><div><span>Last update</span><strong id="selected-updated"></strong></div></div>
+        <p id="selected-result" class="result" role="status"></p>
+        <div class="selected-actions"><button id="start-login" class="button primary" type="button">Start login</button><button id="check-session" class="button secondary" type="button">Check saved session</button><button id="stop-browser" class="button danger" type="button">Stop browser</button><button id="edit-account" class="button ghost" type="button">Edit details</button></div>
+        <p id="action-error" class="error" role="alert"></p>
+        <section id="manual-panel" class="manual-panel" aria-label="Manual login browser" hidden>
+          <div class="manual-heading"><div><h3>Continue in browser</h3><p>Complete any CAPTCHA, code, or other sign-in step directly in this browser view.</p></div><span class="live-pill"><span></span> Live browser</span></div>
+          <section id="totp-panel" class="totp-panel" aria-label="Authenticator code" hidden><div><span>Authenticator code</span><strong id="totp-code" aria-live="polite"></strong></div><span id="totp-expiry"></span><p>Enter this code yourself in the browser. It changes every 30 seconds.</p></section>
+          <div class="browser-toolbar"><span>Browser view</span><div><button id="zoom-fit" type="button" class="button small" aria-pressed="true">Fit</button><button id="zoom-actual" type="button" class="button small" aria-pressed="false">100%</button><button id="pan-mode" type="button" class="button small" aria-pressed="false">Pan view</button></div></div>
+          <div id="browser-viewport" class="browser-viewport fit"><img id="browser-frame" alt="Live login browser; click or drag to interact" draggable="false"><p id="frame-placeholder">Waiting for browser image…</p></div>
+          <p class="browser-hint">Tap or drag on the image to interact. On a small screen, choose 100% and Pan view to move around the page.</p>
+          <div class="manual-controls"><label for="manual-text">Text for selected browser field</label><div class="text-controls"><input id="manual-text" autocomplete="off" placeholder="Type here"><button id="send-text" class="button secondary" type="button">Type text</button></div><div class="key-controls"><button id="send-enter" class="button secondary" type="button">Enter</button><button id="send-backspace" class="button secondary" type="button">Backspace</button><button id="send-tab" class="button secondary" type="button">Tab</button><button id="scroll-up" class="button secondary" type="button">Scroll up</button><button id="scroll-down" class="button secondary" type="button">Scroll down</button></div></div>
+          <p id="manual-result" class="result" role="status"></p>
+        </section>
+      </section>
+    </div>
   </main>
+  <dialog id="account-dialog" aria-labelledby="dialog-title"><form id="account-form"><div class="dialog-heading"><div><p class="eyebrow">ACCOUNT DETAILS</p><h2 id="dialog-title">Add account</h2></div><button id="close-dialog" class="button icon-button" type="button" aria-label="Close">×</button></div><p id="dialog-help" class="muted"></p><label for="field-label">Display name</label><input id="field-label" name="label" required maxlength="80" placeholder="e.g. Marketing account"><label for="field-account">Facebook email or ID</label><input id="field-account" name="account" autocomplete="username" required><label for="field-password">Password</label><input id="field-password" name="password" type="password" autocomplete="new-password"><label for="field-totp">Authenticator secret <span class="optional">optional</span></label><input id="field-totp" name="totpSecret" type="password" autocomplete="off"><p id="dialog-error" class="error" role="alert"></p><div class="dialog-actions"><button id="cancel-dialog" class="button ghost" type="button">Cancel</button><button id="save-account" class="button primary" type="submit">Save account</button></div></form></dialog>
 </body>
 </html>
