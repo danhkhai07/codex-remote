@@ -1,5 +1,5 @@
 import { createHmac, randomBytes } from 'node:crypto'
-import { readFile, writeFile, rename, unlink } from 'node:fs/promises'
+import { readFile, writeFile, rename, unlink, chmod } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -60,19 +60,25 @@ function selectCodeInputs(fields) {
 async function waitForCodeInputs(page, timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs
   let count = 0
+  let frameCount = 0
   while (Date.now() < deadline) {
-    const fields = await page.locator('input:visible').evaluateAll(inputs => inputs.map(input => ({
-      type: input.type, name: input.name, id: input.id, placeholder: input.placeholder,
-      ariaLabel: input.getAttribute('aria-label'), autocomplete: input.autocomplete,
-      inputMode: input.inputMode, maxLength: input.maxLength,
-      disabled: input.disabled, readOnly: input.readOnly,
-    }))).catch(() => [])
-    count = fields.length
-    const selected = selectCodeInputs(fields)
-    if (selected) return selected
+    count = 0
+    const frames = page.frames()
+    frameCount = frames.length
+    for (const frame of frames) {
+      const fields = await frame.locator('input:visible').evaluateAll(inputs => inputs.map(input => ({
+        type: input.type, name: input.name, id: input.id, placeholder: input.placeholder,
+        ariaLabel: input.getAttribute('aria-label'), autocomplete: input.autocomplete,
+        inputMode: input.inputMode, maxLength: input.maxLength,
+        disabled: input.disabled, readOnly: input.readOnly,
+      }))).catch(() => [])
+      count += fields.length
+      const selected = selectCodeInputs(fields)
+      if (selected) return { ...selected, frame }
+    }
     await delay(500)
   }
-  return { kind: 'unresolved', indexes: [], count }
+  return { kind: 'unresolved', indexes: [], count, frameCount }
 }
 
 async function verified(page, context) {
@@ -276,19 +282,23 @@ async function runLogin(browser, config) {
         report('Waiting for verification field')
         const selected = await waitForCodeInputs(page)
         if (selected.kind === 'unresolved') {
-          report('2FA needs attention', `Verification field did not become unambiguous (${selected.count} visible inputs)`)
+          const diagnostic = path.join(directory, 'two-factor-diagnostic.png')
+          await page.screenshot({ path: diagnostic, fullPage: false }).then(() => chmod(diagnostic, 0o600)).catch(() => {})
+          report('2FA needs attention', `No clear code field across ${selected.frameCount} frames (${selected.count} visible inputs)`)
           return
         }
         const ending = Date.now() % 30000
         if (ending > 27000) await delay(30500 - ending)
         const code = totp(config.totpSecret)
         report('Entering verification code')
-        const visibleInputs = page.locator('input:visible')
+        const visibleInputs = selected.frame.locator('input:visible')
         if (selected.kind === 'segmented') {
           for (let i = 0; i < selected.indexes.length; i++) await visibleInputs.nth(selected.indexes[i]).fill(code[i])
         } else await visibleInputs.nth(selected.indexes[0]).fill(code)
-        const continueButton = page.getByRole('button', { name: /continue|next|tiếp tục/i }).first()
-        if (await continueButton.isVisible().catch(() => false)) await continueButton.click({ noWaitAfter: true })
+        const frameContinue = selected.frame.getByRole('button', { name: /continue|next|tiếp tục/i }).first()
+        const pageContinue = page.getByRole('button', { name: /continue|next|tiếp tục/i }).first()
+        if (await frameContinue.isVisible().catch(() => false)) await frameContinue.click({ noWaitAfter: true })
+        else if (await pageContinue.isVisible().catch(() => false)) await pageContinue.click({ noWaitAfter: true })
         else await visibleInputs.nth(selected.indexes.at(-1)).press('Enter', { noWaitAfter: true })
         enteredTotp = true
         twoFactorSubmittedAt = Date.now()

@@ -44,7 +44,15 @@ try {
     input.type = 'text'
     document.body.append(input)
   }, 600))
-  assert.deepEqual(await waitForCodeInputs(page, 3000), { kind: 'single', indexes: [1] })
+  const mainSelection = await waitForCodeInputs(page, 3000)
+  assert.equal(mainSelection.kind, 'single')
+  assert.deepEqual(mainSelection.indexes, [1])
+  assert.equal(mainSelection.frame, page.mainFrame())
+  await page.setContent('<iframe srcdoc="<input type=\'text\' autocomplete=\'one-time-code\'>"></iframe>')
+  const nestedSelection = await waitForCodeInputs(page, 3000)
+  assert.equal(nestedSelection.kind, 'single')
+  assert.deepEqual(nestedSelection.indexes, [0])
+  assert.notEqual(nestedSelection.frame, page.mainFrame())
   await page.close()
   process.stdout.write('Browser smoke passed\n')
 } finally {
