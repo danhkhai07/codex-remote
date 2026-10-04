@@ -1,0 +1,22 @@
+:root { color-scheme: dark; font: 16px/1.45 system-ui, sans-serif; background: #101513; color: #e5eee8; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 1180px; padding: 36px 30px; margin: auto; }
+h1 { font-size: 1.6rem; margin: 0 0 6px; }
+.note { color: #a6b7aa; font-size: .9rem; max-width: 65ch; }
+.row, .actions { display: flex; align-items: end; gap: 12px; margin: 20px 0; }
+label { display: grid; gap: 5px; font-size: .9rem; color: #b8cabe; }
+input { color: inherit; background: #1c2620; border: 1px solid #4a5e50; border-radius: 7px; padding: 9px 11px; min-width: 220px; font: inherit; }
+button { color: #102014; background: #b9ef89; border: 0; border-radius: 7px; padding: 10px 16px; font: inherit; font-weight: 650; cursor: pointer; }
+button:disabled { opacity: .5; cursor: wait; }
+.status { display: flex; gap: 10px; margin: 25px 0 8px; }
+.status > div { min-width: 0; flex: 1; background: #1b2620; border: 1px solid #33483a; border-radius: 8px; padding: 13px 16px; }
+.status span { display: block; color: #9daf9f; font-size: .8rem; }
+.status strong { display: block; margin-top: 4px; overflow-wrap: anywhere; }
+#result { min-height: 1.5em; color: #d9c998; }
+details { margin-top: 28px; padding: 14px; border: 1px solid #33483a; border-radius: 8px; }
+summary { cursor: pointer; font-weight: 650; }
+#config-form { display: flex; flex-wrap: wrap; gap: 14px; align-items: end; margin-top: 17px; }
+#config-form label { flex: 1 1 220px; }
+#config-form input { width: 100%; }
+[hidden] { display: none !important; }

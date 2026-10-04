@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Facebook session</title>
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <h1>Facebook session</h1>
+    <p class="note">One account. Save a verified browser session and check its status here.</p>
+    <form id="access-form" class="row">
+      <label>Access code <input id="access-code" type="password" autocomplete="off" required></label>
+      <button>Unlock</button>
+    </form>
+    <section id="manager" hidden>
+      <div class="status">
+        <div><span>Account</span><strong id="account">Not configured</strong></div>
+        <div><span>State</span><strong id="phase">Not started</strong></div>
+        <div><span>Saved session</span><strong id="saved">No</strong></div>
+        <div><span>Last update</span><strong id="updated">—</strong></div>
+      </div>
+      <p id="result" role="status"></p>
+      <div class="actions">
+        <button id="login" type="button">Start login</button>
+        <button id="check" type="button">Check saved session</button>
+      </div>
+      <details>
+        <summary>Account and 2Captcha settings</summary>
+        <form id="config-form">
+          <label>Account ID or email <input name="account" autocomplete="username" required></label>
+          <label>Password <input name="password" type="password" autocomplete="new-password" required></label>
+          <label>2FA authenticator secret <input name="totpSecret" type="password" autocomplete="off" required></label>
+          <label>2Captcha API key <input name="captchaKey" type="password" autocomplete="off" required></label>
+          <button>Save settings</button>
+          <p class="note">Secrets stay on this VPS in root-only files. The app never sends them back to the browser. Saving replaces the previous account settings.</p>
+        </form>
+      </details>
+      <p class="note">A login uses at most one paid CAPTCHA task. Facebook may still request another challenge or identity review; a solved CAPTCHA alone is not a saved session.</p>
+    </section>
+  </main>
+</body>
+</html>
