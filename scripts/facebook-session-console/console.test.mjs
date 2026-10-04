@@ -7,7 +7,7 @@ import path from 'node:path'
 import net from 'node:net'
 import { fileURLToPath } from 'node:url'
 import { safeConfig, masked } from './server.mjs'
-import { totp } from './worker.mjs'
+import { totp, selectCodeInputs } from './worker.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -21,6 +21,14 @@ test('validates account secrets without exposing them', () => {
 
 test('TOTP matches the RFC 6238 SHA1 vector', () => {
   assert.equal(totp('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ', 59000), '287082')
+})
+
+test('2FA selection ignores login/search fields and supports six code boxes', () => {
+  const field = (overrides = {}) => ({ type: 'text', name: '', id: '', placeholder: '', ariaLabel: '', autocomplete: '', inputMode: '', maxLength: -1, disabled: false, readOnly: false, ...overrides })
+  assert.deepEqual(selectCodeInputs([field({ name: 'email' }), field()]), { kind: 'single', indexes: [1] })
+  assert.deepEqual(selectCodeInputs([field({ type: 'search' }), field({ name: 'approvals_code', maxLength: 6 }), field()]), { kind: 'single', indexes: [1] })
+  assert.deepEqual(selectCodeInputs(Array.from({ length: 6 }, () => field({ maxLength: 1 }))), { kind: 'segmented', indexes: [0, 1, 2, 3, 4, 5] })
+  assert.equal(selectCodeInputs([field(), field()]), null)
 })
 
 test('HTTP API requires access code and does not return stored secrets', async () => {

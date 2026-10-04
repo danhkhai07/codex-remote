@@ -33,6 +33,48 @@ function route(url) {
   try { return new URL(url).pathname } catch { return '' }
 }
 
+function selectCodeInputs(fields) {
+  const candidates = fields.map((field, index) => {
+    const type = String(field.type ?? '').toLowerCase()
+    const hint = [field.name, field.id, field.placeholder, field.ariaLabel, field.autocomplete].join(' ').toLowerCase()
+    if (field.disabled || field.readOnly || /^(email|search|hidden)$/.test(type) || /email|username|search|password/.test(hint)) return null
+    if (!['text', 'tel', 'number', 'password'].includes(type)) return null
+    const score = (/one-time-code|otp|2fa|verification|security.?code|approvals.?code/.test(hint) ? 5 : 0)
+      + (/code/.test(hint) ? 2 : 0)
+      + (field.inputMode === 'numeric' ? 2 : 0)
+      + (field.maxLength >= 4 && field.maxLength <= 8 ? 2 : 0)
+    if (type === 'password' && score === 0) return null
+    return { index, score, maxLength: field.maxLength }
+  }).filter(Boolean)
+  if (candidates.length === 1) return { kind: 'single', indexes: [candidates[0].index] }
+  if (candidates.length === 6 && candidates.every(field => field.maxLength === 1)) {
+    return { kind: 'segmented', indexes: candidates.map(field => field.index) }
+  }
+  const sorted = [...candidates].sort((a, b) => b.score - a.score)
+  if (sorted[0]?.score >= 2 && sorted[0].score > (sorted[1]?.score ?? -1)) {
+    return { kind: 'single', indexes: [sorted[0].index] }
+  }
+  return null
+}
+
+async function waitForCodeInputs(page, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs
+  let count = 0
+  while (Date.now() < deadline) {
+    const fields = await page.locator('input:visible').evaluateAll(inputs => inputs.map(input => ({
+      type: input.type, name: input.name, id: input.id, placeholder: input.placeholder,
+      ariaLabel: input.getAttribute('aria-label'), autocomplete: input.autocomplete,
+      inputMode: input.inputMode, maxLength: input.maxLength,
+      disabled: input.disabled, readOnly: input.readOnly,
+    }))).catch(() => [])
+    count = fields.length
+    const selected = selectCodeInputs(fields)
+    if (selected) return selected
+    await delay(500)
+  }
+  return { kind: 'unresolved', indexes: [], count }
+}
+
 async function verified(page, context) {
   const cookies = await context.cookies('https://www.facebook.com/')
   const hasCookies = ['c_user', 'xs'].every(name => cookies.some(cookie => cookie.name === name))
@@ -189,6 +231,7 @@ async function runLogin(browser, config) {
     const submittedAt = Date.now()
     let solved = false
     let enteredTotp = false
+    let twoFactorSubmittedAt = null
     const deadline = Date.now() + 9 * 60_000
     while (Date.now() < deadline) {
       stage = 'checking Facebook response'
@@ -201,7 +244,7 @@ async function runLogin(browser, config) {
       }
       const pathname = route(page.url())
       const text = await page.locator('body').innerText({ timeout: 5000 }).catch(() => '')
-      if (await page.locator('input[name="email"]:visible').count().catch(() => 0) && Date.now() - submittedAt > 20000) {
+      if (await page.locator('input[name="email"]:visible').count().catch(() => 0) && Date.now() - submittedAt > 60000) {
         report('Login did not advance', /incorrect password|wrong password|incorrect email|incorrect username/i.test(text)
           ? 'Facebook rejected the account details' : 'Facebook remained on the login form after clicking Log in')
         return
@@ -212,18 +255,30 @@ async function runLogin(browser, config) {
       }
       if (/two_step_verification|two_factor/.test(pathname) && !enteredTotp) {
         stage = 'entering verification code'
-        const input = page.locator('input[autocomplete="one-time-code"]:visible, input[type="text"]:visible, input[type="tel"]:visible')
-        if (await input.count() !== 1) {
-          report('2FA needs attention', 'Could not identify one verification-code field')
+        report('Waiting for verification field')
+        const selected = await waitForCodeInputs(page)
+        if (selected.kind === 'unresolved') {
+          report('2FA needs attention', `Verification field did not become unambiguous (${selected.count} visible inputs)`)
           return
         }
+        const ending = Date.now() % 30000
+        if (ending > 27000) await delay(30500 - ending)
+        const code = totp(config.totpSecret)
         report('Entering verification code')
-        await input.first().fill(totp(config.totpSecret))
+        const visibleInputs = page.locator('input:visible')
+        if (selected.kind === 'segmented') {
+          for (let i = 0; i < selected.indexes.length; i++) await visibleInputs.nth(selected.indexes[i]).fill(code[i])
+        } else await visibleInputs.nth(selected.indexes[0]).fill(code)
         const continueButton = page.getByRole('button', { name: /continue|next|tiếp tục/i }).first()
         if (await continueButton.isVisible().catch(() => false)) await continueButton.click({ noWaitAfter: true })
-        else await input.first().press('Enter', { noWaitAfter: true })
+        else await visibleInputs.nth(selected.indexes.at(-1)).press('Enter', { noWaitAfter: true })
         enteredTotp = true
+        twoFactorSubmittedAt = Date.now()
         continue
+      }
+      if (enteredTotp && /two_step_verification|two_factor/.test(pathname) && Date.now() - twoFactorSubmittedAt > 45000) {
+        report('2FA did not advance', 'Facebook remained on the verification page after one code; no automatic retry')
+        return
       }
       if (!solved) {
         const challenge = await challengeFromPage(page, observed)
@@ -282,4 +337,4 @@ async function main() {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) main().catch(() => { report('Error', `Browser task failed at ${stage}; no automatic retry`); process.exitCode = 1 })
-export { totp }
+export { totp, selectCodeInputs, waitForCodeInputs }

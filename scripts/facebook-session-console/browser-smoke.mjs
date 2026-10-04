@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import net from 'node:net'
 import { fileURLToPath } from 'node:url'
+import { waitForCodeInputs } from './worker.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const { chromium } = await import('/root/.local/share/facebook-headless/node_modules/playwright-core/index.mjs')
@@ -36,6 +37,14 @@ try {
   assert.equal(await page.locator('#login').isDisabled(), true)
   await page.locator('summary').click()
   assert.equal(await page.getByLabel('2Captcha API key').isVisible(), true)
+  await page.goto('about:blank')
+  await page.setContent('<input type="search" aria-label="Search">')
+  await page.evaluate(() => setTimeout(() => {
+    const input = document.createElement('input')
+    input.type = 'text'
+    document.body.append(input)
+  }, 600))
+  assert.deepEqual(await waitForCodeInputs(page, 3000), { kind: 'single', indexes: [1] })
   await page.close()
   process.stdout.write('Browser smoke passed\n')
 } finally {
