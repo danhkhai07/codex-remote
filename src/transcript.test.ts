@@ -30,6 +30,19 @@ describe('live conversation', () => {
     const items = [stale, current]
     expect(reconcileTranscript(items, { ...history, historyUnavailable: true })).toBe(items)
   })
+  it('does not append an old cached message after the newest paginated answer', () => {
+    const oldLink: TranscriptItem = { id: 'link', turnId: 'yesterday', type: 'userMessage', text: 'Canva URL', streaming: false }
+    const omittedTool: TranscriptItem = { id: 'tool', turnId: 'today', type: 'commandExecution', command: 'old command', streaming: false }
+    const inFlight: TranscriptItem = { id: 'reply', turnId: 'next', type: 'agentMessage', text: 'New reply', streaming: true }
+    const recent = { ...thread, historyWindow: { revision: 'r1', older: 'cursor', messages: 20 },
+      latestTurn: { id: 'next', status: 'inProgress' },
+      turns: [{ id: 'today', status: 'completed', items: [{ id: 'answer', type: 'agentMessage', text: 'Today answer' }] }] }
+    const reconciled = reconcileTranscript([oldLink, omittedTool, inFlight], recent, true)
+    expect(reconciled).toEqual([inFlight])
+    expect(conversationItems(recent, reconciled).map(item => item.text)).toEqual(['Today answer', 'New reply'])
+    // A turn started while the request was in flight must survive until the next sync.
+    expect(reconcileTranscript([oldLink, inFlight], recent, false)).toEqual([oldLink, inFlight])
+  })
   it('merges long histories in turn order without changing untouched live references', () => {
     const turns = Array.from({ length: 500 }, (_, i) => ({
       id: `t-${i}`, status: 'completed', items: [{ id: 'repeated-id', type: 'agentMessage', text: `stored-${i}` }],

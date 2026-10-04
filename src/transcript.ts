@@ -22,13 +22,23 @@ export function isVisibleTranscriptItem(item: ThreadItem): boolean {
   return PUBLIC_ACTIVITY_TYPES.has(type)
 }
 
-/** Completed server history supersedes partial deltas cached before a disconnect. */
-export function reconcileTranscript(items: TranscriptItem[], thread: Thread): TranscriptItem[] {
+/** Completed server history supersedes cached deltas. A stable recent-page
+ * snapshot also drops completed items that fell outside its bounded window. */
+export function reconcileTranscript(items: TranscriptItem[], thread: Thread, authoritativeWindow = false): TranscriptItem[] {
   if (thread.historyUnavailable) return items
+  const turns = new Map((thread.turns ?? []).map(turn => [turn.id, turn]))
   const completedItems = new Set((thread.turns ?? [])
     .filter(turn => ['completed', 'interrupted', 'failed'].includes(turn.status))
     .flatMap(turn => (turn.items ?? []).filter(item => item.id).map(item => `${turn.id}:${item.id}`)))
-  const next = items.filter(item => !completedItems.has(`${item.turnId}:${item.id}`))
+  const next = items.filter(item => {
+    if (completedItems.has(`${item.turnId}:${item.id}`)) return false
+    if (!authoritativeWindow || !thread.historyWindow) return true
+    const turn = turns.get(item.turnId)
+    // A recent-page response omits old turns and may omit old items within a
+    // completed turn. Cached SSE for those items must not reappear at the end.
+    if (turn) return !['completed', 'interrupted', 'failed'].includes(turn.status)
+    return item.turnId === thread.latestTurn?.id && thread.latestTurn.status === 'inProgress'
+  })
   return next.length === items.length ? items : next
 }
 

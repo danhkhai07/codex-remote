@@ -917,7 +917,7 @@ export function App() {
       setHistoryReady(true)
       setTranscripts(current => {
         const before = current[target.id] ?? EMPTY_ITEMS
-        const after = reconcileTranscript(before, history.thread)
+        const after = reconcileTranscript(before, history.thread, version === turnVersions.current.get(target.id))
         return before === after ? current : { ...current, [target.id]: after }
       })
       if (!history.thread.historyUnavailable && version === turnVersions.current.get(target.id)) {
@@ -1081,7 +1081,7 @@ export function App() {
         setHistoryReady(true)
         setTranscripts(current => {
           const before = current[id] ?? EMPTY_ITEMS
-          const after = reconcileTranscript(before, response.thread)
+          const after = reconcileTranscript(before, response.thread, true)
           return before === after ? current : { ...current, [id]: after }
         })
         if (!response.thread.historyUnavailable) {
