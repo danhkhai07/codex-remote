@@ -301,41 +301,13 @@ def run_login(driver, config):
     STAGE = 'opening login page'
     report('Opening Facebook')
     driver.get(os.environ.get('FB_SESSION_TEST_URL', FACEBOOK + '/'))
-    if detect(driver)[0] == 'authenticated':
-        report('Checking saved session')
-        confirmed = save_verified_session(driver)
-        report('Session ready' if confirmed else 'Verification failed',
-               'Saved and verified in a fresh browser' if confirmed else 'Facebook rejected the saved session')
-        return True
-    email = password = []
-    form_deadline = time.monotonic() + 12
-    while time.monotonic() < form_deadline:
-        email = visible(driver, 'input[name="email"]')
-        password = visible(driver, 'input[name="pass"]')
-        if email and password:
-            break
-        time.sleep(0.2)
-    if not email or not password:
-        report('Login form unavailable', 'Facebook did not show the expected login form')
-        return
-    if os.environ.get('FB_SESSION_DRY_RUN') == '1':
-        report('Login form ready', 'Read-only preflight passed; no account was submitted')
-        return
-    STAGE = 'submitting login'
-    email[0].send_keys(config['account'])
-    password[0].send_keys(config['password'])
-    buttons = [button for button in visible(driver, 'button') if re.fullmatch(r'log in', button.text.strip(), re.I)]
-    if buttons:
-        buttons[0].click()
-    else:
-        password[0].send_keys(Keys.ENTER)
-    report('Login button clicked')
-    submitted_at = time.monotonic()
-    deadline = submitted_at + 540
+    started_at = time.monotonic()
+    submitted_at = None
+    deadline = started_at + 540
     solved = entered_totp = False
     two_factor_at = captcha_at = None
     last_kind = None
-    detected_since = submitted_at
+    detected_since = started_at
     while time.monotonic() < deadline:
         STAGE = 'checking Facebook response'
         time.sleep(2.5)
@@ -349,13 +321,33 @@ def run_login(driver, config):
                       'checkpoint': 'Other verification required', 'authenticated': 'Authenticated page detected',
                       'unknown': 'Waiting for page to load'}
             report(labels[kind])
+        if os.environ.get('FB_SESSION_DRY_RUN') == '1':
+            report('Login form ready' if kind == 'login' else 'Current stage: ' + kind,
+                   'Read-only preflight passed; no account was submitted')
+            return False
         if kind == 'authenticated':
             report('Checking saved session')
             confirmed = save_verified_session(driver)
             report('Session ready' if confirmed else 'Verification failed',
                    'Saved and verified in a fresh browser' if confirmed else 'Facebook rejected the saved session')
             return True  # first driver has already closed
-        if kind == 'login-rejected' or (kind == 'login' and now - submitted_at > 60):
+        if kind == 'login' and submitted_at is None:
+            email = visible(driver, 'input[name="email"]')
+            password = visible(driver, 'input[name="pass"]')
+            if not email or not password:
+                continue
+            STAGE = 'submitting login'
+            email[0].send_keys(config['account'])
+            password[0].send_keys(config['password'])
+            buttons = [button for button in visible(driver, 'button') if re.fullmatch(r'log in', button.text.strip(), re.I)]
+            if buttons:
+                buttons[0].click()
+            else:
+                password[0].send_keys(Keys.ENTER)
+            report('Login button clicked')
+            submitted_at = time.monotonic()
+            continue
+        if kind == 'login-rejected' or (kind == 'login' and submitted_at is not None and now - submitted_at > 60):
             report('Login did not advance', 'Facebook rejected the account details or remained on the login form')
             return False
         if kind == 'identity':

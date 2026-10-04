@@ -52,6 +52,13 @@ def main():
             assert events[-1]['phase'] == 'Login form ready', events
             assert not (Path(state) / 'storage-state.json').exists()
             assert (Path(state) / 'browser-profile').exists()
+            env['FB_SESSION_TEST_URL'] = root + '/code'
+            resumed = subprocess.run([sys.executable, str(worker_path), 'login'], input='{}',
+                                     text=True, capture_output=True, env=env, timeout=60)
+            resumed_events = [json.loads(line) for line in resumed.stdout.splitlines()]
+            assert resumed.returncode == 0, resumed_events
+            assert resumed_events[-1]['phase'] == 'Current stage: two-factor', resumed_events
+            assert not (Path(state) / 'storage-state.json').exists()
             os.environ['FB_SESSION_STATE_DIR'] = state
             spec = importlib.util.spec_from_file_location('worker_uc', worker_path)
             worker = importlib.util.module_from_spec(spec)
