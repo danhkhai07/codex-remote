@@ -2,8 +2,10 @@
 
 This standalone loopback app is opened through the authenticated Codex Remote
 preview for port 5217. It does not add any Facebook actions beyond login and a
-read-only saved-session check. The one-account login may use **one** 2Captcha
-FunCaptcha task; it never retries a paid task automatically. An Arkose response
+read-only saved-session check. Manual CAPTCHA is selected by default: the
+owner can click, drag, or type on a live browser image inside this app while
+the Chrome process stays open. The alternative 2Captcha mode may use **one**
+paid FunCaptcha task; it never retries a paid task automatically. An Arkose response
 is not considered a login: the worker saves the browser state only after a
 fresh browser can open Facebook without a login form or checkpoint.
 
@@ -16,13 +18,15 @@ Cookies alone are insufficient: a visible account/profile control is also
 required, including in the fresh-browser check. Detection remains subject to
 Facebook changing its interface; an unrecognized page stops rather than guessing.
 
-Regression checks (the UC browser fixture is local and makes no Facebook or
-2Captcha request):
+Regression checks (browser fixtures are local and make no Facebook or 2Captcha
+request):
 
 ```sh
 codex-heavy --label facebook-uc-tests --timeout 180 -- /usr/bin/env /root/.local/share/facebook-undetected-chromedriver/venv/bin/python -m unittest discover -s scripts/facebook-session-console -p test_worker_uc.py -v
 codex-heavy --label facebook-uc-browser --timeout 180 -- /usr/bin/xvfb-run -a /usr/bin/env /root/.local/share/facebook-undetected-chromedriver/venv/bin/python scripts/facebook-session-console/test_worker_uc_browser.py
+codex-heavy --label facebook-manual-browser --timeout 180 -- /usr/bin/xvfb-run -a /usr/bin/env /root/.local/share/facebook-undetected-chromedriver/venv/bin/python scripts/facebook-session-console/test_worker_uc_manual.py
 codex-heavy --label facebook-console-api --timeout 180 -- node --test scripts/facebook-session-console/console.test.mjs
+codex-heavy --label facebook-manual-ui --timeout 180 -- node scripts/facebook-session-console/manual-browser-smoke.mjs
 ```
 
 The owner enters the VPS access code, account ID/email, password, authenticator
@@ -41,11 +45,22 @@ for every API request. Do not register the port as a public share link. Browser
 automation uses undetected-chromedriver 3.5.5, Selenium 4.50.0 and
 setuptools 80.10.2 in an isolated Python 3.12 virtual environment. The service
 uses Xvfb and the local Chromium 140 binary. Chrome keeps the session in the
-root-only `browser-profile` directory. `storage-state.json` is a secret-free
+root-only `browser-profile` directory. Manual screenshots travel only from the
+worker to the parent process and are served by an access-code-protected,
+non-cacheable endpoint. The parent accepts only bounded pointer/text/key
+commands while the CAPTCHA view is active. Manual login stops after at most
+15 minutes; the Stop browser button can end it earlier. `storage-state.json` is a secret-free
 marker written only after a second browser process verifies that the session
 is authenticated. The old Playwright worker remains in source for rollback;
 the server starts `worker_uc.py`.
 
-If Facebook requests a new challenge, identity review, or an unsupported
-verification form, the job stops with a status. The owner may start another
-login manually. There are no bulk-account, like, view, or stream actions.
+Manual CAPTCHA operation: open the service from Codex Remote Services, unlock
+the console with its VPS access code, leave "Let me solve CAPTCHA in this page"
+checked, then select Start login. When a challenge appears, the live browser
+image is shown under the buttons. Click/drag on it or use the text/Enter controls
+until Facebook advances. This feature cannot make a blank or blocked challenge
+render. It has been tested with a local challenge fixture; actual Facebook
+acceptance remains unverified.
+
+If Facebook requests identity review or an unsupported verification form, the
+job stops with a status. There are no bulk-account, like, view, or stream actions.

@@ -1,6 +1,6 @@
 import http from 'node:http'
 import { spawn } from 'node:child_process'
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { readFile, writeFile, mkdir, rename, stat, chmod } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -12,13 +12,15 @@ const configFile = path.join(stateDir, 'account.json')
 const sessionFile = path.join(stateDir, 'storage-state.json')
 const port = Number(process.env.FB_SESSION_PORT ?? 5217)
 const host = '127.0.0.1'
-const contentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors https://remote.danhkhai.io.vn"
+const contentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; base-uri 'none'; form-action 'none'; frame-ancestors https://remote.danhkhai.io.vn"
 let accessCode = ''
 let active = null
 let jobReserved = false
 let phase = 'Not started'
 let lastResult = ''
 let updatedAt = null
+let manualAvailable = false
+let manualFrame = null
 
 function send(res, status, body, type = 'application/json; charset=utf-8') {
   const data = typeof body === 'string' ? body : JSON.stringify(body)
@@ -31,6 +33,18 @@ function send(res, status, body, type = 'application/json; charset=utf-8') {
     'Referrer-Policy': 'no-referrer',
   })
   res.end(data)
+}
+
+function sendFrame(res, frame) {
+  res.writeHead(200, {
+    'Content-Type': 'image/jpeg',
+    'Content-Length': frame.length,
+    'Cache-Control': 'no-store',
+    'Content-Security-Policy': contentSecurityPolicy,
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer',
+  })
+  res.end(frame)
 }
 
 async function body(req) {
@@ -69,8 +83,11 @@ function safeAccount(value) {
 function safeConfig(value) {
   if (!value || typeof value !== 'object') throw new Error('Invalid config')
   const account = safeAccount(value.account)
-  for (const key of ['password', 'totpSecret', 'captchaKey']) {
+  for (const key of ['password', 'totpSecret']) {
     if (typeof value[key] !== 'string' || value[key].length < 6 || value[key].length > 300) throw new Error(`Invalid ${key}`)
+  }
+  if (typeof value.captchaKey !== 'string' || value.captchaKey.length > 300 || (value.captchaKey.length > 0 && value.captchaKey.length < 6)) {
+    throw new Error('Invalid captchaKey')
   }
   const totpSecret = value.totpSecret.toUpperCase().replace(/\s/g, '')
   if (!/^[A-Z2-7]{16,}$/.test(totpSecret)) throw new Error('Invalid TOTP secret')
@@ -83,13 +100,35 @@ function masked(account) {
   return `${account.slice(0, 3)}•••${account.slice(-2)}`
 }
 
+function safeManualAction(value) {
+  if (!value || typeof value !== 'object') throw new Error('Invalid browser action')
+  const coordinate = item => Number.isInteger(item) && item >= 0 && item < 1280
+  const vertical = item => Number.isInteger(item) && item >= 0 && item < 800
+  if (value.type === 'click' && coordinate(value.x) && vertical(value.y)) {
+    return { type: 'click', x: value.x, y: value.y }
+  }
+  if (value.type === 'drag' && coordinate(value.x) && vertical(value.y) && coordinate(value.toX) && vertical(value.toY)) {
+    return { type: 'drag', x: value.x, y: value.y, toX: value.toX, toY: value.toY }
+  }
+  if (value.type === 'text' && typeof value.text === 'string' && value.text.length >= 1 && value.text.length <= 80 && ![...value.text].some(character => {
+    const code = character.codePointAt(0)
+    return code < 32 || code === 127
+  })) {
+    return { type: 'text', text: value.text }
+  }
+  if (value.type === 'key' && ['Enter', 'Backspace', 'Tab', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(value.key)) {
+    return { type: 'key', key: value.key }
+  }
+  throw new Error('Invalid browser action')
+}
+
 async function status() {
   let config = null
   try { config = JSON.parse(await readFile(configFile, 'utf8')) } catch {}
   return {
     configured: Boolean(config), account: masked(config?.account),
     sessionSaved: await exists(sessionFile), running: Boolean(active || jobReserved),
-    phase, lastResult, updatedAt,
+    phase, lastResult, updatedAt, manualAvailable: Boolean(active && manualAvailable),
   }
 }
 
@@ -105,21 +144,25 @@ function workerEnvironment(directory = stateDir) {
   }
 }
 
-async function startJob(action) {
+async function startJob(action, options = {}) {
   if (active || jobReserved) throw new Error('A job is already running')
   jobReserved = true
   try {
     const config = action === 'login' ? JSON.parse(await readFile(configFile, 'utf8')) : null
+    if (action === 'login' && options.manualCaptcha === false && !config.captchaKey) throw new Error('2Captcha key required')
     if (action === 'check' && !await exists(sessionFile)) throw new Error('No saved session')
     phase = action === 'login' ? 'Opening Facebook' : 'Checking saved session'
     lastResult = ''
     updatedAt = new Date().toISOString()
-    const child = spawn(process.env.FB_SESSION_PYTHON ?? '/root/.local/share/facebook-undetected-chromedriver/venv/bin/python', [path.join(here, 'worker_uc.py'), action], {
+    manualAvailable = false
+    manualFrame = null
+    const child = spawn(process.env.FB_SESSION_PYTHON ?? '/root/.local/share/facebook-undetected-chromedriver/venv/bin/python', [process.env.FB_SESSION_WORKER ?? path.join(here, 'worker_uc.py'), action], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: workerEnvironment(),
     })
     active = child
-    child.stdin.end(JSON.stringify(config ?? {}))
+    child.stdin.on('error', () => {}) // A browser exit can race an owner click.
+    child.stdin.write(`${JSON.stringify(action === 'login' ? { ...config, manualCaptcha: options.manualCaptcha !== false } : {})}\n`)
     let lines = ''
     child.stdout.on('data', chunk => {
       lines += chunk.toString('utf8')
@@ -127,25 +170,41 @@ async function startJob(action) {
         const index = lines.indexOf('\n')
         const line = lines.slice(0, index)
         lines = lines.slice(index + 1)
+        if (line.length > 2_000_000 || active !== child) continue
         try {
           const event = JSON.parse(line)
           if (typeof event.phase === 'string') phase = event.phase.slice(0, 160)
           if (typeof event.result === 'string') lastResult = event.result.slice(0, 160)
+          if (typeof event.manual === 'boolean') {
+            manualAvailable = event.manual
+            if (!manualAvailable) manualFrame = null
+          }
+          if (manualAvailable && typeof event.frame === 'string' && event.frame.length <= 1_800_000) {
+            const frame = Buffer.from(event.frame, 'base64')
+            if (frame.length >= 3 && frame[0] === 0xff && frame[1] === 0xd8 && frame[2] === 0xff) manualFrame = frame
+          }
           updatedAt = new Date().toISOString()
         } catch {}
       }
+      if (lines.length > 2_000_000) child.kill('SIGTERM')
     })
     child.stderr.on('data', () => {}) // Never log browser output or secrets.
     child.on('error', () => {
+      if (active !== child) return
       phase = 'Browser could not start'
       lastResult = 'Browser task failed to start'
       active = null
+      manualAvailable = false
+      manualFrame = null
       updatedAt = new Date().toISOString()
     })
     child.on('exit', code => {
+      if (active !== child) return
       if (!lastResult) lastResult = code === 0 ? 'Finished' : 'Login or check did not complete'
       if (code !== 0 && phase === 'Checking saved session') phase = 'Check failed'
       active = null
+      manualAvailable = false
+      manualFrame = null
       updatedAt = new Date().toISOString()
     })
   } finally { jobReserved = false }
@@ -162,8 +221,12 @@ async function handler(req, res) {
     if (!url.pathname.startsWith('/api/')) return send(res, 404, { error: 'Not found' })
     if (!authorized(req)) return send(res, 401, { error: 'Access code required' })
     if (req.method === 'GET' && url.pathname === '/api/status') return send(res, 200, await status())
+    if (req.method === 'GET' && url.pathname === '/api/frame') {
+      if (!active || !manualAvailable || !manualFrame) return send(res, 404, { error: 'No manual CAPTCHA frame' })
+      return sendFrame(res, manualFrame)
+    }
     if (req.method !== 'POST') return send(res, 405, { error: 'Method not allowed' })
-    if (req.headers.origin && !['http://127.0.0.1:5217', 'https://p5217.danhkhai.io.vn'].includes(req.headers.origin)) {
+    if (req.headers.origin && ![`http://${host}:${port}`, 'https://p5217.danhkhai.io.vn'].includes(req.headers.origin)) {
       return send(res, 403, { error: 'Invalid origin' })
     }
     if (url.pathname === '/api/config') {
@@ -177,15 +240,34 @@ async function handler(req, res) {
       await atomicJson(configFile, next)
       return send(res, 200, await status())
     }
-    if (url.pathname === '/api/login' || url.pathname === '/api/check') {
+    if (url.pathname === '/api/manual') {
+      if (!active || !manualAvailable || !active.stdin.writable) return send(res, 409, { error: 'Manual CAPTCHA is not active' })
+      const action = safeManualAction(await body(req))
+      if (!active.stdin.write(`${JSON.stringify(action)}\n`)) return send(res, 503, { error: 'Browser is busy' })
+      return send(res, 202, { accepted: true })
+    }
+    if (url.pathname === '/api/stop') {
       await body(req)
-      await startJob(url.pathname.slice(5))
+      if (!active) return send(res, 409, { error: 'No browser job is running' })
+      phase = 'Stopped by owner'
+      lastResult = 'Browser task stopped'
+      manualAvailable = false
+      manualFrame = null
+      active.kill('SIGINT')
+      return send(res, 202, await status())
+    }
+    if (url.pathname === '/api/login' || url.pathname === '/api/check') {
+      const options = await body(req)
+      if (url.pathname === '/api/login' && options.manualCaptcha !== undefined && typeof options.manualCaptcha !== 'boolean') {
+        return send(res, 400, { error: 'Invalid CAPTCHA mode' })
+      }
+      await startJob(url.pathname.slice(5), options)
       return send(res, 202, await status())
     }
     return send(res, 404, { error: 'Not found' })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unexpected error'
-    const expected = /Invalid|JSON required|Request too large|No saved session|already running|ENOENT/.test(message)
+    const expected = /Invalid|JSON required|Request too large|No saved session|already running|2Captcha key required|ENOENT/.test(message)
     return send(res, expected ? 400 : 500, { error: expected ? message : 'Unexpected server error' })
   }
 }
@@ -204,4 +286,4 @@ async function main() {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) main().catch(() => { process.exitCode = 1 })
-export { safeConfig, masked, handler, workerEnvironment }
+export { safeConfig, masked, safeManualAction, handler, workerEnvironment }

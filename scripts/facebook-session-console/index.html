@@ -26,19 +26,33 @@
       <div class="actions">
         <button id="login" type="button">Start login</button>
         <button id="check" type="button">Check saved session</button>
+        <button id="stop" type="button" disabled>Stop browser</button>
       </div>
+      <label class="manual-choice"><input id="manual-captcha" type="checkbox" checked> Let me solve CAPTCHA in this page (no 2Captcha charge)</label>
+      <section id="manual-panel" hidden aria-label="Manual CAPTCHA browser">
+        <h2>Browser CAPTCHA</h2>
+        <p class="note">Click or drag directly on the image. Keep this page open until Facebook moves to the next step.</p>
+        <img id="browser-frame" alt="Live browser CAPTCHA" draggable="false">
+        <div class="manual-controls">
+          <input id="manual-text" aria-label="Text for the focused CAPTCHA field" placeholder="Text, if requested" autocomplete="off">
+          <button id="send-text" type="button">Type text</button>
+          <button id="send-enter" type="button">Enter</button>
+          <button id="send-backspace" type="button">Backspace</button>
+        </div>
+        <p id="manual-result" role="status"></p>
+      </section>
       <details>
         <summary>Account and 2Captcha settings</summary>
         <form id="config-form">
           <label>Account ID or email <input name="account" autocomplete="username" required></label>
           <label>Password <input name="password" type="password" autocomplete="new-password" required></label>
           <label>2FA authenticator secret <input name="totpSecret" type="password" autocomplete="off" required></label>
-          <label>2Captcha API key <input name="captchaKey" type="password" autocomplete="off" required></label>
+          <label>2Captcha API key (optional for manual mode) <input name="captchaKey" type="password" autocomplete="off"></label>
           <button>Save settings</button>
           <p class="note">Secrets stay on this VPS in root-only files. The app never sends them back to the browser. Saving replaces the previous account settings.</p>
         </form>
       </details>
-      <p class="note">A login uses at most one paid CAPTCHA task. Facebook may still request another challenge or identity review; a solved CAPTCHA alone is not a saved session.</p>
+      <p class="note">Manual mode waits for you at the CAPTCHA. If you turn it off, the app uses at most one paid 2Captcha task. A solved CAPTCHA alone is not a saved session.</p>
     </section>
   </main>
 </body>

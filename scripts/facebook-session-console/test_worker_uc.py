@@ -12,6 +12,21 @@ spec.loader.exec_module(worker)
 
 
 class WorkerTests(unittest.TestCase):
+    def test_manual_pointer_and_text_actions_use_browser_input(self):
+        driver = mock.Mock()
+        worker.manual_action(driver, {'type': 'click', 'x': 150, 'y': 135})
+        events = [call.args[1] for call in driver.execute_cdp_cmd.call_args_list]
+        self.assertEqual([item['type'] for item in events], ['mouseMoved', 'mousePressed', 'mouseReleased'])
+        driver.execute_cdp_cmd.reset_mock()
+        with mock.patch.object(worker.time, 'sleep'):
+            worker.manual_action(driver, {'type': 'drag', 'x': 10, 'y': 20, 'toX': 100, 'toY': 120})
+        events = [call.args[1] for call in driver.execute_cdp_cmd.call_args_list]
+        self.assertEqual(events[-1]['type'], 'mouseReleased')
+        self.assertEqual((events[-1]['x'], events[-1]['y']), (100, 120))
+        driver.execute_cdp_cmd.reset_mock()
+        worker.manual_action(driver, {'type': 'text', 'text': 'hello'})
+        self.assertEqual(driver.execute_cdp_cmd.call_args.args, ('Input.insertText', {'text': 'hello'}))
+
     def test_session_marker_requires_fresh_browser_check(self):
         with tempfile.TemporaryDirectory() as directory:
             with mock.patch.object(worker, 'SESSION_FILE', Path(directory) / 'storage-state.json'):
