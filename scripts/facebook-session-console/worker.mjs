@@ -98,12 +98,70 @@ async function captureDiagnostic(page, label) {
   await page.screenshot({ path: screenshot, fullPage: false }).then(() => chmod(screenshot, 0o600)).catch(() => {})
 }
 
-async function verified(page, context) {
+function classifyPageStage(facts) {
+  if (facts.identity) return 'identity'
+  if (facts.captcha) return 'captcha'
+  if (facts.login) return facts.rejected ? 'login-rejected' : 'login'
+  if (facts.otherCode) return 'other-code'
+  if (facts.codeStep) return facts.code ? 'two-factor' : 'two-factor-loading'
+  if (facts.checkpoint) return 'checkpoint'
+  if (facts.hasCookies && facts.accountControl) return 'authenticated'
+  return 'unknown'
+}
+
+async function detectPageStage(page, context) {
+  const url = page.url()
+  const pathname = route(url)
+  const text = await page.locator('body').innerText({ timeout: 1500 }).catch(() => '')
+  let captcha = /complete a challenge to verify|solve a puzzle to continue/i.test(text)
+  let selected = null
+  for (const frame of page.frames()) {
+    if (frame !== page.mainFrame()) {
+      let visible = true
+      for (let ancestor = frame; ancestor.parentFrame(); ancestor = ancestor.parentFrame()) {
+        const element = await ancestor.frameElement().catch(() => null)
+        visible = Boolean(element && await element.isVisible().catch(() => false))
+        await element?.dispose()
+        if (!visible) break
+      }
+      if (!visible) continue
+      try {
+        const location = new URL(frame.url())
+        if (/(^|\.)arkoselabs\.com$/.test(location.hostname)
+          || (location.hostname === 'www.fbsbx.com' && location.pathname.startsWith('/captcha/arkose/'))) captcha = true
+      } catch {}
+    }
+    const fields = await frame.locator('input:visible').evaluateAll(inputs => inputs.map(input => ({
+      type: input.type, name: input.name, id: input.id, placeholder: input.placeholder,
+      ariaLabel: input.getAttribute('aria-label'), autocomplete: input.autocomplete,
+      inputMode: input.inputMode, maxLength: input.maxLength,
+      disabled: input.disabled, readOnly: input.readOnly,
+    }))).catch(() => [])
+    const candidate = selectCodeInputs(fields)
+    if (candidate && !selected) selected = { ...candidate, frame }
+  }
   const cookies = await context.cookies('https://www.facebook.com/')
-  const hasCookies = ['c_user', 'xs'].every(name => cookies.some(cookie => cookie.name === name))
-  const blocked = /two_step_verification|checkpoint|login|recover/.test(route(page.url()))
-  const loginForm = await page.locator('input[name="email"]:visible').count().catch(() => 0)
-  return hasCookies && !blocked && loginForm === 0
+  const facts = {
+    identity: /video selfie|identity confirmation in progress|upload.*(?:ID|identity document)/i.test(text),
+    captcha,
+    login: await page.locator('input[name="email"]:visible, input[name="pass"]:visible').count().catch(() => 0) > 0,
+    rejected: /incorrect password|wrong password|incorrect email|incorrect username/i.test(text),
+    otherCode: /(?:sent|send|check).{0,50}(?:email|text message|SMS)|code.{0,30}(?:email|text message|SMS)/i.test(text)
+      && !/authentication app|authenticator app/i.test(text),
+    codeStep: /\/two_step_verification\/two_factor\/?$/.test(pathname)
+      || /enter (?:the |a |your )?(?:6.digit |security |verification |authentication )?code|authentication app|authenticator app/i.test(text),
+    code: Boolean(selected),
+    checkpoint: /two_step_verification|checkpoint|login|recover/.test(pathname),
+    hasCookies: /^https:\/\/(?:www\.|m\.)?facebook\.com\//.test(url)
+      && ['c_user', 'xs'].every(name => cookies.some(cookie => cookie.name === name)),
+    accountControl: await page.locator('[aria-label="Account"]:visible, [aria-label="Your profile"]:visible, [aria-label="Tài khoản"]:visible').count().catch(() => 0) > 0,
+  }
+  // A navigation during inspection invalidates the old DOM evidence.
+  return { kind: page.url() === url ? classifyPageStage(facts) : 'unknown', selected }
+}
+
+async function verified(page, context) {
+  return (await detectPageStage(page, context)).kind === 'authenticated'
 }
 
 async function saveAndRecheck(browser, context) {
@@ -271,41 +329,53 @@ async function runLogin(browser, config) {
     let solved = false
     let enteredTotp = false
     let twoFactorSubmittedAt = null
+    let captchaSubmittedAt = null
+    let lastDetected = null
+    let detectedSince = Date.now()
     const deadline = Date.now() + 9 * 60_000
     while (Date.now() < deadline) {
       stage = 'checking Facebook response'
       await delay(2500)
-      if (await verified(page, context)) {
+      const detected = await detectPageStage(page, context)
+      if (detected.kind !== lastDetected) {
+        lastDetected = detected.kind
+        detectedSince = Date.now()
+        const labels = { login: 'Login form', 'login-rejected': 'Login rejected', captcha: 'CAPTCHA detected',
+          'two-factor': '2FA code form detected', 'two-factor-loading': 'Waiting for 2FA page',
+          'other-code': 'Email or SMS verification required',
+          identity: 'Identity verification required', checkpoint: 'Other verification required',
+          authenticated: 'Authenticated page detected', unknown: 'Waiting for page to load' }
+        report(labels[detected.kind], '')
+      }
+      if (detected.kind === 'authenticated') {
         report('Checking saved session')
         const confirmed = await saveAndRecheck(browser, context)
         report(confirmed ? 'Session ready' : 'Verification failed', confirmed ? 'Saved and verified in a fresh browser' : 'Facebook rejected the saved session')
         return
       }
-      const pathname = route(page.url())
-      const text = await page.locator('body').innerText({ timeout: 5000 }).catch(() => '')
-      if (await page.locator('input[name="email"]:visible').count().catch(() => 0) && Date.now() - submittedAt > 60000) {
+      if (detected.kind === 'login-rejected' || (detected.kind === 'login' && Date.now() - submittedAt > 60000)) {
         await captureDiagnostic(page, 'login').catch(() => {})
-        const rejected = /incorrect password|wrong password|incorrect email|incorrect username/i.test(text)
+        const rejected = detected.kind === 'login-rejected'
         const traffic = `${loginTraffic.requests} Facebook POSTs, statuses ${loginTraffic.responses.join(',') || 'none'}, ${loginTraffic.failed} failed`
         report('Login did not advance', rejected
           ? `Facebook rejected the account details; ${traffic}` : `Facebook remained on the login form; ${traffic}`)
         return
       }
-      if (/video selfie|identity confirmation in progress/i.test(text)) {
+      if (detected.kind === 'identity') {
         report('Identity review required', 'Facebook requires a person to complete identity review')
         return
       }
-      if (/two_step_verification|two_factor/.test(pathname) && !enteredTotp) {
+      if (detected.kind === 'other-code') {
+        report('Email or SMS verification required', 'This page requires a code from a different verification method')
+        return
+      }
+      if (detected.kind === 'two-factor' && !enteredTotp) {
         stage = 'entering verification code'
-        report('Waiting for verification field')
-        const selected = await waitForCodeInputs(page)
-        if (selected.kind === 'unresolved') {
-          await captureDiagnostic(page, 'two-factor').catch(() => {})
-          report('2FA needs attention', `No clear code field across ${selected.frameCount} frames (${selected.count} visible inputs)`)
-          return
-        }
         const ending = Date.now() % 30000
         if (ending > 27000) await delay(30500 - ending)
+        const current = await detectPageStage(page, context)
+        if (current.kind !== 'two-factor') continue
+        const selected = current.selected
         const code = totp(config.totpSecret)
         report('Entering verification code')
         const visibleInputs = selected.frame.locator('input:visible')
@@ -321,11 +391,11 @@ async function runLogin(browser, config) {
         twoFactorSubmittedAt = Date.now()
         continue
       }
-      if (enteredTotp && /two_step_verification|two_factor/.test(pathname) && Date.now() - twoFactorSubmittedAt > 45000) {
+      if (enteredTotp && ['two-factor', 'two-factor-loading'].includes(detected.kind) && Date.now() - twoFactorSubmittedAt > 45000) {
         report('2FA did not advance', 'Facebook remained on the verification page after one code; no automatic retry')
         return
       }
-      if (!solved) {
+      if (detected.kind === 'captcha' && !solved) {
         const challenge = await challengeFromPage(page, observed)
         if (challenge) {
           stage = 'requesting CAPTCHA solution'
@@ -342,10 +412,15 @@ async function runLogin(browser, config) {
           }, token).catch(() => false)
           report(accepted ? 'CAPTCHA response submitted' : 'CAPTCHA handoff failed', accepted ? undefined : 'Facebook challenge changed before submission')
           if (!accepted) return
+          captchaSubmittedAt = Date.now()
         }
       }
-      if (/checkpoint/.test(pathname) && !solved && !/arkose|captcha/i.test(text)) {
-        report('Verification required', 'Facebook opened a checkpoint that this one-account tool cannot complete')
+      if (detected.kind === 'captcha' && Date.now() - (captchaSubmittedAt ?? detectedSince) > 45000) {
+        report('CAPTCHA needs attention', solved ? 'Challenge still visible after submission; no automatic retry' : 'Challenge detected but its integration is not ready')
+        return
+      }
+      if (['unknown', 'checkpoint', 'two-factor-loading'].includes(detected.kind) && Date.now() - detectedSince > 30000) {
+        report(detected.kind === 'two-factor-loading' ? '2FA page not ready' : 'Unrecognized verification page', 'Could not identify an actionable form; no code was submitted')
         return
       }
     }
@@ -361,8 +436,13 @@ async function runCheck(browser) {
     const page = await context.newPage()
     await page.goto('https://www.facebook.com/watch/', { waitUntil: 'domcontentloaded', timeout: 30000 })
     await delay(3000)
-    const okay = await verified(page, context)
-    report(okay ? 'Session ready' : 'Session expired', okay ? 'Saved session passed a fresh-browser check' : 'Facebook requires login or verification')
+    const detected = await detectPageStage(page, context)
+    const labels = { authenticated: 'Session ready', login: 'Login required', 'login-rejected': 'Login rejected',
+      captcha: 'CAPTCHA required', 'two-factor': '2FA required', 'two-factor-loading': '2FA page not ready',
+      'other-code': 'Email or SMS verification required', identity: 'Identity review required',
+      checkpoint: 'Other verification required', unknown: 'Session could not be verified' }
+    report(labels[detected.kind], detected.kind === 'authenticated'
+      ? 'Saved session passed a fresh-browser check' : 'Read-only check; no login or verification was submitted')
   } finally { await context.close() }
 }
 
@@ -382,4 +462,4 @@ async function main() {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) main().catch(() => { report('Error', `Browser task failed at ${stage}; no automatic retry`); process.exitCode = 1 })
-export { totp, selectCodeInputs, waitForCodeInputs }
+export { totp, selectCodeInputs, waitForCodeInputs, classifyPageStage, detectPageStage }

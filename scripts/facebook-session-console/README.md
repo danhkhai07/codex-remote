@@ -7,6 +7,21 @@ FunCaptcha task; it never retries a paid task automatically. An Arkose response
 is not considered a login: the worker saves the browser state only after a
 fresh browser can open Facebook without a login form or checkpoint.
 
+Stage detection checks visible page content and frames before choosing an action.
+An Arkose challenge at `/two_step_verification/authentication/` is CAPTCHA;
+it does not trigger the TOTP input handler. The code form must actually appear.
+Identity review and email/SMS verification are reported separately. Unknown or
+loading pages have bounded waits and never count as an authenticated session.
+Cookies alone are insufficient: a visible account/profile control is also
+required, including in the fresh-browser check. Detection remains subject to
+Facebook changing its interface; an unrecognized page stops rather than guessing.
+
+Regression checks (all Facebook/Arkose browser requests are local fixtures):
+
+```sh
+codex-heavy --label facebook-stage-check --timeout 180 -- node --test scripts/facebook-session-console/console.test.mjs scripts/facebook-session-console/browser-smoke.mjs scripts/facebook-session-console/stage-replay.test.mjs scripts/facebook-session-console/worker-flow.test.mjs
+```
+
 The owner enters the VPS access code, account ID/email, password, authenticator
 secret, and 2Captcha API key in the web form. The access code lives in
 `/root/.local/state/facebook-session-console/access-code`; account secrets and
