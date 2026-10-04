@@ -93,6 +93,18 @@ async function status() {
   }
 }
 
+function workerEnvironment(directory = stateDir) {
+  return {
+    PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
+    DISPLAY: process.env.DISPLAY ?? '',
+    XAUTHORITY: process.env.XAUTHORITY ?? '',
+    HOME: process.env.HOME ?? '/root',
+    FB_SESSION_STATE_DIR: directory,
+    FB_CHROME_PATH: process.env.FB_CHROME_PATH ?? '',
+    FB_PLAYWRIGHT_MODULE: process.env.FB_PLAYWRIGHT_MODULE ?? '',
+  }
+}
+
 async function startJob(action) {
   if (active || jobReserved) throw new Error('A job is already running')
   jobReserved = true
@@ -104,13 +116,7 @@ async function startJob(action) {
     updatedAt = new Date().toISOString()
     const child = spawn(process.execPath, [path.join(here, 'worker.mjs'), action], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
-        DISPLAY: process.env.DISPLAY ?? '',
-        FB_SESSION_STATE_DIR: stateDir,
-        FB_CHROME_PATH: process.env.FB_CHROME_PATH ?? '',
-        FB_PLAYWRIGHT_MODULE: process.env.FB_PLAYWRIGHT_MODULE ?? '',
-      },
+      env: workerEnvironment(),
     })
     active = child
     child.stdin.end(JSON.stringify(config ?? {}))
@@ -198,4 +204,4 @@ async function main() {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) main().catch(() => { process.exitCode = 1 })
-export { safeConfig, masked, handler }
+export { safeConfig, masked, handler, workerEnvironment }

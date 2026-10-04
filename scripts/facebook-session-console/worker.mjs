@@ -10,6 +10,7 @@ const playwrightPath = process.env.FB_PLAYWRIGHT_MODULE || '/root/.local/share/f
 const action = process.argv[2]
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
 const report = (phase, result) => process.stdout.write(`${JSON.stringify({ phase, result })}\n`)
+let stage = 'reading input'
 
 function totp(secret, now = Date.now()) {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
@@ -114,6 +115,7 @@ async function challengeFromPage(page, observed) {
 }
 
 async function runLogin(browser, config) {
+  stage = 'creating login browser context'
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: 'en-US' })
   const observed = { keys: new Set(), subdomains: new Set() }
   try {
@@ -151,6 +153,7 @@ async function runLogin(browser, config) {
         }
       }).observe(document, { subtree: true, childList: true })
     })
+    stage = 'opening login page'
     const page = await context.newPage()
     page.on('request', request => {
       try {
@@ -164,6 +167,7 @@ async function runLogin(browser, config) {
       } catch {}
     })
     report('Opening Facebook')
+    stage = 'loading Facebook'
     await page.goto('https://www.facebook.com/', { waitUntil: 'domcontentloaded', timeout: 30000 })
     const email = page.locator('input[name="email"]:visible').first()
     const password = page.locator('input[name="pass"]:visible').first()
@@ -171,6 +175,11 @@ async function runLogin(browser, config) {
       report('Login form unavailable', 'Facebook did not show the expected login form')
       return
     }
+    if (process.env.FB_SESSION_DRY_RUN === '1') {
+      report('Login form ready', 'Read-only preflight passed; no account was submitted')
+      return
+    }
+    stage = 'submitting login'
     await email.fill(config.account)
     await password.fill(config.password)
     await password.press('Enter', { noWaitAfter: true })
@@ -179,6 +188,7 @@ async function runLogin(browser, config) {
     let enteredTotp = false
     const deadline = Date.now() + 9 * 60_000
     while (Date.now() < deadline) {
+      stage = 'checking Facebook response'
       await delay(2500)
       if (await verified(page, context)) {
         report('Checking saved session')
@@ -193,6 +203,7 @@ async function runLogin(browser, config) {
         return
       }
       if (/two_step_verification|two_factor/.test(pathname) && !enteredTotp) {
+        stage = 'entering verification code'
         const input = page.locator('input[autocomplete="one-time-code"]:visible, input[type="text"]:visible, input[type="tel"]:visible')
         if (await input.count() !== 1) {
           report('2FA needs attention', 'Could not identify one verification-code field')
@@ -209,6 +220,7 @@ async function runLogin(browser, config) {
       if (!solved) {
         const challenge = await challengeFromPage(page, observed)
         if (challenge) {
+          stage = 'requesting CAPTCHA solution'
           solved = true
           report('Solving one CAPTCHA task')
           let token
@@ -234,8 +246,10 @@ async function runLogin(browser, config) {
 }
 
 async function runCheck(browser) {
+  stage = 'creating check browser context'
   const context = await browser.newContext({ storageState: sessionFile, viewport: { width: 1280, height: 800 } })
   try {
+    stage = 'loading Facebook with saved session'
     const page = await context.newPage()
     await page.goto('https://www.facebook.com/watch/', { waitUntil: 'domcontentloaded', timeout: 30000 })
     await delay(3000)
@@ -247,8 +261,10 @@ async function runCheck(browser) {
 async function main() {
   let raw = ''
   for await (const chunk of process.stdin) raw += chunk.toString('utf8')
-  const input = JSON.parse(raw)
+  const input = raw ? JSON.parse(raw) : {}
+  stage = 'loading browser library'
   const { chromium } = await import(playwrightPath)
+  stage = 'launching browser'
   const browser = await chromium.launch({ executablePath: chromePath, headless: !process.env.DISPLAY, args: ['--no-sandbox'] })
   try {
     if (action === 'login') await runLogin(browser, input)
@@ -257,5 +273,5 @@ async function main() {
   } finally { await browser.close() }
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) main().catch(() => { report('Error', 'Browser task failed; check account and try again'); process.exitCode = 1 })
+if (process.argv[1] === fileURLToPath(import.meta.url)) main().catch(() => { report('Error', `Browser task failed at ${stage}; no automatic retry`); process.exitCode = 1 })
 export { totp }
