@@ -197,6 +197,22 @@ async function runLogin(browser, config) {
     })
     stage = 'opening login page'
     const page = await context.newPage()
+    const loginTraffic = { requests: 0, responses: [], failed: 0 }
+    function isFacebookPost(request) {
+      try {
+        const url = new URL(request.url())
+        return request.method() === 'POST' && /(^|\.)facebook\.com$/.test(url.hostname)
+      } catch { return false }
+    }
+    page.on('request', request => {
+      if (isFacebookPost(request)) loginTraffic.requests++
+    })
+    page.on('response', response => {
+      if (isFacebookPost(response.request())) loginTraffic.responses.push(response.status())
+    })
+    page.on('requestfailed', request => {
+      if (isFacebookPost(request)) loginTraffic.failed++
+    })
     page.on('request', request => {
       try {
         const parsed = new URL(request.url())
@@ -227,7 +243,7 @@ async function runLogin(browser, config) {
     const loginButton = page.getByRole('button', { name: /^log in$/i }).first()
     if (await loginButton.isVisible().catch(() => false)) await loginButton.click({ noWaitAfter: true, timeout: 10000 })
     else await password.press('Enter', { noWaitAfter: true })
-    report('Login submitted')
+    report('Login button clicked')
     const submittedAt = Date.now()
     let solved = false
     let enteredTotp = false
@@ -245,8 +261,10 @@ async function runLogin(browser, config) {
       const pathname = route(page.url())
       const text = await page.locator('body').innerText({ timeout: 5000 }).catch(() => '')
       if (await page.locator('input[name="email"]:visible').count().catch(() => 0) && Date.now() - submittedAt > 60000) {
-        report('Login did not advance', /incorrect password|wrong password|incorrect email|incorrect username/i.test(text)
-          ? 'Facebook rejected the account details' : 'Facebook remained on the login form after clicking Log in')
+        const rejected = /incorrect password|wrong password|incorrect email|incorrect username/i.test(text)
+        const traffic = `${loginTraffic.requests} Facebook POSTs, statuses ${loginTraffic.responses.join(',') || 'none'}, ${loginTraffic.failed} failed`
+        report('Login did not advance', rejected
+          ? `Facebook rejected the account details; ${traffic}` : `Facebook remained on the login form; ${traffic}`)
         return
       }
       if (/video selfie|identity confirmation in progress/i.test(text)) {
