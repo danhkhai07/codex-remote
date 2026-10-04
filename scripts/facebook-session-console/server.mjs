@@ -101,7 +101,7 @@ function workerEnvironment(directory = stateDir) {
     HOME: process.env.HOME ?? '/root',
     FB_SESSION_STATE_DIR: directory,
     FB_CHROME_PATH: process.env.FB_CHROME_PATH ?? '',
-    FB_PLAYWRIGHT_MODULE: process.env.FB_PLAYWRIGHT_MODULE ?? '',
+    FB_SESSION_DRY_RUN: process.env.FB_SESSION_DRY_RUN ?? '',
   }
 }
 
@@ -114,7 +114,7 @@ async function startJob(action) {
     phase = action === 'login' ? 'Opening Facebook' : 'Checking saved session'
     lastResult = ''
     updatedAt = new Date().toISOString()
-    const child = spawn(process.execPath, [path.join(here, 'worker.mjs'), action], {
+    const child = spawn(process.env.FB_SESSION_PYTHON ?? '/root/.local/share/facebook-undetected-chromedriver/venv/bin/python', [path.join(here, 'worker_uc.py'), action], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: workerEnvironment(),
     })

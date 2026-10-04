@@ -4,6 +4,7 @@ node_modules/
 dist/
 dist-server/
 *.tsbuildinfo
+__pycache__/
 .env
 .env.*
 !.env.example
