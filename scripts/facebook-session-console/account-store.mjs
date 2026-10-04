@@ -11,7 +11,7 @@ export function safeAccount(value) {
 }
 
 export function safeLabel(value) {
-  if (typeof value !== 'string' || value.trim().length < 1 || value.trim().length > 80 || /[\u0000-\u001f\u007f]/.test(value)) throw new Error('Invalid label')
+  if (typeof value !== 'string' || value.trim().length < 1 || value.trim().length > 80 || [...value].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) throw new Error('Invalid label')
   return value.trim()
 }
 

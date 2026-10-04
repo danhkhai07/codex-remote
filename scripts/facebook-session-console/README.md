@@ -1,75 +1,103 @@
-# Facebook session console (one account)
+# Facebook accounts
 
-This standalone loopback app is opened through the authenticated Codex Remote
-preview for port 5217. It does not add any Facebook actions beyond login and a
-read-only saved-session check. Manual browser control is selected by default:
-after the initial login submission, the owner can click, drag, or type on a
-live browser image through CAPTCHA, 2FA and any later verification step while
-the Chrome process stays open. A current authenticator code is shown only at
-the 2FA code stage; the owner enters it, and the worker never auto-submits it
-in manual mode. The alternative 2Captcha mode may use **one**
-paid FunCaptcha task; it never retries a paid task automatically. An Arkose response
-is not considered a login: the worker saves the browser state only after a
-fresh browser can open Facebook without a login form or checkpoint.
+A shared, access-code-protected dashboard for manually managing browser sessions.
+Open the service on private preview port 5217 through Codex Remote Services.
+The interface uses one row per account, a light theme, and a browser panel that
+works on desktop and mobile.
 
-Stage detection checks visible page content and frames before choosing an action.
-An Arkose challenge at `/two_step_verification/authentication/` is CAPTCHA;
-it does not trigger the TOTP input handler. The code form must actually appear.
-Identity review and email/SMS verification are reported separately. Unknown or
-loading pages have bounded waits and never count as an authenticated session.
-Cookies alone are insufficient: a visible account/profile control is also
-required, including in the fresh-browser check. Detection remains subject to
-Facebook changing its interface; an unrecognized page stops rather than guessing.
+## Use
 
-Regression checks (browser fixtures are local and make no Facebook or 2Captcha
-request):
+1. Unlock with the existing console access code.
+2. Select **Add account** and enter a label, account ID/email, password and,
+   optionally, the account's authenticator secret.
+3. Choose **Start login** on that account. Complete verification yourself in
+   the browser panel. The current authenticator code is available when the
+   page requests it; email/SMS codes must come from your own inbox or phone.
+4. Use **Check session** to check a saved profile, or **Stop browser** to end
+   the active browser. **Lock** hides the dashboard and clears access from the
+   current page; it does not log the Facebook account out.
 
-```sh
-codex-heavy --label facebook-uc-tests --timeout 180 -- /usr/bin/env /root/.local/share/facebook-undetected-chromedriver/venv/bin/python -m unittest discover -s scripts/facebook-session-console -p test_worker_uc.py -v
-codex-heavy --label facebook-uc-browser --timeout 180 -- /usr/bin/xvfb-run -a /usr/bin/env /root/.local/share/facebook-undetected-chromedriver/venv/bin/python scripts/facebook-session-console/test_worker_uc_browser.py
-codex-heavy --label facebook-manual-browser --timeout 180 -- /usr/bin/xvfb-run -a /usr/bin/env /root/.local/share/facebook-undetected-chromedriver/venv/bin/python scripts/facebook-session-console/test_worker_uc_manual.py
-codex-heavy --label facebook-console-api --timeout 180 -- node --test scripts/facebook-session-console/console.test.mjs
-codex-heavy --label facebook-manual-ui --timeout 180 -- node scripts/facebook-session-console/manual-browser-smoke.mjs
-```
+One browser can run at a time. Each account has separate credentials, browser
+profile and verification marker. Everyone with access to this shared console
+can manage its accounts; this is not a separate login system for each person.
+There are no batch login or engagement actions. The active worker uses ordinary
+Playwright with Chromium and manual verification; it does not call a CAPTCHA
+solver, inject challenge tokens or configure evasion proxies.
 
-The owner enters the VPS access code, account ID/email, password, authenticator
-secret, and 2Captcha API key in the web form. The access code lives in
-`/root/.local/state/facebook-session-console/access-code`; account secrets and
-session state remain in the same root-only directory. The API never returns
-secrets. To retrieve the access code over SSH:
+The browser stays open for manual input for up to 30 minutes. Click/tap or drag
+on the image and use the text, keyboard and scroll controls. On a small screen,
+use the browser panel's zoom and internal scrolling. The image relay cannot
+provide a webcam for a video-selfie requirement. Stage detection can be affected
+by Facebook changing its pages; an unknown page remains available for manual
+inspection and is not counted as a successful login.
+
+## Data and migration
+
+State is private under `/root/.local/state/facebook-session-console`, with
+directories mode 0700 and credential files mode 0600. The console access code
+remains at `access-code`; retrieve it over SSH when needed:
 
 ```sh
 sudo cat /root/.local/state/facebook-session-console/access-code
 ```
 
-The process must bind only to `127.0.0.1:5217`. The public preview gateway
-handles the owner ticket, and this app independently requires its access code
-for every API request. Do not register the port as a public share link. Browser
-automation uses undetected-chromedriver 3.5.5, Selenium 4.50.0 and
-setuptools 80.10.2 in an isolated Python 3.12 virtual environment. The service
-uses Xvfb and the local Chromium 140 binary. Chrome keeps the session in the
-root-only `browser-profile` directory. Manual screenshots travel only from the
-worker to the parent process and are served by an access-code-protected,
-non-cacheable endpoint. The parent accepts only bounded pointer/text/key
-commands while manual browser control is active. The TOTP endpoint is only
-available with the access code during the 2FA stage; it is non-cacheable and
-does not log or persist the code. Manual login stops after at most 30 minutes;
-the Stop browser button can end it earlier. `storage-state.json` is a secret-free
-marker written only after a second browser process verifies that the session
-is authenticated. The old Playwright worker remains in source for rollback;
-the server starts `worker_uc.py`.
+The first start creates an account registry. The previous one-account entry
+points to its existing root-level `account.json`, `browser-profile` and
+`storage-state.json`; migration does not move or copy that profile. Accounts
+added later get their own directories. Existing secrets, including any legacy
+solver key, are not returned by the API. A legacy solver key is not used by
+the new worker.
 
-Manual operation: open the service from Codex Remote Services, unlock the
-console with its VPS access code, leave "Let me control the browser after login"
-checked, then select Start login. When a challenge appears, the live browser
-image is shown under the buttons. Click/drag on it or use the text/Enter/Tab/scroll
-controls until Facebook reaches an authenticated page. At the 2FA code form,
-the current code appears above the image; click the field and enter it yourself.
-The image stays available for email/SMS or other verification. This feature
-cannot make a blank or blocked challenge render. It has been tested with a
-local full login fixture; actual Facebook acceptance remains unverified.
+`storage-state.json` is a secret-free verification marker. Browser cookies
+remain in the account's profile. A new marker is written only after a second
+browser process can verify the saved session. A marker's existence reports a
+previously verified session, not proof that Facebook still accepts it now.
 
-In manual mode, identity review and unsupported verification screens remain
-visible for the owner to handle until the bounded timeout or Stop. Automatic
-mode still stops with a status. There are no bulk-account, like, view, or
-stream actions.
+The API requires `X-Session-Console-Key` on every request. Lists contain masked
+identifiers and no passwords, cookies or authenticator secrets. Browser frames
+are held in memory and returned without caching. TOTP codes are returned only
+for the active account during its authenticator step. Account IDs are stable
+internal IDs; a request for another account cannot control the active browser.
+Editing blank password/secret fields preserves those values. The login ID is
+immutable to prevent reassigning a saved profile to another account.
+
+## Runtime and checks
+
+The standalone unit is `facebook-session-console.service`, listening only on
+`127.0.0.1:5217`. The authenticated preview gateway remains in front of it.
+The console's own access code is required as well. This service is independent
+of the main Codex Remote gateway.
+
+The server launches `worker_manual.mjs` with Node. It imports the locally
+installed `playwright-core` from
+`/root/.local/share/facebook-headless/node_modules/playwright-core/index.mjs`
+(overridable with `FB_PLAYWRIGHT_MODULE`), and uses `FB_CHROME_PATH` for Chromium.
+Xvfb supplies the display. Each job receives its own `FB_SESSION_STATE_DIR`.
+Credentials pass over the child process's stdin and are not command arguments.
+The old workers remain in source for rollback and are not used by this server.
+
+Use `codex-heavy` for focused API, worker and browser fixture checks. Fixtures
+must use dummy credentials and local pages; they must not create paid CAPTCHA
+tasks, Facebook logins, likes, views or production accounts.
+
+Active checks from the repository worktree:
+
+```sh
+codex-heavy --label facebook-accounts-api -- env TMPDIR=/tmp node --test scripts/facebook-session-console/console.node.mjs scripts/facebook-session-console/accounts.node.mjs
+codex-heavy --label facebook-manual-worker -- env TMPDIR=/tmp node --test scripts/facebook-session-console/worker-manual.node.mjs
+codex-heavy --label facebook-accounts-ui -- env TMPDIR=/tmp node scripts/facebook-session-console/accounts-ui-smoke.mjs
+codex-heavy --label facebook-accounts-integration -- env TMPDIR=/tmp node scripts/facebook-session-console/accounts-integration-smoke.mjs
+```
+
+Node-runner fixtures use `.node.mjs` so the main app's Vitest run does not
+collect them as empty suites. Set `TMPDIR=/tmp` for the main repository check;
+private `.local` paths are intentionally denied by Files policy tests.
+
+Before publishing, capture exact runtime preimages and verify the standalone
+browser is idle. Back up the current code and registry/config metadata, replace
+reviewed files, then restart only `facebook-session-console.service`.
+Verify authenticated account-list health, anonymous access rejection, complete
+static file hashes and preservation of the old account/profile/marker. Do not
+restart the main Codex Remote service for this app. Update the existing Services
+entry with its registration identity preserved. Keep rollback code and avoid
+rolling back account data after new accounts have been created.
