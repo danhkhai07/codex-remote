@@ -81,6 +81,23 @@ async function waitForCodeInputs(page, timeoutMs = 30000) {
   return { kind: 'unresolved', indexes: [], count, frameCount }
 }
 
+async function captureDiagnostic(page, label) {
+  const frames = []
+  for (const frame of page.frames()) {
+    const fields = await frame.locator('input, textarea, [contenteditable="true"], [role="textbox"]').evaluateAll(elements => elements.slice(0, 30).map(element => ({
+      tag: element.tagName.toLowerCase(), type: element.getAttribute('type'),
+      name: element.getAttribute('name'), autocomplete: element.getAttribute('autocomplete'),
+      maxLength: element.getAttribute('maxlength'), visible: Boolean(element.getClientRects().length),
+    }))).catch(() => [])
+    let location = null
+    try { const url = new URL(frame.url()); location = `${url.hostname}${url.pathname}` } catch {}
+    frames.push({ location, fields })
+  }
+  await writeFile(path.join(directory, `${label}-structure.json`), JSON.stringify({ frames }), { mode: 0o600 })
+  const screenshot = path.join(directory, `${label}-diagnostic.png`)
+  await page.screenshot({ path: screenshot, fullPage: false }).then(() => chmod(screenshot, 0o600)).catch(() => {})
+}
+
 async function verified(page, context) {
   const cookies = await context.cookies('https://www.facebook.com/')
   const hasCookies = ['c_user', 'xs'].every(name => cookies.some(cookie => cookie.name === name))
@@ -267,6 +284,7 @@ async function runLogin(browser, config) {
       const pathname = route(page.url())
       const text = await page.locator('body').innerText({ timeout: 5000 }).catch(() => '')
       if (await page.locator('input[name="email"]:visible').count().catch(() => 0) && Date.now() - submittedAt > 60000) {
+        await captureDiagnostic(page, 'login').catch(() => {})
         const rejected = /incorrect password|wrong password|incorrect email|incorrect username/i.test(text)
         const traffic = `${loginTraffic.requests} Facebook POSTs, statuses ${loginTraffic.responses.join(',') || 'none'}, ${loginTraffic.failed} failed`
         report('Login did not advance', rejected
@@ -282,8 +300,7 @@ async function runLogin(browser, config) {
         report('Waiting for verification field')
         const selected = await waitForCodeInputs(page)
         if (selected.kind === 'unresolved') {
-          const diagnostic = path.join(directory, 'two-factor-diagnostic.png')
-          await page.screenshot({ path: diagnostic, fullPage: false }).then(() => chmod(diagnostic, 0o600)).catch(() => {})
+          await captureDiagnostic(page, 'two-factor').catch(() => {})
           report('2FA needs attention', `No clear code field across ${selected.frameCount} frames (${selected.count} visible inputs)`)
           return
         }
