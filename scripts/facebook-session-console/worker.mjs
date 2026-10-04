@@ -142,14 +142,14 @@ async function detectPageStage(page, context) {
   }
   const cookies = await context.cookies('https://www.facebook.com/')
   const facts = {
-    identity: /video selfie|identity confirmation in progress|upload.*(?:ID|identity document)/i.test(text),
+    identity: /video selfie|identity confirmation in progress|upload.{0,80}\b(?:ID|identity document)\b/i.test(text),
     captcha,
     login: await page.locator('input[name="email"]:visible, input[name="pass"]:visible').count().catch(() => 0) > 0,
     rejected: /incorrect password|wrong password|incorrect email|incorrect username/i.test(text),
     otherCode: /(?:sent|send|check).{0,50}(?:email|text message|SMS)|code.{0,30}(?:email|text message|SMS)/i.test(text)
       && !/authentication app|authenticator app/i.test(text),
     codeStep: /\/two_step_verification\/two_factor\/?$/.test(pathname)
-      || /enter (?:the |a |your )?(?:6.digit |security |verification |authentication )?code|authentication app|authenticator app/i.test(text),
+      || /authentication app|authenticator app/i.test(text),
     code: Boolean(selected),
     checkpoint: /two_step_verification|checkpoint|login|recover/.test(pathname),
     hasCookies: /^https:\/\/(?:www\.|m\.)?facebook\.com\//.test(url)

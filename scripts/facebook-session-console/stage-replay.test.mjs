@@ -46,6 +46,8 @@ test('Playwright replays CAPTCHA to code form and navigation without contacting 
     assert.equal(await show('/two_step_verification/two_factor/', `<div>Enter your authentication app code</div><input autocomplete="one-time-code"><div style="display:none">${captcha}</div>`), 'two-factor')
     assert.equal(await show(authentication, '<p>Complete a challenge to verify you’re a human</p>'), 'captcha')
     assert.equal(await show('/checkpoint/', '<p>Confirm with a video selfie</p>'), 'identity')
+    assert.equal(await show('/recover/', '<p>Enter your security code</p><input>'), 'checkpoint')
+    assert.equal(await show('/', '<p>Upload a video</p>'), 'unknown')
     assert.equal(await show('/two_step_verification/two_factor/', '<p>Enter the code sent to your email</p><input type="text">'), 'other-code')
     assert.equal(await show('/', '<input name="email"><input name="pass" type="password">'), 'login')
     assert.equal(await show('/', '<p>Incorrect password</p><input name="email">'), 'login-rejected')
