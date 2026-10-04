@@ -2,9 +2,12 @@
 
 This standalone loopback app is opened through the authenticated Codex Remote
 preview for port 5217. It does not add any Facebook actions beyond login and a
-read-only saved-session check. Manual CAPTCHA is selected by default: the
-owner can click, drag, or type on a live browser image inside this app while
-the Chrome process stays open. The alternative 2Captcha mode may use **one**
+read-only saved-session check. Manual browser control is selected by default:
+after the initial login submission, the owner can click, drag, or type on a
+live browser image through CAPTCHA, 2FA and any later verification step while
+the Chrome process stays open. A current authenticator code is shown only at
+the 2FA code stage; the owner enters it, and the worker never auto-submits it
+in manual mode. The alternative 2Captcha mode may use **one**
 paid FunCaptcha task; it never retries a paid task automatically. An Arkose response
 is not considered a login: the worker saves the browser state only after a
 fresh browser can open Facebook without a login form or checkpoint.
@@ -48,19 +51,25 @@ uses Xvfb and the local Chromium 140 binary. Chrome keeps the session in the
 root-only `browser-profile` directory. Manual screenshots travel only from the
 worker to the parent process and are served by an access-code-protected,
 non-cacheable endpoint. The parent accepts only bounded pointer/text/key
-commands while the CAPTCHA view is active. Manual login stops after at most
-15 minutes; the Stop browser button can end it earlier. `storage-state.json` is a secret-free
+commands while manual browser control is active. The TOTP endpoint is only
+available with the access code during the 2FA stage; it is non-cacheable and
+does not log or persist the code. Manual login stops after at most 30 minutes;
+the Stop browser button can end it earlier. `storage-state.json` is a secret-free
 marker written only after a second browser process verifies that the session
 is authenticated. The old Playwright worker remains in source for rollback;
 the server starts `worker_uc.py`.
 
-Manual CAPTCHA operation: open the service from Codex Remote Services, unlock
-the console with its VPS access code, leave "Let me solve CAPTCHA in this page"
+Manual operation: open the service from Codex Remote Services, unlock the
+console with its VPS access code, leave "Let me control the browser after login"
 checked, then select Start login. When a challenge appears, the live browser
-image is shown under the buttons. Click/drag on it or use the text/Enter controls
-until Facebook advances. This feature cannot make a blank or blocked challenge
-render. It has been tested with a local challenge fixture; actual Facebook
-acceptance remains unverified.
+image is shown under the buttons. Click/drag on it or use the text/Enter/Tab/scroll
+controls until Facebook reaches an authenticated page. At the 2FA code form,
+the current code appears above the image; click the field and enter it yourself.
+The image stays available for email/SMS or other verification. This feature
+cannot make a blank or blocked challenge render. It has been tested with a
+local full login fixture; actual Facebook acceptance remains unverified.
 
-If Facebook requests identity review or an unsupported verification form, the
-job stops with a status. There are no bulk-account, like, view, or stream actions.
+In manual mode, identity review and unsupported verification screens remain
+visible for the owner to handle until the bounded timeout or Stop. Automatic
+mode still stops with a status. There are no bulk-account, like, view, or
+stream actions.

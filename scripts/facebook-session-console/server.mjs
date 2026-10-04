@@ -1,6 +1,6 @@
 import http from 'node:http'
 import { spawn } from 'node:child_process'
-import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { readFile, writeFile, mkdir, rename, stat, chmod } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -21,6 +21,7 @@ let lastResult = ''
 let updatedAt = null
 let manualAvailable = false
 let manualFrame = null
+let manualStage = null
 
 function send(res, status, body, type = 'application/json; charset=utf-8') {
   const data = typeof body === 'string' ? body : JSON.stringify(body)
@@ -110,6 +111,9 @@ function safeManualAction(value) {
   if (value.type === 'drag' && coordinate(value.x) && vertical(value.y) && coordinate(value.toX) && vertical(value.toY)) {
     return { type: 'drag', x: value.x, y: value.y, toX: value.toX, toY: value.toY }
   }
+  if (value.type === 'scroll' && Number.isInteger(value.deltaY) && value.deltaY !== 0 && Math.abs(value.deltaY) <= 600) {
+    return { type: 'scroll', deltaY: value.deltaY }
+  }
   if (value.type === 'text' && typeof value.text === 'string' && value.text.length >= 1 && value.text.length <= 80 && ![...value.text].some(character => {
     const code = character.codePointAt(0)
     return code < 32 || code === 127
@@ -122,6 +126,30 @@ function safeManualAction(value) {
   throw new Error('Invalid browser action')
 }
 
+function currentTotp(secret, now = Date.now()) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+  const bytes = []
+  let value = 0, bits = 0
+  for (const letter of secret) {
+    const digit = alphabet.indexOf(letter)
+    if (digit < 0) throw new Error('Invalid TOTP secret')
+    value = (value << 5) | digit
+    bits += 5
+    if (bits >= 8) {
+      bits -= 8
+      bytes.push((value >>> bits) & 255)
+      value &= (1 << bits) - 1
+    }
+  }
+  const step = Math.floor(now / 30_000)
+  const counter = Buffer.alloc(8)
+  counter.writeBigUInt64BE(BigInt(step))
+  const digest = createHmac('sha1', Buffer.from(bytes)).update(counter).digest()
+  const offset = digest[digest.length - 1] & 15
+  const number = (digest.readUInt32BE(offset) & 0x7fffffff) % 1_000_000
+  return { code: String(number).padStart(6, '0'), expiresAt: (step + 1) * 30_000 }
+}
+
 async function status() {
   let config = null
   try { config = JSON.parse(await readFile(configFile, 'utf8')) } catch {}
@@ -129,6 +157,7 @@ async function status() {
     configured: Boolean(config), account: masked(config?.account),
     sessionSaved: await exists(sessionFile), running: Boolean(active || jobReserved),
     phase, lastResult, updatedAt, manualAvailable: Boolean(active && manualAvailable),
+    manualStage: active && manualAvailable ? manualStage : null,
   }
 }
 
@@ -156,6 +185,7 @@ async function startJob(action, options = {}) {
     updatedAt = new Date().toISOString()
     manualAvailable = false
     manualFrame = null
+    manualStage = null
     const child = spawn(process.env.FB_SESSION_PYTHON ?? '/root/.local/share/facebook-undetected-chromedriver/venv/bin/python', [process.env.FB_SESSION_WORKER ?? path.join(here, 'worker_uc.py'), action], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: workerEnvironment(),
@@ -177,6 +207,7 @@ async function startJob(action, options = {}) {
           if (typeof event.result === 'string') lastResult = event.result.slice(0, 160)
           if (typeof event.manual === 'boolean') {
             manualAvailable = event.manual
+            manualStage = manualAvailable && typeof event.manualStage === 'string' ? event.manualStage : null
             if (!manualAvailable) manualFrame = null
           }
           if (manualAvailable && typeof event.frame === 'string' && event.frame.length <= 1_800_000) {
@@ -196,6 +227,7 @@ async function startJob(action, options = {}) {
       active = null
       manualAvailable = false
       manualFrame = null
+      manualStage = null
       updatedAt = new Date().toISOString()
     })
     child.on('exit', code => {
@@ -205,6 +237,7 @@ async function startJob(action, options = {}) {
       active = null
       manualAvailable = false
       manualFrame = null
+      manualStage = null
       updatedAt = new Date().toISOString()
     })
   } finally { jobReserved = false }
@@ -222,8 +255,14 @@ async function handler(req, res) {
     if (!authorized(req)) return send(res, 401, { error: 'Access code required' })
     if (req.method === 'GET' && url.pathname === '/api/status') return send(res, 200, await status())
     if (req.method === 'GET' && url.pathname === '/api/frame') {
-      if (!active || !manualAvailable || !manualFrame) return send(res, 404, { error: 'No manual CAPTCHA frame' })
+      if (!active || !manualAvailable || !manualFrame) return send(res, 404, { error: 'No browser frame available' })
       return sendFrame(res, manualFrame)
+    }
+    if (req.method === 'GET' && url.pathname === '/api/totp') {
+      if (!active || !manualAvailable || manualStage !== 'two-factor') return send(res, 404, { error: '2FA code is not needed now' })
+      const config = JSON.parse(await readFile(configFile, 'utf8'))
+      const now = Date.now()
+      return send(res, 200, { ...currentTotp(config.totpSecret, now), serverNow: now })
     }
     if (req.method !== 'POST') return send(res, 405, { error: 'Method not allowed' })
     if (req.headers.origin && ![`http://${host}:${port}`, 'https://p5217.danhkhai.io.vn'].includes(req.headers.origin)) {
@@ -253,6 +292,7 @@ async function handler(req, res) {
       lastResult = 'Browser task stopped'
       manualAvailable = false
       manualFrame = null
+      manualStage = null
       active.kill('SIGINT')
       return send(res, 202, await status())
     }
@@ -286,4 +326,4 @@ async function main() {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) main().catch(() => { process.exitCode = 1 })
-export { safeConfig, masked, safeManualAction, handler, workerEnvironment }
+export { safeConfig, masked, safeManualAction, currentTotp, handler, workerEnvironment }

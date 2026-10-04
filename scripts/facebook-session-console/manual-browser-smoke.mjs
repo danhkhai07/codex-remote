@@ -17,7 +17,7 @@ try {
   const frame = (await page.screenshot({ type: 'jpeg', quality: 75 })).toString('base64')
   const worker = path.join(directory, 'stub-worker.mjs')
   await writeFile(worker, String.raw`
-let buffer = '', started = false
+let buffer = '', started = false, stage = 0
 process.stdin.on('data', chunk => {
   buffer += chunk.toString('utf8')
   while (buffer.includes('\n')) {
@@ -26,10 +26,16 @@ process.stdin.on('data', chunk => {
     buffer = buffer.slice(index + 1)
     if (!started) {
       started = true
-      process.stdout.write(JSON.stringify({ phase: 'Solve CAPTCHA in this page', manual: true }) + '\n')
+      process.stdout.write(JSON.stringify({ phase: 'Continue in browser: CAPTCHA detected', manual: true, manualStage: 'captcha' }) + '\n')
       process.stdout.write(JSON.stringify({ frame: '${frame}' }) + '\n')
-    } else if (line.type === 'click') {
-      process.stdout.write(JSON.stringify({ phase: 'Clicked ' + line.x + ',' + line.y, manual: false }) + '\n')
+    } else if (stage === 0 && line.type === 'click') {
+      stage = 1
+      process.stdout.write(JSON.stringify({ phase: 'Continue in browser: 2FA code form detected', manual: true, manualStage: 'two-factor' }) + '\n')
+    } else if (stage === 1 && line.type === 'text') {
+      stage = 2
+      process.stdout.write(JSON.stringify({ phase: 'Continue in browser: Email or SMS verification required', manual: true, manualStage: 'other-code' }) + '\n')
+    } else if (stage === 2 && line.type === 'click') {
+      process.stdout.write(JSON.stringify({ phase: 'Checking saved session', manual: false }) + '\n')
       setTimeout(() => process.exit(0), 100)
     }
   }
@@ -63,10 +69,22 @@ process.stdin.on('data', chunk => {
   await page.locator('#manual-panel').waitFor({ state: 'visible' })
   await page.waitForFunction(() => document.querySelector('#browser-frame')?.naturalWidth === 1280)
   await page.locator('#browser-frame').click({ position: { x: 320, y: 230 } })
-  await page.waitForFunction(() => /^Clicked \d+,\d+$/.test(document.querySelector('#phase')?.textContent || ''), null, { timeout: 8000 })
+  await page.waitForFunction(() => document.querySelector('#phase')?.textContent?.includes('2FA code form'), null, { timeout: 8000 })
+  await page.locator('#totp-panel').waitFor({ state: 'visible' })
+  await page.waitForFunction(() => /^\d{6}$/.test(document.querySelector('#totp-code')?.textContent || ''), null, { timeout: 8000 })
+  assert.equal(await page.locator('#manual-panel').isVisible(), true)
+  await page.locator('#manual-text').fill(await page.locator('#totp-code').textContent())
+  await page.getByRole('button', { name: 'Type text' }).click()
+  await page.waitForFunction(() => document.querySelector('#phase')?.textContent?.includes('Email or SMS'), null, { timeout: 8000 })
+  await page.locator('#totp-panel').waitFor({ state: 'hidden' })
+  assert.equal(await page.locator('#manual-panel').isVisible(), true)
+  await page.getByRole('button', { name: 'Scroll down' }).click()
+  assert.equal(await page.locator('#manual-result').textContent(), 'Sent to browser')
+  await page.locator('#browser-frame').click({ position: { x: 320, y: 230 } })
+  await page.locator('#manual-panel').waitFor({ state: 'hidden' })
   assert.equal(await page.locator('#manual-panel').isVisible(), false)
   await page.close()
-  process.stdout.write('Manual browser UI: unlocked frame rendered and mapped click reached worker\n')
+  process.stdout.write('Manual browser UI: CAPTCHA, owner-visible TOTP, further verification and completion controls passed\n')
 } finally {
   if (service) {
     service.kill('SIGTERM')

@@ -30,6 +30,10 @@ SESSION_FILE = STATE_DIR / 'storage-state.json'
 PROFILE_DIR = STATE_DIR / 'browser-profile'
 CHROME_PATH = os.environ.get('FB_CHROME_PATH', '/root/.cache/ms-playwright/chromium-1187/chrome-linux/chrome')
 FACEBOOK = 'https://www.facebook.com'
+if os.environ.get('FB_SESSION_TEST_URL'):
+    candidate = os.environ.get('FB_SESSION_TEST_ORIGIN', '')
+    if urlparse(candidate).hostname == '127.0.0.1':
+        FACEBOOK = candidate.rstrip('/')
 STAGE = 'reading input'
 CONTROL_BUFFER = b''
 
@@ -75,16 +79,20 @@ def report(phase, result=''):
     print(json.dumps({'phase': phase, 'result': result}, ensure_ascii=False), flush=True)
 
 
-def report_manual(enabled, phase, result=''):
-    print(json.dumps({'phase': phase, 'result': result, 'manual': enabled}, ensure_ascii=False), flush=True)
+def report_manual(enabled, phase, result='', stage=None):
+    print(json.dumps({'phase': phase, 'result': result, 'manual': enabled,
+                      'manualStage': stage if enabled else None}, ensure_ascii=False), flush=True)
 
 
 def manual_frame(driver):
-    image = driver.execute_cdp_cmd('Page.captureScreenshot', {
-        'format': 'jpeg', 'quality': 78, 'captureBeyondViewport': False, 'fromSurface': True,
-    }).get('data', '')
-    if 0 < len(image) <= 1_800_000:
-        print(json.dumps({'frame': image}), flush=True)
+    try:
+        image = driver.execute_cdp_cmd('Page.captureScreenshot', {
+            'format': 'jpeg', 'quality': 78, 'captureBeyondViewport': False, 'fromSurface': True,
+        }).get('data', '')
+        if 0 < len(image) <= 1_800_000:
+            print(json.dumps({'frame': image}), flush=True)
+    except WebDriverException:
+        pass  # Navigation can race one frame; retry on the next poll.
 
 
 def dispatch_pointer(driver, kind, x, y, buttons=0):
@@ -117,6 +125,11 @@ def manual_action(driver, action):
                 time.sleep(0.025)
             x, y = to_x, to_y
         dispatch_pointer(driver, 'mouseReleased', x, y)
+    elif kind == 'scroll' and isinstance(action.get('deltaY'), int) and 0 < abs(action['deltaY']) <= 600:
+        driver.execute_cdp_cmd('Input.dispatchMouseEvent', {
+            'type': 'mouseWheel', 'x': 640, 'y': 400,
+            'deltaX': 0, 'deltaY': action['deltaY'],
+        })
     elif kind == 'text' and isinstance(action.get('text'), str) and 0 < len(action['text']) <= 80:
         driver.execute_cdp_cmd('Input.insertText', {'text': action['text']})
     elif kind == 'key' and action.get('key') in ('Enter', 'Backspace', 'Tab', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'):
@@ -352,10 +365,29 @@ def solve_captcha(api_key, value):
     raise RuntimeError('CAPTCHA task timed out')
 
 
+def close_browser(driver):
+    # UC's quit() sends SIGTERM and returns before Chrome has necessarily
+    # flushed its profile. Close through CDP first, then wait for exit so a
+    # fresh browser does not race the same profile's cookie store.
+    try:
+        driver.execute_cdp_cmd('Browser.close', {})
+    except WebDriverException:
+        pass
+    pid = getattr(driver, 'browser_pid', None)
+    if isinstance(pid, int):
+        for _ in range(50):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.1)
+    driver.quit()
+
+
 def save_verified_session(driver):
     global STAGE
     STAGE = 'checking saved session in a new browser'
-    driver.quit()
+    close_browser(driver)
     second = browser()
     try:
         second.get(FACEBOOK + '/watch/')
@@ -371,7 +403,7 @@ def save_verified_session(driver):
         temporary.replace(SESSION_FILE)
         return True
     finally:
-        second.quit()
+        close_browser(second)
 
 
 def run_login(driver, config):
@@ -382,41 +414,39 @@ def run_login(driver, config):
     started_at = time.monotonic()
     submitted_at = None
     manual_enabled = config.get('manualCaptcha', True) is True
-    deadline = started_at + (900 if manual_enabled else 540)
+    deadline = started_at + (1800 if manual_enabled else 540)
     solved = entered_totp = False
     manual_active = False
     last_manual_frame = 0
-    last_captcha_at = 0
+    last_manual_stage = None
     two_factor_at = captcha_at = None
     last_kind = None
     detected_since = started_at
+    labels = {'login': 'Login form', 'login-rejected': 'Login rejected', 'captcha': 'CAPTCHA detected',
+              'two-factor': '2FA code form detected', 'two-factor-loading': 'Waiting for 2FA page',
+              'other-code': 'Email or SMS verification required', 'identity': 'Identity verification required',
+              'checkpoint': 'Other verification required', 'authenticated': 'Authenticated page detected',
+              'unknown': 'Waiting for page to load'}
     while time.monotonic() < deadline:
         STAGE = 'checking Facebook response'
         time.sleep(0.4 if manual_active else 2.5)
-        kind, selected = detect(driver)
+        try:
+            kind, selected = detect(driver)
+        except WebDriverException:
+            if not manual_enabled:
+                raise
+            kind, selected = 'unknown', None
         now = time.monotonic()
         if kind != last_kind:
             last_kind, detected_since = kind, now
-            labels = {'login': 'Login form', 'login-rejected': 'Login rejected', 'captcha': 'CAPTCHA detected',
-                      'two-factor': '2FA code form detected', 'two-factor-loading': 'Waiting for 2FA page',
-                      'other-code': 'Email or SMS verification required', 'identity': 'Identity verification required',
-                      'checkpoint': 'Other verification required', 'authenticated': 'Authenticated page detected',
-                      'unknown': 'Waiting for page to load'}
             report(labels[kind])
         if os.environ.get('FB_SESSION_DRY_RUN') == '1':
             report('Login form ready' if kind == 'login' else 'Current stage: ' + kind,
                    'Read-only preflight passed; no account was submitted')
             return False
-        if manual_active and kind != 'captcha':
-            if kind in ('unknown', 'checkpoint') and now - last_captcha_at < 30:
-                manual_commands(driver)
-                if now - last_manual_frame > 1:
-                    manual_frame(driver)
-                    last_manual_frame = now
-                continue
-            report_manual(False, 'CAPTCHA screen closed')
-            manual_active = False
         if kind == 'authenticated':
+            if manual_active:
+                report_manual(False, 'Checking saved session')
             report('Checking saved session')
             confirmed = save_verified_session(driver)
             report('Session ready' if confirmed else 'Verification failed',
@@ -437,6 +467,20 @@ def run_login(driver, config):
                 password[0].send_keys(Keys.ENTER)
             report('Login button clicked')
             submitted_at = time.monotonic()
+            continue
+        if manual_enabled:
+            # After the initial login submission, the owner controls every
+            # challenge and verification screen. Never auto-enter 2FA here.
+            STAGE = 'waiting for owner in browser'
+            if not manual_active or last_manual_stage != kind:
+                manual_active = True
+                last_manual_stage = kind
+                report_manual(True, 'Continue in browser: ' + labels[kind],
+                              'Complete this step yourself; the browser stays open', kind)
+            manual_commands(driver)
+            if now - last_manual_frame > 1:
+                manual_frame(driver)
+                last_manual_frame = now
             continue
         if kind == 'login-rejected' or (kind == 'login' and submitted_at is not None and now - submitted_at > 60):
             report('Login did not advance', 'Facebook rejected the account details or remained on the login form')
@@ -473,17 +517,6 @@ def run_login(driver, config):
             report('2FA did not advance', 'No automatic retry')
             return False
         if kind == 'captcha' and not solved:
-            if manual_enabled:
-                STAGE = 'waiting for manual CAPTCHA'
-                last_captcha_at = now
-                if not manual_active:
-                    manual_active = True
-                    report_manual(True, 'Solve CAPTCHA in this page', 'Click or drag on the browser image below')
-                manual_commands(driver)
-                if now - last_manual_frame > 1:
-                    manual_frame(driver)
-                    last_manual_frame = now
-                continue
             value = challenge(driver)
             if value:
                 STAGE = 'requesting CAPTCHA solution'
@@ -502,7 +535,7 @@ def run_login(driver, config):
                 if not accepted:
                     return False
                 captcha_at = time.monotonic()
-        if kind == 'captcha' and not manual_enabled and now - (captcha_at or detected_since) > 45:
+        if kind == 'captcha' and now - (captcha_at or detected_since) > 45:
             report('CAPTCHA needs attention', 'Challenge remains visible; no automatic retry')
             return False
         if kind in ('unknown', 'checkpoint', 'two-factor-loading') and now - detected_since > 30:
@@ -542,7 +575,7 @@ def main():
             raise ValueError('Unknown action')
     finally:
         if not closed:
-            driver.quit()
+            close_browser(driver)
 
 
 if __name__ == '__main__':

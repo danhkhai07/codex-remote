@@ -9,6 +9,10 @@ h1 { font-size: 1.6rem; margin: 0 0 6px; }
 .manual-choice input { min-width: 0; width: 18px; height: 18px; }
 #manual-panel { margin: 20px 0; padding: 16px; border: 1px solid #537358; border-radius: 8px; }
 #manual-panel h2 { margin: 0; font-size: 1.2rem; }
+#totp-panel { margin: 14px 0; padding: 13px 16px; border: 1px solid #718552; border-radius: 7px; background: #1b2920; }
+#totp-code { font: 700 1.55rem/1.2 ui-monospace, monospace; letter-spacing: .18em; }
+#totp-expiry { margin-left: 12px; color: #d9c998; }
+#totp-panel .note { margin: 5px 0 0; }
 #browser-frame { display: block; width: min(100%, 1280px); height: auto; border: 1px solid #537358; background: #080c09; cursor: crosshair; touch-action: none; user-select: none; }
 .manual-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin-top: 12px; }
 #manual-result { min-height: 1.5em; color: #d9c998; }

@@ -28,16 +28,24 @@
         <button id="check" type="button">Check saved session</button>
         <button id="stop" type="button" disabled>Stop browser</button>
       </div>
-      <label class="manual-choice"><input id="manual-captcha" type="checkbox" checked> Let me solve CAPTCHA in this page (no 2Captcha charge)</label>
-      <section id="manual-panel" hidden aria-label="Manual CAPTCHA browser">
-        <h2>Browser CAPTCHA</h2>
-        <p class="note">Click or drag directly on the image. Keep this page open until Facebook moves to the next step.</p>
-        <img id="browser-frame" alt="Live browser CAPTCHA" draggable="false">
+      <label class="manual-choice"><input id="manual-captcha" type="checkbox" checked> Let me control the browser after login (no 2Captcha charge)</label>
+      <section id="manual-panel" hidden aria-label="Manual login browser">
+        <h2>Continue in browser</h2>
+        <p class="note">Complete CAPTCHA, 2FA and any further steps here. Click or drag on the image, then type into the selected field. The browser stays open until login completes, you stop it or 30 minutes pass.</p>
+        <section id="totp-panel" hidden aria-label="Authenticator code">
+          <strong>Authenticator code: <span id="totp-code" aria-live="polite"></span></strong>
+          <span id="totp-expiry"></span>
+          <p class="note">Enter this code yourself in the browser image. It changes every 30 seconds.</p>
+        </section>
+        <img id="browser-frame" alt="Live login browser" draggable="false">
         <div class="manual-controls">
-          <input id="manual-text" aria-label="Text for the focused CAPTCHA field" placeholder="Text, if requested" autocomplete="off">
+          <input id="manual-text" aria-label="Text for the focused browser field" placeholder="Text for selected field" autocomplete="off">
           <button id="send-text" type="button">Type text</button>
           <button id="send-enter" type="button">Enter</button>
           <button id="send-backspace" type="button">Backspace</button>
+          <button id="send-tab" type="button">Tab</button>
+          <button id="scroll-up" type="button">Scroll up</button>
+          <button id="scroll-down" type="button">Scroll down</button>
         </div>
         <p id="manual-result" role="status"></p>
       </section>
@@ -52,7 +60,7 @@
           <p class="note">Secrets stay on this VPS in root-only files. The app never sends them back to the browser. Saving replaces the previous account settings.</p>
         </form>
       </details>
-      <p class="note">Manual mode waits for you at the CAPTCHA. If you turn it off, the app uses at most one paid 2Captcha task. A solved CAPTCHA alone is not a saved session.</p>
+      <p class="note">Manual mode leaves all verification steps to you and shows the authenticator code when 2FA appears. If you turn it off, the app uses at most one paid 2Captcha task and auto-enters 2FA. A saved session still requires a fresh-browser check.</p>
     </section>
   </main>
 </body>

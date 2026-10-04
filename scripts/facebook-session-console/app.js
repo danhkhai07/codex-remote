@@ -4,6 +4,8 @@ let timer = null
 let frameTimer = null
 let frameUrl = null
 let pointerStart = null
+let totpTimer = null
+let manualStage = null
 
 async function api(path, method = 'GET', data = undefined) {
   const options = {
@@ -29,6 +31,17 @@ function paint(status) {
   $('check').disabled = !status.sessionSaved || status.running
   $('stop').disabled = !status.running
   $('manual-panel').hidden = !status.manualAvailable
+  manualStage = status.manualAvailable ? status.manualStage : null
+  $('totp-panel').hidden = manualStage !== 'two-factor'
+  if (manualStage === 'two-factor' && !totpTimer) {
+    totpTimer = setInterval(refreshTotp, 1000)
+    refreshTotp()
+  } else if (manualStage !== 'two-factor' && totpTimer) {
+    clearInterval(totpTimer)
+    totpTimer = null
+    $('totp-code').textContent = ''
+    $('totp-expiry').textContent = ''
+  }
   if (status.manualAvailable && !frameTimer) {
     frameTimer = setInterval(refreshFrame, 1200)
     refreshFrame()
@@ -38,6 +51,22 @@ function paint(status) {
     if (frameUrl) URL.revokeObjectURL(frameUrl)
     frameUrl = null
     $('browser-frame').removeAttribute('src')
+  }
+}
+
+async function refreshTotp() {
+  if (manualStage !== 'two-factor' || !accessCode) return
+  const code = accessCode
+  try {
+    const result = await api('totp')
+    if (manualStage !== 'two-factor' || accessCode !== code) return
+    $('totp-code').textContent = result.code
+    $('totp-expiry').textContent = `${Math.max(0, Math.ceil((result.expiresAt - result.serverNow) / 1000))}s left`
+  } catch {
+    if (manualStage === 'two-factor' && accessCode === code) {
+      $('totp-code').textContent = ''
+      $('totp-expiry').textContent = ''
+    }
   }
 }
 
@@ -141,6 +170,9 @@ $('send-text').addEventListener('click', () => {
   if (text) sendManual({ type: 'text', text })
   $('manual-text').value = ''
 })
-for (const [button, key] of [['send-enter', 'Enter'], ['send-backspace', 'Backspace']]) {
+for (const [button, key] of [['send-enter', 'Enter'], ['send-backspace', 'Backspace'], ['send-tab', 'Tab']]) {
   $(button).addEventListener('click', () => sendManual({ type: 'key', key }))
+}
+for (const [button, deltaY] of [['scroll-up', -500], ['scroll-down', 500]]) {
+  $(button).addEventListener('click', () => sendManual({ type: 'scroll', deltaY }))
 }

@@ -26,6 +26,8 @@ class WorkerTests(unittest.TestCase):
         driver.execute_cdp_cmd.reset_mock()
         worker.manual_action(driver, {'type': 'text', 'text': 'hello'})
         self.assertEqual(driver.execute_cdp_cmd.call_args.args, ('Input.insertText', {'text': 'hello'}))
+        worker.manual_action(driver, {'type': 'scroll', 'deltaY': 500})
+        self.assertEqual(driver.execute_cdp_cmd.call_args.args[1]['type'], 'mouseWheel')
 
     def test_session_marker_requires_fresh_browser_check(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import net from 'node:net'
 import { fileURLToPath } from 'node:url'
-import { safeConfig, masked, safeManualAction } from './server.mjs'
+import { safeConfig, masked, safeManualAction, currentTotp } from './server.mjs'
 import { totp, selectCodeInputs } from './worker.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -23,13 +23,16 @@ test('validates account secrets without exposing them', () => {
 test('manual browser commands are bounded and exclude arbitrary operations', () => {
   assert.deepEqual(safeManualAction({ type: 'click', x: 100, y: 200, extra: 'ignored' }), { type: 'click', x: 100, y: 200 })
   assert.deepEqual(safeManualAction({ type: 'drag', x: 1, y: 2, toX: 3, toY: 4 }), { type: 'drag', x: 1, y: 2, toX: 3, toY: 4 })
+  assert.deepEqual(safeManualAction({ type: 'scroll', deltaY: -500 }), { type: 'scroll', deltaY: -500 })
   assert.throws(() => safeManualAction({ type: 'click', x: 1280, y: 2 }))
+  assert.throws(() => safeManualAction({ type: 'scroll', deltaY: 100000 }))
   assert.throws(() => safeManualAction({ type: 'text', text: 'a\nother command' }))
   assert.throws(() => safeManualAction({ type: 'key', key: 'F12' }))
 })
 
 test('TOTP matches the RFC 6238 SHA1 vector', () => {
   assert.equal(totp('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ', 59000), '287082')
+  assert.deepEqual(currentTotp('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ', 59000), { code: '287082', expiresAt: 60000 })
 })
 
 test('2FA selection ignores login/search fields and supports six code boxes', () => {
@@ -80,12 +83,12 @@ test('HTTP API requires access code and does not return stored secrets', async (
   }
 })
 
-test('manual CAPTCHA frame and controls stay behind the access code', { timeout: 15000 }, async () => {
+test('manual browser stays open through CAPTCHA, 2FA and another verification step', { timeout: 15000 }, async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'fb-manual-api-'))
   const worker = path.join(dir, 'stub-worker.mjs')
   await writeFile(worker, String.raw`
 let buffer = ''
-let started = false
+let started = false, stage = 0
 process.stdin.on('data', chunk => {
   buffer += chunk.toString('utf8')
   while (buffer.includes('\n')) {
@@ -94,10 +97,16 @@ process.stdin.on('data', chunk => {
     buffer = buffer.slice(index + 1)
     if (!started) {
       started = true
-      process.stdout.write(JSON.stringify({ phase: 'Solve CAPTCHA in this page', manual: true }) + '\n')
+      process.stdout.write(JSON.stringify({ phase: 'Continue in browser: CAPTCHA detected', manual: true, manualStage: 'captcha' }) + '\n')
       process.stdout.write(JSON.stringify({ frame: Buffer.from([255, 216, 255, 217]).toString('base64') }) + '\n')
-    } else if (line.type === 'click') {
-      process.stdout.write(JSON.stringify({ phase: 'CAPTCHA screen closed', manual: false }) + '\n')
+    } else if (stage === 0 && line.type === 'click') {
+      stage = 1
+      process.stdout.write(JSON.stringify({ phase: 'Continue in browser: 2FA code form detected', manual: true, manualStage: 'two-factor' }) + '\n')
+    } else if (stage === 1 && line.type === 'text') {
+      stage = 2
+      process.stdout.write(JSON.stringify({ phase: 'Continue in browser: Email or SMS verification required', manual: true, manualStage: 'other-code' }) + '\n')
+    } else if (stage === 2 && line.type === 'click') {
+      process.stdout.write(JSON.stringify({ phase: 'Checking saved session', manual: false }) + '\n')
       setTimeout(() => process.exit(0), 30)
     }
   }
@@ -123,6 +132,7 @@ process.stdin.on('data', chunk => {
     const config = { account: '1234567890', password: 'secret-pass', totpSecret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ', captchaKey: '' }
     assert.equal((await fetch(`${root}/api/config`, { method: 'POST', headers, body: JSON.stringify(config) })).status, 200)
     assert.equal((await fetch(`${root}/api/frame`)).status, 401)
+    assert.equal((await fetch(`${root}/api/totp`)).status, 401)
     assert.equal((await fetch(`${root}/api/login`, { method: 'POST', headers, body: JSON.stringify({ manualCaptcha: false }) })).status, 400)
     assert.equal((await fetch(`${root}/api/login`, { method: 'POST', headers, body: JSON.stringify({ manualCaptcha: true }) })).status, 202)
     let status
@@ -132,6 +142,8 @@ process.stdin.on('data', chunk => {
       await new Promise(resolve => setTimeout(resolve, 30))
     }
     assert.equal(status.manualAvailable, true)
+    assert.equal(status.manualStage, 'captcha')
+    assert.equal((await fetch(`${root}/api/totp`, { headers })).status, 404)
     const frame = await fetch(`${root}/api/frame`, { headers })
     assert.equal(frame.status, 200)
     assert.equal(frame.headers.get('content-type'), 'image/jpeg')
@@ -139,6 +151,32 @@ process.stdin.on('data', chunk => {
     assert.deepEqual([...new Uint8Array(await frame.arrayBuffer())], [255, 216, 255, 217])
     assert.equal((await fetch(`${root}/api/manual`, { method: 'POST', headers: { ...headers, Origin: 'https://other.example' }, body: JSON.stringify({ type: 'click', x: 1, y: 1 }) })).status, 403)
     assert.equal((await fetch(`${root}/api/manual`, { method: 'POST', headers, body: JSON.stringify({ type: 'click', x: 1280, y: 1 }) })).status, 400)
+    assert.equal((await fetch(`${root}/api/manual`, { method: 'POST', headers, body: JSON.stringify({ type: 'click', x: 100, y: 100 }) })).status, 202)
+    for (let i = 0; i < 100; i++) {
+      status = await fetch(`${root}/api/status`, { headers }).then(response => response.json())
+      if (status.manualStage === 'two-factor') break
+      await new Promise(resolve => setTimeout(resolve, 30))
+    }
+    assert.equal(status.running, true)
+    assert.equal(status.manualAvailable, true)
+    assert.equal(status.manualStage, 'two-factor')
+    const codeResponse = await fetch(`${root}/api/totp`, { headers })
+    assert.equal(codeResponse.status, 200)
+    assert.equal(codeResponse.headers.get('cache-control'), 'no-store')
+    const oneTime = await codeResponse.json()
+    assert.match(oneTime.code, /^\d{6}$/)
+    assert.ok(oneTime.expiresAt > oneTime.serverNow)
+    assert.ok(oneTime.expiresAt - oneTime.serverNow <= 30000)
+    assert.equal(oneTime.code, currentTotp(config.totpSecret, oneTime.serverNow).code)
+    assert.equal((await fetch(`${root}/api/manual`, { method: 'POST', headers, body: JSON.stringify({ type: 'text', text: oneTime.code }) })).status, 202)
+    for (let i = 0; i < 100; i++) {
+      status = await fetch(`${root}/api/status`, { headers }).then(response => response.json())
+      if (status.manualStage === 'other-code') break
+      await new Promise(resolve => setTimeout(resolve, 30))
+    }
+    assert.equal(status.manualAvailable, true)
+    assert.equal(status.manualStage, 'other-code')
+    assert.equal((await fetch(`${root}/api/totp`, { headers })).status, 404)
     assert.equal((await fetch(`${root}/api/manual`, { method: 'POST', headers, body: JSON.stringify({ type: 'click', x: 100, y: 100 }) })).status, 202)
     for (let i = 0; i < 100; i++) {
       status = await fetch(`${root}/api/status`, { headers }).then(response => response.json())
