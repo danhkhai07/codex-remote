@@ -182,8 +182,11 @@ async function runLogin(browser, config) {
     stage = 'submitting login'
     await email.fill(config.account)
     await password.fill(config.password)
-    await password.press('Enter', { noWaitAfter: true })
+    const loginButton = page.getByRole('button', { name: /^log in$/i }).first()
+    if (await loginButton.isVisible().catch(() => false)) await loginButton.click({ noWaitAfter: true, timeout: 10000 })
+    else await password.press('Enter', { noWaitAfter: true })
     report('Login submitted')
+    const submittedAt = Date.now()
     let solved = false
     let enteredTotp = false
     const deadline = Date.now() + 9 * 60_000
@@ -198,6 +201,11 @@ async function runLogin(browser, config) {
       }
       const pathname = route(page.url())
       const text = await page.locator('body').innerText({ timeout: 5000 }).catch(() => '')
+      if (await page.locator('input[name="email"]:visible').count().catch(() => 0) && Date.now() - submittedAt > 20000) {
+        report('Login did not advance', /incorrect password|wrong password|incorrect email|incorrect username/i.test(text)
+          ? 'Facebook rejected the account details' : 'Facebook remained on the login form after clicking Log in')
+        return
+      }
       if (/video selfie|identity confirmation in progress/i.test(text)) {
         report('Identity review required', 'Facebook requires a person to complete identity review')
         return
