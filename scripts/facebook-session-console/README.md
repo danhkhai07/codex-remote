@@ -13,9 +13,11 @@ works on desktop and mobile.
 3. Choose **Start login** on that account. Complete verification yourself in
    the browser panel. The current authenticator code is available when the
    page requests it; email/SMS codes must come from your own inbox or phone.
-4. Choose **Use saved session** to check a saved profile, or **Stop browser** to end
-   the active browser. **Lock** hides the dashboard and clears access from the
-   current page; it does not log the Facebook account out.
+4. Choose **Use saved session** to reopen that account's existing Chromium
+   profile. It does not create a fresh login; if Facebook presents a checkpoint,
+   the same manual browser remains available so you can continue it. Choose
+   **Stop browser** to end the active browser. **Lock** hides the dashboard and
+   clears access from the current page; it does not log the Facebook account out.
 
 One browser can run at a time. Each account has separate credentials, browser
 profile and verification marker. Everyone with access to this shared console

@@ -478,7 +478,7 @@ $('account-form').addEventListener('submit', async event => {
   }
 })
 
-for (const [button, action] of [['start-login', 'login'], ['check-session', 'check'], ['stop-browser', 'stop']]) {
+for (const [button, action] of [['start-login', 'login'], ['check-session', 'login'], ['stop-browser', 'stop']]) {
   $(button).addEventListener('click', () => {
     const account = selectedAccount()
     if (account) mutate('accounts/' + encodeURIComponent(account.id) + '/' + action)
