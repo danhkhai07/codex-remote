@@ -6,6 +6,7 @@ const state = {
   framePending: false, totpPending: false, frameController: null, totpController: null,
   pendingAction: false, pendingDialog: 0, dialogVersion: 0,
   dialogMode: null, dialogAccountId: null, pointerStart: null,
+  avatarUrls: new Map(), avatarPending: new Map(),
 }
 
 async function api(path, method = 'GET', data, signal) {
@@ -24,19 +25,45 @@ async function api(path, method = 'GET', data, signal) {
   return result
 }
 
+async function avatarApi(id, method, file) {
+  const response = await fetch('/api/accounts/' + encodeURIComponent(id) + '/avatar', {
+    method, cache: 'no-store',
+    headers: {
+      'X-Session-Console-Key': state.key,
+      ...(file ? { 'Content-Type': file.type } : {}),
+    },
+    ...(file ? { body: file } : {}),
+  })
+  let result
+  try { result = await response.json() } catch { result = {} }
+  if (!response.ok) {
+    const error = new Error(result.error || 'Avatar update failed (HTTP ' + response.status + ')')
+    error.status = response.status
+    throw error
+  }
+  return result
+}
+
 function selectedAccount() {
   return state.accounts.find(account => account.id === state.selectedId) || null
 }
 
-function displayPhase(account) {
-  if (account.running) return account.phase || 'Running'
-  return account.phase || (account.sessionSaved ? 'Session saved' : 'Ready')
+function sessionLabel(account) {
+  if (account.locked || account.sessionStatus === 'locked') return 'Locked'
+  return account.sessionSaved ? 'Logged in' : 'Not logged in'
 }
 
 function statusTone(account) {
-  if (account.running) return 'running'
+  if (account.locked || account.sessionStatus === 'locked') return 'locked'
   if (account.sessionSaved) return 'saved'
   return 'idle'
+}
+
+function activityLabel(account) {
+  if (account.locked) return 'No activity'
+  if (!account.running) return 'Idle'
+  if (account.manualAvailable) return 'Waiting for you'
+  return account.activity || account.phase || 'Working'
 }
 
 function dateLabel(value) {
@@ -50,6 +77,62 @@ function element(tag, className, value) {
   if (className) node.className = className
   if (value !== undefined) node.textContent = value
   return node
+}
+
+function avatarNode(account) {
+  const wrapper = element('span', 'account-avatar')
+  const fallback = element('span', 'account-avatar-fallback', (account.label || account.account || '?').trim().charAt(0).toUpperCase())
+  fallback.setAttribute('aria-hidden', 'true')
+  wrapper.append(fallback)
+  if (!account.avatarVersion) return wrapper
+  const image = element('img', 'account-avatar-image')
+  image.alt = ''
+  image.hidden = true
+  const key = `${account.id}:${account.avatarVersion}`
+  image.dataset.avatarKey = key
+  wrapper.prepend(image)
+  loadAvatar(account, image, fallback)
+  return wrapper
+}
+
+async function loadAvatar(account, image, fallback) {
+  const key = `${account.id}:${account.avatarVersion}`
+  if (state.avatarUrls.has(key)) {
+    image.src = state.avatarUrls.get(key)
+    image.hidden = false
+    fallback.hidden = true
+    return
+  }
+  if (!state.avatarPending.has(key)) {
+    const authVersion = state.authVersion
+    state.avatarPending.set(key, fetch('/api/accounts/' + encodeURIComponent(account.id) + '/avatar?v=' + encodeURIComponent(account.avatarVersion), {
+      headers: { 'X-Session-Console-Key': state.key }, cache: 'force-cache',
+    }).then(async response => {
+      if (!response.ok) throw new Error('Avatar unavailable')
+      const url = URL.createObjectURL(await response.blob())
+      if (authVersion !== state.authVersion) { URL.revokeObjectURL(url); throw new Error('Locked') }
+      state.avatarUrls.set(key, url)
+      return url
+    }).finally(() => state.avatarPending.delete(key)))
+  }
+  try {
+    const url = await state.avatarPending.get(key)
+    if (image.isConnected && image.dataset.avatarKey === key) {
+      image.src = url
+      image.hidden = false
+      fallback.hidden = true
+    }
+  } catch { /* Initials remain visible if the image cannot be loaded. */ }
+}
+
+function cleanAvatarCache(accounts = []) {
+  const current = new Set(accounts.filter(account => account.avatarVersion).map(account => `${account.id}:${account.avatarVersion}`))
+  for (const [key, url] of state.avatarUrls) {
+    if (!current.has(key)) {
+      URL.revokeObjectURL(url)
+      state.avatarUrls.delete(key)
+    }
+  }
 }
 
 function clearManual() {
@@ -102,16 +185,16 @@ function renderAccounts() {
     select.dataset.accountRole = 'select'
     select.setAttribute('aria-current', account.id === state.selectedId ? 'true' : 'false')
     select.addEventListener('click', () => chooseAccount(account.id))
-    const avatar = element('span', 'account-avatar', (account.label || account.account || '?').trim().charAt(0).toUpperCase())
-    avatar.setAttribute('aria-hidden', 'true')
+    const avatar = avatarNode(account)
     const identity = element('span', 'account-identity')
     identity.append(element('strong', '', account.label || 'Unnamed account'), element('span', '', account.account || 'Account ID unavailable'))
     select.append(avatar, identity)
     const details = element('div', 'account-details')
-    const phase = element('span', 'badge ' + statusTone(account), displayPhase(account))
-    const session = element('span', 'session-state', account.sessionSaved ? 'Saved session' : 'No saved session')
-    details.append(phase, session)
-    const view = element('button', 'button secondary row-view', account.id === state.selectedId ? 'Selected' : 'View')
+    const session = element('span', 'badge ' + statusTone(account), sessionLabel(account))
+    const activity = element('span', 'activity-tag', activityLabel(account))
+    activity.title = activityLabel(account)
+    details.append(session, activity)
+    const view = element('button', 'button secondary row-view', 'Open')
     view.type = 'button'
     view.dataset.accountId = account.id
     view.dataset.accountRole = 'view'
@@ -136,15 +219,18 @@ function renderSelected() {
   if (!account) { clearManual(); return }
   $('selected-heading').textContent = account.label || 'Unnamed account'
   $('selected-identifier').textContent = account.account || 'Account ID unavailable'
-  $('selected-status').textContent = displayPhase(account)
+  $('selected-status').textContent = sessionLabel(account)
   $('selected-status').className = 'badge ' + statusTone(account)
-  $('selected-session').textContent = account.sessionSaved ? 'Saved' : 'Not saved'
+  $('selected-session').textContent = sessionLabel(account)
+  $('selected-activity').textContent = activityLabel(account)
   $('selected-updated').textContent = dateLabel(account.updatedAt)
   $('selected-result').textContent = account.lastResult || ''
   const occupiedByOther = Boolean(state.activeAccountId && state.activeAccountId !== account.id)
   const busy = state.pendingAction || occupiedByOther
-  $('start-login').disabled = busy || !account.configured || account.running
-  $('check-session').disabled = busy || !account.sessionSaved || account.running
+  $('start-login').hidden = account.sessionSaved || account.locked
+  $('check-session').hidden = !account.sessionSaved || account.locked
+  $('start-login').disabled = busy || !account.configured || account.running || account.locked
+  $('check-session').disabled = busy || !account.sessionSaved || account.running || account.locked
   $('stop-browser').disabled = state.pendingAction || !account.running
   $('edit-account').disabled = state.pendingAction
   const manual = Boolean(account.manualAvailable && account.running)
@@ -184,6 +270,7 @@ function applyList(result, requestVersion) {
   if (requestVersion !== state.requestVersion || !state.key) return
   if (!result || !Array.isArray(result.accounts)) throw new Error('Invalid account list response')
   state.accounts = result.accounts
+  cleanAvatarCache(state.accounts)
   state.activeAccountId = result.activeAccountId || null
   state.capacity = result.capacity || 1
   if (!state.accounts.some(account => account.id === state.selectedId)) {
@@ -219,6 +306,7 @@ function lock(message = '') {
   state.requestVersion++
   state.key = ''
   state.accounts = []
+  cleanAvatarCache()
   state.selectedId = null
   state.activeAccountId = null
   state.pendingAction = false
@@ -340,6 +428,10 @@ function openDialog(mode) {
   $('field-account').value = mode === 'edit' ? account.account || '' : ''
   $('field-account').disabled = mode === 'edit'
   $('field-password').required = mode === 'add'
+  $('field-status').value = mode === 'edit' && account.locked ? 'locked' : 'available'
+  $('field-avatar').value = ''
+  $('remove-avatar-wrap').hidden = mode !== 'edit' || !account.avatarVersion
+  $('remove-avatar').checked = false
   $('save-account').textContent = mode === 'edit' ? 'Save changes' : 'Add account'
   $('save-account').disabled = false
   $('account-dialog').showModal()
@@ -395,7 +487,15 @@ $('account-form').addEventListener('submit', async event => {
   const id = state.dialogAccountId
   const values = Object.fromEntries(new FormData($('account-form')))
   values.label = values.label.trim()
+  values.locked = values.locked === 'locked'
+  delete values.avatar
+  delete values.removeAvatar
   if (!values.label) return
+  const avatar = $('field-avatar').files[0]
+  if (avatar && (!['image/jpeg', 'image/png', 'image/webp'].includes(avatar.type) || avatar.size > 2 * 1024 * 1024)) {
+    $('dialog-error').textContent = 'Choose a JPEG, PNG, or WebP image up to 2 MB.'
+    return
+  }
   if (mode === 'edit') {
     delete values.account
     if (!values.password) delete values.password
@@ -407,12 +507,17 @@ $('account-form').addEventListener('submit', async event => {
   state.pendingDialog++
   state.requestVersion++
   try {
-    const result = await api(mode === 'edit' ? 'accounts/' + encodeURIComponent(id) + '/config' : 'accounts', 'POST', values)
+    let result = await api(mode === 'edit' ? 'accounts/' + encodeURIComponent(id) + '/config' : 'accounts', 'POST', values)
+    if (authVersion !== state.authVersion) return
+    const targetId = mode === 'edit' ? id : result.accounts?.at(-1)?.id
+    if (!targetId) throw new Error('Account was saved but could not be selected')
+    if (avatar) result = await avatarApi(targetId, 'POST', avatar)
+    else if (mode === 'edit' && $('remove-avatar').checked) result = await avatarApi(targetId, 'DELETE')
     if (authVersion !== state.authVersion) return
     if (dialogVersion === state.dialogVersion) {
       const requestVersion = ++state.requestVersion
       applyList(result, requestVersion)
-      if (mode === 'add' && result.accounts?.length) chooseAccount(result.accounts.at(-1).id)
+      if (mode === 'add') chooseAccount(targetId)
       closeDialog()
     } else refresh()
   } catch (error) {

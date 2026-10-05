@@ -8,12 +8,12 @@ works on desktop and mobile.
 ## Use
 
 1. Unlock with the existing console access code.
-2. Select **Add account** and enter a label, account ID/email, password and,
-   optionally, the account's authenticator secret.
+2. Select **Add account** and enter the Facebook name, optional avatar,
+   account ID/email, password and, optionally, the authenticator secret.
 3. Choose **Start login** on that account. Complete verification yourself in
    the browser panel. The current authenticator code is available when the
    page requests it; email/SMS codes must come from your own inbox or phone.
-4. Use **Check session** to check a saved profile, or **Stop browser** to end
+4. Choose **Use saved session** to check a saved profile, or **Stop browser** to end
    the active browser. **Lock** hides the dashboard and clears access from the
    current page; it does not log the Facebook account out.
 
@@ -23,6 +23,13 @@ can manage its accounts; this is not a separate login system for each person.
 There are no batch login or engagement actions. The active worker uses ordinary
 Playwright with Chromium and manual verification; it does not call a CAPTCHA
 solver, inject challenge tokens or configure evasion proxies.
+
+Each account stays on one compact row. Its status is derived from real state:
+**Not logged in** when there is no verification marker, **Logged in** when a
+verified marker exists, and **Locked** when an owner marks the account locked.
+Locked accounts cannot start a browser job. The activity tag shows the current
+browser job or **Idle**; it does not trigger an action. An account with a saved
+session offers **Use saved session** instead of asking for another login.
 
 The browser stays open for manual input for up to 30 minutes. Click/tap or drag
 on the image and use the text, keyboard and scroll controls. On a small screen,
@@ -47,6 +54,10 @@ points to its existing root-level `account.json`, `browser-profile` and
 added later get their own directories. Existing secrets, including any legacy
 solver key, are not returned by the API. A legacy solver key is not used by
 the new worker.
+
+Uploaded avatars are stored separately under the private `avatars` directory.
+Only JPEG, PNG and WebP files up to 2 MB are accepted. Avatar reads require the
+same console access code and never expose filesystem paths.
 
 `storage-state.json` is a secret-free verification marker. Browser cookies
 remain in the account's profile. A new marker is written only after a second

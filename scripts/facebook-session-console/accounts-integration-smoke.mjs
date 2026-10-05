@@ -9,6 +9,7 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const { chromium } = await import('/root/.local/share/facebook-headless/node_modules/playwright-core/index.mjs')
 const directory = await mkdtemp('/tmp/facebook-accounts-integration-')
 const output = process.env.FB_ACCOUNTS_EVIDENCE || '/tmp/facebook-accounts-integration-evidence'
+const avatarPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
 let server, browser
 try {
   await mkdir(output, { recursive: true })
@@ -49,9 +50,12 @@ process.on('SIGINT',()=>process.exit(0));`
   await page.getByRole('button', { name: 'Unlock', exact: true }).click()
   await page.locator('#manager').waitFor({ state: 'visible' })
   assert.equal(await page.locator('.account-row').count(), 1)
-  assert.equal(await page.locator('#selected-session').textContent(), 'Saved')
+  assert.equal(await page.locator('#selected-session').textContent(), 'Logged in')
+  assert.equal(await page.locator('#start-login').isHidden(), true)
+  assert.equal(await page.getByRole('button', { name: 'Use saved session' }).isVisible(), true)
   await page.locator('#add-account').click()
   await page.locator('#field-label').fill('Support team')
+  await page.locator('#field-avatar').setInputFiles({ name: 'avatar.png', mimeType: 'image/png', buffer: avatarPng })
   await page.locator('#field-account').fill('22222222222')
   await page.locator('#field-password').fill('second-fixture-password')
   await page.locator('#field-totp').fill('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ')
@@ -59,6 +63,7 @@ process.on('SIGINT',()=>process.exit(0));`
   await page.locator('#account-dialog').waitFor({ state: 'hidden' })
   assert.equal(await page.locator('.account-row').count(), 2)
   assert.equal(await page.locator('#selected-heading').textContent(), 'Support team')
+  await page.locator('.account-row').filter({ hasText: 'Support team' }).locator('.account-avatar-image:not([hidden])').waitFor()
   await page.locator('#edit-account').click()
   await page.locator('#field-label').fill('Support & review')
   assert.equal(await page.locator('#field-password').inputValue(), '')
@@ -68,6 +73,7 @@ process.on('SIGINT',()=>process.exit(0));`
   for (const width of [1280, 390, 320]) {
     await page.setViewportSize({ width, height: 900 })
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1))
+    assert.equal(await page.locator('.account-row').first().evaluate(row => getComputedStyle(row).gridTemplateRows.split(' ').length), 1)
     await page.screenshot({ path: path.join(output, `accounts-${width}.png`), fullPage: true })
   }
   await page.locator('#start-login').click()
@@ -83,7 +89,7 @@ process.on('SIGINT',()=>process.exit(0));`
   assert.equal(await page.locator('#manual-panel').isVisible(), true)
   await page.locator('#browser-frame').click({ position: { x: 50, y: 30 } })
   await page.locator('#manual-panel').waitFor({ state: 'hidden' })
-  assert.equal(await page.locator('#selected-session').textContent(), 'Saved')
+  assert.equal(await page.locator('#selected-session').textContent(), 'Logged in')
   assert.equal(await readFile(path.join(directory, 'account.json'), 'utf8'), legacy)
   assert.equal(await readFile(path.join(directory, 'storage-state.json'), 'utf8'), '{"fixture":true}')
   await page.locator('#lock').click()

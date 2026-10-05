@@ -14,8 +14,8 @@ const assets = {
   '/app.css': ['text/css', await readFile(path.join(here, 'app.css'))],
 }
 const accounts = [
-  { id: 'one', label: 'Marketing', account: 'm***@example.com', configured: true, sessionSaved: true, running: false, phase: 'Ready', lastResult: 'Saved session ready', updatedAt: new Date().toISOString(), manualAvailable: false, manualStage: null },
-  { id: 'two', label: 'Support', account: 's***@example.com', configured: true, sessionSaved: false, running: false, phase: 'Ready', lastResult: '', updatedAt: null, manualAvailable: false, manualStage: null },
+  { id: 'one', label: 'Marketing', account: 'm***@example.com', configured: true, locked: false, sessionSaved: true, sessionStatus: 'logged-in', running: false, activity: 'Idle', avatarVersion: null, phase: 'Ready', lastResult: 'Saved session ready', updatedAt: new Date().toISOString(), manualAvailable: false, manualStage: null },
+  { id: 'two', label: 'Support', account: 's***@example.com', configured: true, locked: false, sessionSaved: false, sessionStatus: 'logged-out', running: false, activity: 'Idle', avatarVersion: null, phase: 'Ready', lastResult: '', updatedAt: null, manualAvailable: false, manualStage: null },
 ]
 let activeAccountId = null
 let nextId = 3
@@ -47,7 +47,7 @@ const server = createServer(async (request, response) => {
     body = raw ? JSON.parse(raw) : {}
   }
   if (pathname === '/api/accounts' && request.method === 'POST') {
-    const account = { id: String(nextId++), label: body.label, account: body.account.replace(/(^.).*(@.*$)/, '$1***$2'), configured: true, sessionSaved: false, running: false, phase: 'Ready', lastResult: '', updatedAt: null, manualAvailable: false, manualStage: null }
+    const account = { id: String(nextId++), label: body.label, account: body.account.replace(/(^.).*(@.*$)/, '$1***$2'), configured: true, locked: body.locked, sessionSaved: false, sessionStatus: body.locked ? 'locked' : 'logged-out', running: false, activity: 'Idle', avatarVersion: null, phase: 'Ready', lastResult: '', updatedAt: null, manualAvailable: false, manualStage: null }
     accounts.push(account)
     json(response, 200, list())
     return
@@ -59,6 +59,8 @@ const server = createServer(async (request, response) => {
   if (action === 'config') {
     const send = () => {
       account.label = body.label
+      account.locked = body.locked
+      account.sessionStatus = account.locked ? 'locked' : account.sessionSaved ? 'logged-in' : 'logged-out'
       account.updatedAt = new Date().toISOString()
       json(response, 200, list())
     }
@@ -69,6 +71,7 @@ const server = createServer(async (request, response) => {
     activeAccountId = account.id
     account.running = true
     account.phase = 'Continue in browser'
+    account.activity = 'Continue in browser'
     account.manualAvailable = true
     account.manualStage = account.id === 'one' ? 'two-factor' : 'captcha'
     account.updatedAt = new Date().toISOString()
@@ -79,6 +82,7 @@ const server = createServer(async (request, response) => {
     account.manualAvailable = false
     account.manualStage = null
     account.phase = 'Stopped'
+    account.activity = 'Idle'
     json(response, 200, list())
   } else if (action === 'status') json(response, 200, account)
   else if (action === 'totp') {
@@ -107,7 +111,10 @@ try {
   await page.getByRole('button', { name: 'Unlock' }).click()
   await page.getByText('2 accounts').waitFor()
   assert.equal(await page.locator('.account-row').count(), 2)
-  assert.equal(await page.locator('#start-login').isEnabled(), true)
+  assert.equal(await page.locator('#start-login').isHidden(), true)
+  assert.equal(await page.getByRole('button', { name: 'Use saved session' }).isVisible(), true)
+  assert.equal(await page.locator('.account-row').filter({ hasText: 'Marketing' }).getByText('Logged in').count(), 1)
+  assert.equal(await page.locator('.account-row').filter({ hasText: 'Marketing' }).getByText('Idle').count(), 1)
   await page.screenshot({ path: path.join(output, 'accounts-1280.png'), fullPage: true })
   await page.getByRole('button', { name: '+ Add account' }).click()
   await page.locator('#field-label').fill('Events')
@@ -120,8 +127,16 @@ try {
   assert.equal(await page.locator('#field-account').isDisabled(), true)
   assert.equal(await page.locator('#field-password').getAttribute('required'), null)
   await page.locator('#field-label').fill('Events updated')
+  await page.locator('#field-status').selectOption('locked')
   await page.getByRole('button', { name: 'Save changes' }).click()
   await page.getByText('Events updated').first().waitFor()
+  assert.equal(await page.locator('#selected-status').textContent(), 'Locked')
+  assert.equal(await page.locator('#start-login').isHidden(), true)
+  assert.equal(await page.locator('#check-session').isHidden(), true)
+  await page.getByRole('button', { name: 'Edit details' }).click()
+  await page.locator('#field-status').selectOption('available')
+  await page.getByRole('button', { name: 'Save changes' }).click()
+  await page.locator('#account-dialog').waitFor({ state: 'hidden' })
   delayedConfig = true
   await page.getByRole('button', { name: 'Edit details' }).click()
   await page.locator('#field-label').fill('Events changed in background')
@@ -136,8 +151,8 @@ try {
   assert.equal(await page.locator('#field-label').inputValue(), 'Draft account')
   await page.getByRole('button', { name: 'Cancel' }).click()
   delayedConfig = false
-  await page.locator('.account-row').filter({ hasText: 'Marketing' }).getByRole('button', { name: 'View' }).click()
-  await page.getByRole('button', { name: 'Start login' }).click()
+  await page.locator('.account-row').filter({ hasText: 'Marketing' }).getByRole('button', { name: 'Open' }).click()
+  await page.getByRole('button', { name: 'Use saved session' }).click()
   await page.locator('#manual-panel').waitFor({ state: 'visible' })
   await page.waitForFunction(() => document.querySelector('#browser-frame')?.naturalWidth === 1280)
   await page.getByText('123456').waitFor()
@@ -150,10 +165,10 @@ try {
   assert.equal(manualCommands.at(-1).text, 'fixture')
   await page.getByRole('button', { name: 'Scroll down' }).click()
   assert.equal(manualCommands.at(-1).deltaY, 500)
-  await page.locator('.account-row').filter({ hasText: 'Support' }).getByRole('button', { name: 'View' }).click()
+  await page.locator('.account-row').filter({ hasText: 'Support' }).getByRole('button', { name: 'Open' }).click()
   assert.equal(await page.locator('#manual-panel').isVisible(), false)
   assert.equal(await page.getByRole('button', { name: 'Start login' }).isDisabled(), true)
-  await page.locator('.account-row').filter({ hasText: 'Marketing' }).getByRole('button', { name: 'View' }).click()
+  await page.locator('.account-row').filter({ hasText: 'Marketing' }).getByRole('button', { name: 'Open' }).click()
   await page.getByRole('button', { name: 'Stop browser' }).click()
   await page.locator('#manual-panel').waitFor({ state: 'hidden' })
   await page.getByRole('button', { name: 'Lock' }).click()
@@ -161,7 +176,7 @@ try {
   assert.equal(await page.locator('#browser-frame').getAttribute('src'), null)
   await page.locator('#access-code').fill('test-key')
   await page.getByRole('button', { name: 'Unlock' }).click()
-  await page.locator('.account-row').filter({ hasText: 'Support' }).getByRole('button', { name: 'View' }).click()
+  await page.locator('.account-row').filter({ hasText: 'Support' }).getByRole('button', { name: 'Open' }).click()
   await page.getByRole('button', { name: 'Start login' }).click()
   accounts.find(item => item.id === 'two').manualStage = 'two-factor'
   await page.waitForTimeout(3100)
@@ -180,20 +195,21 @@ try {
   for (const width of [320, 390]) {
     await page.setViewportSize({ width, height: 700 })
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'page overflow at ' + width)
+    assert.equal(await page.locator('.account-row').first().evaluate(row => getComputedStyle(row).gridTemplateRows.split(' ').length), 1, 'account row wrapped at ' + width)
   }
   await page.getByRole('button', { name: 'Stop browser' }).click()
-  await page.locator('.account-row').filter({ hasText: 'Marketing' }).getByRole('button', { name: 'View' }).click()
+  await page.locator('.account-row').filter({ hasText: 'Marketing' }).getByRole('button', { name: 'Open' }).click()
   delayedFrame = true
   delayedTotp = true
-  await page.getByRole('button', { name: 'Start login' }).click()
+  await page.getByRole('button', { name: 'Use saved session' }).click()
   await page.waitForTimeout(1300)
   assert.ok(pendingResponses.length > 0)
-  await page.locator('.account-row').filter({ hasText: 'Support' }).getByRole('button', { name: 'View' }).click()
+  await page.locator('.account-row').filter({ hasText: 'Support' }).getByRole('button', { name: 'Open' }).click()
   pendingResponses.splice(0).forEach(send => send())
   await page.waitForTimeout(100)
   assert.equal(await page.locator('#browser-frame').getAttribute('src'), null)
   assert.equal(await page.locator('#totp-code').textContent(), '')
-  await page.locator('.account-row').filter({ hasText: 'Marketing' }).getByRole('button', { name: 'View' }).click()
+  await page.locator('.account-row').filter({ hasText: 'Marketing' }).getByRole('button', { name: 'Open' }).click()
   await page.waitForTimeout(1300)
   assert.ok(pendingResponses.length > 0)
   await page.getByRole('button', { name: 'Lock' }).click()

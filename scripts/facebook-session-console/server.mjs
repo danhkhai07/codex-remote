@@ -52,6 +52,19 @@ function sendFrame(res, frame) {
   res.end(frame)
 }
 
+function sendAvatar(res, avatar) {
+  res.writeHead(200, {
+    'Content-Type': avatar.type,
+    'Content-Length': avatar.bytes.length,
+    'Cache-Control': 'no-store',
+    'Content-Security-Policy': contentSecurityPolicy,
+    'Content-Disposition': 'inline',
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer',
+  })
+  res.end(avatar.bytes)
+}
+
 async function body(req) {
   if (req.headers['content-type'] !== 'application/json') throw new Error('JSON required')
   let size = 0
@@ -62,6 +75,17 @@ async function body(req) {
     chunks.push(chunk)
   }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { throw new Error('Invalid JSON') }
+}
+
+async function binaryBody(req, limit = 2 * 1024 * 1024) {
+  let size = 0
+  const chunks = []
+  for await (const chunk of req) {
+    size += chunk.length
+    if (size > limit) throw new Error('Avatar image is too large')
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks)
 }
 
 function authorized(req) {
@@ -133,9 +157,13 @@ async function status(record) {
   const current = state(record.id)
   const running = Boolean((active && active.id === record.id) || (jobReserved && jobReserved === record.id))
   const sessionSaved = await accounts.sessionSaved(record)
+  const avatar = await accounts.avatarInfo(record)
   return {
     id: record.id, label: record.label, configured: true, account: masked(config.account),
-    sessionSaved, running,
+    locked: record.locked, sessionSaved, running,
+    sessionStatus: record.locked ? 'locked' : sessionSaved ? 'logged-in' : 'logged-out',
+    activity: running ? current.phase : 'Idle',
+    avatarVersion: avatar?.version ?? null,
     phase: current.phase === 'Not started' && sessionSaved ? 'Session ready' : current.phase,
     lastResult: current.lastResult, updatedAt: current.updatedAt,
     manualAvailable: Boolean(running && current.manualAvailable),
@@ -162,6 +190,7 @@ function workerEnvironment(directory = stateDir) {
 
 async function startJob(record, action) {
   if (active || jobReserved || accountMutationPending) throw new Error('A job is already running')
+  if (record.locked) throw new Error('Account is locked')
   jobReserved = record.id
   const current = state(record.id)
   try {
@@ -251,7 +280,7 @@ async function handler(req, res) {
       try { await accounts.create(value) } finally { accountMutationPending-- }
       return send(res, 201, await list())
     }
-    const match = /^\/api\/accounts\/([0-9a-f-]+)\/(status|config|login|check|stop|frame|totp|manual)$/.exec(url.pathname)
+    const match = /^\/api\/accounts\/([0-9a-f-]+)\/(status|config|avatar|login|check|stop|frame|totp|manual)$/.exec(url.pathname)
     if (!match) return send(res, 404, { error: 'Not found' })
     const record = accounts.get(match[1])
     if (!record) return send(res, 404, { error: 'Unknown account' })
@@ -259,6 +288,10 @@ async function handler(req, res) {
     const current = state(record.id)
     if (req.method === 'GET') {
       if (endpoint === 'status') return send(res, 200, await status(record))
+      if (endpoint === 'avatar') {
+        const avatar = await accounts.avatar(record)
+        return avatar ? sendAvatar(res, avatar) : send(res, 404, { error: 'No avatar saved' })
+      }
       if (endpoint === 'frame') {
         if (active?.id !== record.id || !current.manualAvailable || !current.manualFrame) return send(res, 404, { error: 'No browser frame available' })
         return sendFrame(res, current.manualFrame)
@@ -274,8 +307,25 @@ async function handler(req, res) {
       }
       return send(res, 405, { error: 'Method not allowed' })
     }
+    if (endpoint === 'avatar' && req.method === 'DELETE') {
+      if (!validOrigin(req)) return send(res, 403, { error: 'Invalid origin' })
+      if (active || jobReserved) return send(res, 409, { error: 'Wait for the current job' })
+      accountMutationPending++
+      try { await accounts.removeAvatar(record.id) } finally { accountMutationPending-- }
+      return send(res, 200, await list())
+    }
     if (req.method !== 'POST') return send(res, 405, { error: 'Method not allowed' })
     if (!validOrigin(req)) return send(res, 403, { error: 'Invalid origin' })
+    if (endpoint === 'avatar') {
+      if (active || jobReserved) return send(res, 409, { error: 'Wait for the current job' })
+      const type = req.headers['content-type']
+      if (!['image/jpeg', 'image/png', 'image/webp'].includes(type)) return send(res, 400, { error: 'Use a JPEG, PNG, or WebP image' })
+      const image = await binaryBody(req)
+      if (active || jobReserved) return send(res, 409, { error: 'Wait for the current job' })
+      accountMutationPending++
+      try { await accounts.setAvatar(record.id, image, type) } finally { accountMutationPending-- }
+      return send(res, 200, await list())
+    }
     if (endpoint === 'config') {
       if (active || jobReserved) return send(res, 409, { error: 'Wait for the current job' })
       const value = await body(req)
@@ -311,8 +361,8 @@ async function handler(req, res) {
     return send(res, 202, await list())
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unexpected error'
-    const conflict = /Account already exists|already running/.test(message)
-    const expected = /Invalid|immutable|JSON required|Request too large|No saved session/.test(message)
+    const conflict = /Account already exists|already running|Account is locked/.test(message)
+    const expected = /Invalid|immutable|JSON required|Request too large|Avatar image is too large|No saved session|Account is locked/.test(message)
     return send(res, conflict ? 409 : expected ? 400 : 500, { error: conflict || expected ? message : 'Unexpected server error' })
   }
 }
