@@ -203,23 +203,54 @@ async function extractFacebookProfile(page, expectedId) {
   await page.waitForFunction(matchingName, expectedId, { timeout: 10000 }).catch(() => {})
   const name = cleanProfileName(await page.evaluate(matchingName, expectedId).catch(() => null))
   if (!name || await observedAccountId(page.context()) !== expectedId) return null
-  const images = page.locator('[aria-label="Profile picture actions"] svg:visible, [aria-label="Profile picture actions"] img:visible')
-  await images.first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
+  const images = page.locator('[aria-label="Profile picture actions"] svg image, [aria-label="Profile picture actions"] img')
+  await images.first().waitFor({ state: 'attached', timeout: 5000 }).catch(() => {})
   let avatar = null
+  let avatarType = null
   if (await images.count() === 1) {
-    const screenshot = await images.first().screenshot({ type: 'png', timeout: 4000 }).catch(() => null)
-    if (screenshot?.length >= 32 && screenshot.length <= 2 * 1024 * 1024) avatar = screenshot
+    const source = await images.first().evaluate(node => node.currentSrc || node.href?.baseVal || node.getAttribute('href') || node.getAttribute('xlink:href') || node.src).catch(() => null)
+    try {
+      const url = new URL(source, page.url())
+      const allowed = url.protocol === 'https:' && (url.hostname.endsWith('.fbcdn.net') || url.hostname.endsWith('.fbsbx.com') || url.hostname === 'www.facebook.com')
+      const fixture = process.env.FB_SESSION_TEST_ORIGIN && url.origin === origin
+      if (allowed || fixture) {
+        const response = await page.context().request.get(url.href, { timeout: 10000, maxRedirects: 0 })
+        try {
+          if (response.ok()) {
+            const bytes = await response.body()
+            if (bytes.length >= 32 && bytes.length <= 2 * 1024 * 1024) {
+              if (bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) avatarType = 'image/png'
+              else if (bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) avatarType = 'image/jpeg'
+              else if (bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') avatarType = 'image/webp'
+              if (avatarType) avatar = bytes
+            }
+          }
+        } finally { await response.dispose() }
+      }
+    } catch { /* Keep a previously verified source image if downloading fails. */ }
   }
   if (await page.evaluate(matchingName, expectedId).catch(() => null) !== name
       || await observedAccountId(page.context()) !== expectedId) return null
-  return { name, avatar }
+  return { name, avatar, avatarType }
 }
 
 async function writeFacebookProfile(accountId, profile) {
   if (!profile?.name || !accountId) return
+  let avatarSha256 = profile.avatar ? createHash('sha256').update(profile.avatar).digest('hex') : null
+  let avatarType = profile.avatarType || null
+  if (!profile.avatar) {
+    try {
+      const previous = JSON.parse(await readFile(facebookProfileFile, 'utf8'))
+      if (previous.accountId === accountId && previous.avatarSource === 'original'
+          && previous.avatarSha256 === createHash('sha256').update(await readFile(facebookAvatarFile)).digest('hex')) {
+        avatarSha256 = previous.avatarSha256
+        avatarType = previous.avatarType
+      }
+    } catch { /* No verified original to retain. */ }
+  }
   const temporary = `${facebookProfileFile}.${randomBytes(8).toString('hex')}.tmp`
   try {
-    await writeFile(temporary, JSON.stringify({ identityVersion: 2, avatarSha256: profile.avatar ? createHash('sha256').update(profile.avatar).digest('hex') : null, accountId, name: profile.name, updatedAt: new Date().toISOString() }), { mode: 0o600, flag: 'wx' })
+    await writeFile(temporary, JSON.stringify({ identityVersion: 2, avatarSource: 'original', avatarType, avatarSha256, accountId, name: profile.name, updatedAt: new Date().toISOString() }), { mode: 0o600, flag: 'wx' })
     await rename(temporary, facebookProfileFile)
     await chmod(facebookProfileFile, 0o600)
   } finally { await rm(temporary, { force: true }).catch(() => {}) }

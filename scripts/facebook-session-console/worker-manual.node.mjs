@@ -14,9 +14,12 @@ const playwrightPath = process.env.FB_PLAYWRIGHT_MODULE || '/root/.local/share/f
 const chromePath = process.env.FB_CHROME_PATH || '/root/.cache/ms-playwright/chromium-1187/chrome-linux/chrome'
 const { chromium } = await import(pathToFileURL(playwrightPath).href)
 
+const avatarBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=', 'base64')
+
 function fixture() {
   let watchVisits = 0
   const server = createServer((request, response) => {
+    if (request.url === '/avatar.png') { response.writeHead(200, { 'Content-Type': 'image/png' }).end(avatarBytes); return }
     let html = ''
     if (request.url === '/me') { response.writeHead(302, {Location:'/profile.php?id=fixture'}).end(); return }
     if (request.url === '/') html = `<input name="email"><input name="pass" type="password"><button id="login" onclick="location.href='/captcha'">Log in</button>`
@@ -27,7 +30,7 @@ function fixture() {
       if (request.url === '/watch/') watchVisits++
       const cookies = request.headers.cookie || ''
       if ((request.url === '/watch/' || request.url === '/profile.php?id=fixture') && !cookies.includes('c_user=fixture')) html = `<input name="email"><input name="pass" type="password">`
-      else if (request.url === '/profile.php?id=fixture') html = `<title>(3) Facebook</title><h1>Notifications</h1><a href="/profile.php?id=fixture" aria-label="Fixture Person's timeline">Fixture Person</a><div aria-label="Profile picture actions"><img alt="Fixture Person's profile picture" width="160" height="160" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Crect width='160' height='160' fill='%231877f2'/%3E%3C/svg%3E"></div><button aria-label="Account">Account</button>`
+      else if (request.url === '/profile.php?id=fixture') html = `<title>(3) Facebook</title><h1>Notifications</h1><a href="/profile.php?id=fixture" aria-label="Fixture Person's timeline">Fixture Person</a><div aria-label="Profile picture actions"><svg width="160" height="160"><image href="/avatar.png" width="160" height="160"/><circle cx="80" cy="10" r="30" fill="white"/></svg></div><button aria-label="Account">Account</button>`
       else html = `<button aria-label="Account">Account</button>`
       if (request.url === '/done') response.setHeader('Set-Cookie', ['c_user=fixture; Path=/; Max-Age=3600', 'xs=fixture; Path=/; Max-Age=3600'])
     } else { response.writeHead(404).end(); return }
@@ -124,7 +127,8 @@ test('manual owner flow, fresh browser verification, and read-only check', { tim
       assert.equal(profile.accountId, 'fixture')
       assert.equal(profile.name, 'Fixture Person')
       assert.equal((await stat(path.join(state, 'facebook-profile.json'))).mode & 0o777, 0o600)
-      assert.ok((await stat(path.join(state, 'facebook-profile-avatar.png'))).size > 32)
+      assert.deepEqual(await readFile(path.join(state, 'facebook-profile-avatar.png')), avatarBytes)
+      assert.equal(profile.avatarSource, 'original')
       assert.equal((await stat(path.join(state, 'storage-state.json'))).mode & 0o777, 0o600)
       assert.ok(!JSON.stringify(marker).includes('PAID-KEY'))
       const check = runner(state, origin, 'check')

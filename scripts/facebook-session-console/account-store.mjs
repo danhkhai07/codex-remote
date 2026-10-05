@@ -119,7 +119,7 @@ export class AccountStore {
       let avatar = null
       try {
         const details = await stat(this.facebookAvatarFile(record))
-        if (profile.avatarSha256 && createHash('sha256').update(await readFile(this.facebookAvatarFile(record))).digest('hex') === profile.avatarSha256) avatar = { file: this.facebookAvatarFile(record), type: 'image/png', version: `${Math.floor(details.mtimeMs)}-${details.size}` }
+        if (profile.avatarSha256 && createHash('sha256').update(await readFile(this.facebookAvatarFile(record))).digest('hex') === profile.avatarSha256) avatar = { file: this.facebookAvatarFile(record), type: ['image/png', 'image/jpeg', 'image/webp'].includes(profile.avatarType) ? profile.avatarType : 'image/png', version: `${Math.floor(details.mtimeMs)}-${details.size}` }
       } catch (error) { if (error.code !== 'ENOENT') throw error }
       return { name, avatar }
     } catch (error) {
