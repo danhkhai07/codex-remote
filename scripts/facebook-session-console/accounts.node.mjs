@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -126,18 +127,9 @@ test('migrates legacy state without touching profile, marker, or configuration; 
     assert.equal((await request(f, `/api/accounts/${second.id}/login`, 'POST', {})).status, 409)
     assert.equal((await fetch(`${f.root}/api/accounts/${second.id}/avatar`, { method: 'POST', headers: { ...f.headers, 'Content-Type': 'image/svg+xml' }, body: '<svg/>' })).status, 400)
     assert.equal((await fetch(`${f.root}/api/accounts/${second.id}/avatar`, { method: 'POST', headers: { ...f.headers, 'Content-Type': 'image/png' }, body: avatarPng })).status, 200)
-    secondStatus = await request(f, `/api/accounts/${second.id}/status`).then(response => response.json())
-    assert.match(secondStatus.avatarVersion, /^\d+-\d+$/)
-    const avatar = await request(f, `/api/accounts/${second.id}/avatar`)
-    assert.equal(avatar.headers.get('content-type'), 'image/png')
-    assert.equal(avatar.headers.get('cache-control'), 'no-store')
-    assert.deepEqual(Buffer.from(await avatar.arrayBuffer()), avatarPng)
-    assert.equal((await fetch(`${f.root}/api/accounts/${second.id}/avatar`)).status, 401)
-    assert.equal((await fetch(`${f.root}/api/accounts/${second.id}/avatar`, { method: 'DELETE', headers: f.headers })).status, 200)
-    assert.equal((await request(f, `/api/accounts/${second.id}/status`).then(response => response.json())).avatarVersion, null)
     const secondDirectory = path.join(f.directory, 'accounts', second.id)
     await writeFile(path.join(secondDirectory, 'storage-state.json'), JSON.stringify({ accountId: '22222222222' }), { mode: 0o600 })
-    await writeFile(path.join(secondDirectory, 'facebook-profile.json'), JSON.stringify({ accountId: '22222222222', name: 'Facebook Support' }), { mode: 0o600 })
+    await writeFile(path.join(secondDirectory, 'facebook-profile.json'), JSON.stringify({ identityVersion: 2, avatarSha256: createHash('sha256').update(avatarPng).digest('hex'), accountId: '22222222222', name: 'Facebook Support' }), { mode: 0o600 })
     await writeFile(path.join(secondDirectory, 'facebook-profile-avatar.png'), avatarPng, { mode: 0o600 })
     secondStatus = await request(f, `/api/accounts/${second.id}/status`).then(response => response.json())
     assert.equal(secondStatus.profileName, 'Facebook Support')

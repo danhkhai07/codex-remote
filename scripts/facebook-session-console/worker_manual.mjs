@@ -2,7 +2,7 @@
  * Secrets arrive on stdin. Only bounded status events and live JPEG frames leave
  * stdout; neither screenshots nor credentials are written to diagnostic files.
  */
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import readline from 'node:readline'
@@ -178,46 +178,40 @@ async function writeMarker(accountId) {
 
 function cleanProfileName(value) {
   if (typeof value !== 'string') return null
-  const name = value.replace(/\s+/g, ' ').trim().replace(/\s*[|·-]\s*Facebook$/i, '')
+  const name = value.replace(/^\(\d+\)\s*/, '').replace(/\s+/g, ' ').trim().replace(/\s*[|·-]\s*Facebook$/i, '')
   if (!name || name.length > 80 || /^(Facebook|Watch|Home|Log in)$/i.test(name)
       || [...name].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) return null
   return name
 }
 
-async function extractFacebookProfile(page) {
+async function extractFacebookProfile(page, expectedId) {
   stage = 'reading Facebook profile'
   await navigate(page, `${origin}/me`)
-  await delay(900)
-  const name = cleanProfileName(await page.evaluate(() => {
-    const headings = [...document.querySelectorAll('h1')]
-      .filter(node => { const box = node.getBoundingClientRect(); return box.width > 0 && box.height > 0 })
-      .map(node => node.textContent)
-    return headings.find(Boolean)
-      || document.querySelector('meta[property="og:title"]')?.getAttribute('content')
-      || document.title
-  }).catch(() => ''))
-  if (!name) return null
-  let avatar = null
-  const images = page.locator('img:visible')
-  let best = null
-  let bestScore = -1
-  for (let index = 0, count = Math.min(await images.count().catch(() => 0), 80); index < count; index++) {
-    const candidate = images.nth(index)
-    const data = await candidate.evaluate((node, profileName) => {
+  const matchingName = id => {
+    const pageUrl = new URL(location.href)
+    if (pageUrl.pathname !== '/profile.php' || pageUrl.searchParams.get('id') !== id) return null
+    const names = [...document.querySelectorAll('a[href]')].flatMap(node => {
+      const url = new URL(node.href, location.href)
+      if (url.origin !== location.origin || url.pathname !== '/profile.php' || url.searchParams.get('id') !== id) return []
+      const label = node.getAttribute('aria-label') || ''
+      if (!label.endsWith("'s timeline")) return []
       const box = node.getBoundingClientRect()
-      return { alt: node.getAttribute('alt') || '', width: box.width, height: box.height,
-        matchesName: (node.getAttribute('alt') || '').toLocaleLowerCase().includes(profileName.toLocaleLowerCase()) }
-    }, name).catch(() => null)
-    if (!data || data.width < 32 || data.height < 32) continue
-    const profileAlt = /profile (?:picture|photo)|ảnh đại diện/i.test(data.alt)
-    const square = Math.abs(data.width - data.height) <= Math.max(data.width, data.height) * 0.2
-    const score = (profileAlt ? 1000 : 0) + (data.matchesName ? 500 : 0) + (square ? 100 : 0) + Math.min(data.width, data.height)
-    if ((profileAlt || data.matchesName) && score > bestScore) { best = candidate; bestScore = score }
+      return box.width && box.height ? [label.slice(0, -11).trim()] : []
+    })
+    return new Set(names).size === 1 ? names[0] : null
   }
-  if (best) {
-    const screenshot = await best.screenshot({ type: 'png', timeout: 4000 }).catch(() => null)
+  await page.waitForFunction(matchingName, expectedId, { timeout: 10000 }).catch(() => {})
+  const name = cleanProfileName(await page.evaluate(matchingName, expectedId).catch(() => null))
+  if (!name || await observedAccountId(page.context()) !== expectedId) return null
+  const images = page.locator('[aria-label="Profile picture actions"] svg:visible, [aria-label="Profile picture actions"] img:visible')
+  await images.first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
+  let avatar = null
+  if (await images.count() === 1) {
+    const screenshot = await images.first().screenshot({ type: 'png', timeout: 4000 }).catch(() => null)
     if (screenshot?.length >= 32 && screenshot.length <= 2 * 1024 * 1024) avatar = screenshot
   }
+  if (await page.evaluate(matchingName, expectedId).catch(() => null) !== name
+      || await observedAccountId(page.context()) !== expectedId) return null
   return { name, avatar }
 }
 
@@ -225,7 +219,7 @@ async function writeFacebookProfile(accountId, profile) {
   if (!profile?.name || !accountId) return
   const temporary = `${facebookProfileFile}.${randomBytes(8).toString('hex')}.tmp`
   try {
-    await writeFile(temporary, JSON.stringify({ accountId, name: profile.name, updatedAt: new Date().toISOString() }), { mode: 0o600, flag: 'wx' })
+    await writeFile(temporary, JSON.stringify({ identityVersion: 2, avatarSha256: profile.avatar ? createHash('sha256').update(profile.avatar).digest('hex') : null, accountId, name: profile.name, updatedAt: new Date().toISOString() }), { mode: 0o600, flag: 'wx' })
     await rename(temporary, facebookProfileFile)
     await chmod(facebookProfileFile, 0o600)
   } finally { await rm(temporary, { force: true }).catch(() => {}) }
@@ -279,7 +273,7 @@ async function runLogin(chromium, config) {
           report('Account mismatch', 'The browser is signed in to a different account')
           return
         }
-        const profile = await extractFacebookProfile(current.page).catch(() => null)
+        const profile = await extractFacebookProfile(current.page, seenId).catch(() => null)
         report('Checking saved session', '', false)
         await current.context.close()
         current = null
@@ -338,7 +332,7 @@ async function runCheck(chromium, config) {
     const observedId = kind === 'authenticated' ? await observedAccountId(current.context) : null
     const wrongAccount = kind === 'authenticated' && expectedId && observedId !== expectedId
     if (kind === 'authenticated' && !wrongAccount) {
-      const profile = await extractFacebookProfile(current.page).catch(() => null)
+      const profile = await extractFacebookProfile(current.page, observedId).catch(() => null)
       await writeFacebookProfile(observedId, profile)
     }
     report(wrongAccount ? 'Account mismatch' : checkLabels[kind], kind === 'authenticated' && !wrongAccount

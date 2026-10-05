@@ -1,4 +1,4 @@
-import { randomUUID, randomBytes } from 'node:crypto'
+import { createHash, randomUUID, randomBytes } from 'node:crypto'
 import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
@@ -115,11 +115,11 @@ export class AccountStore {
         readFile(this.sessionFile(record), 'utf8').then(JSON.parse),
       ])
       const name = safeLabel(profile.name)
-      if (!profile.accountId || profile.accountId !== marker.accountId) return null
+      if (profile.identityVersion !== 2 || !profile.accountId || profile.accountId !== marker.accountId) return null
       let avatar = null
       try {
         const details = await stat(this.facebookAvatarFile(record))
-        avatar = { file: this.facebookAvatarFile(record), type: 'image/png', version: `${Math.floor(details.mtimeMs)}-${details.size}` }
+        if (profile.avatarSha256 && createHash('sha256').update(await readFile(this.facebookAvatarFile(record))).digest('hex') === profile.avatarSha256) avatar = { file: this.facebookAvatarFile(record), type: 'image/png', version: `${Math.floor(details.mtimeMs)}-${details.size}` }
       } catch (error) { if (error.code !== 'ENOENT') throw error }
       return { name, avatar }
     } catch (error) {
@@ -133,15 +133,6 @@ export class AccountStore {
   async avatarInfo(record) {
     const profile = await this.facebookProfile(record)
     if (profile?.avatar) return profile.avatar
-    for (const [type, descriptor] of avatarTypes) {
-      const file = this.avatarFile(record, descriptor.extension)
-      try {
-        const details = await stat(file)
-        return { file, type, version: `${Math.floor(details.mtimeMs)}-${details.size}` }
-      } catch (error) {
-        if (error.code !== 'ENOENT') throw error
-      }
-    }
     return null
   }
 

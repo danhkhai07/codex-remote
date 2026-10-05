@@ -18,15 +18,16 @@ function fixture() {
   let watchVisits = 0
   const server = createServer((request, response) => {
     let html = ''
+    if (request.url === '/me') { response.writeHead(302, {Location:'/profile.php?id=fixture'}).end(); return }
     if (request.url === '/') html = `<input name="email"><input name="pass" type="password"><button id="login" onclick="location.href='/captcha'">Log in</button>`
     else if (request.url === '/captcha') html = `<p>Complete a challenge to verify</p><button id="solve" style="position:fixed;left:100px;top:100px;width:120px;height:80px" onclick="location.href='/two_step_verification/two_factor/'">Solve puzzle</button>`
     else if (request.url === '/two_step_verification/two_factor/') html = `<p>Enter your authenticator app code</p><input autocomplete="one-time-code" maxlength="6" style="position:fixed;left:100px;top:100px;width:150px;height:40px"><button style="position:fixed;left:100px;top:160px" onclick="if(document.querySelector('input').value==='123456')location.href='/checkpoint/email'">Continue</button>`
     else if (request.url === '/checkpoint/email') html = `<p>We sent a code to your email</p><input style="position:fixed;left:100px;top:100px;width:150px;height:40px"><button style="position:fixed;left:100px;top:160px" onclick="if(document.querySelector('input').value==='654321')location.href='/done'">Continue</button>`
-    else if (request.url === '/done' || request.url === '/watch/' || request.url === '/me') {
+    else if (request.url === '/done' || request.url === '/watch/' || request.url === '/profile.php?id=fixture') {
       if (request.url === '/watch/') watchVisits++
       const cookies = request.headers.cookie || ''
-      if ((request.url === '/watch/' || request.url === '/me') && !cookies.includes('c_user=fixture')) html = `<input name="email"><input name="pass" type="password">`
-      else if (request.url === '/me') html = `<h1>Fixture Person</h1><img alt="Fixture Person's profile picture" width="160" height="160" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Crect width='160' height='160' fill='%231877f2'/%3E%3C/svg%3E"><button aria-label="Account">Account</button>`
+      if ((request.url === '/watch/' || request.url === '/profile.php?id=fixture') && !cookies.includes('c_user=fixture')) html = `<input name="email"><input name="pass" type="password">`
+      else if (request.url === '/profile.php?id=fixture') html = `<title>(3) Facebook</title><h1>Notifications</h1><a href="/profile.php?id=fixture" aria-label="Fixture Person's timeline">Fixture Person</a><div aria-label="Profile picture actions"><img alt="Fixture Person's profile picture" width="160" height="160" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Crect width='160' height='160' fill='%231877f2'/%3E%3C/svg%3E"></div><button aria-label="Account">Account</button>`
       else html = `<button aria-label="Account">Account</button>`
       if (request.url === '/done') response.setHeader('Set-Cookie', ['c_user=fixture; Path=/; Max-Age=3600', 'xs=fixture; Path=/; Max-Age=3600'])
     } else { response.writeHead(404).end(); return }
