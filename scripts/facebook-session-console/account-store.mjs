@@ -105,10 +105,34 @@ export class AccountStore {
 
   configFile(record) { return path.join(this.directory(record), 'account.json') }
   sessionFile(record) { return path.join(this.directory(record), 'storage-state.json') }
+  facebookProfileFile(record) { return path.join(this.directory(record), 'facebook-profile.json') }
+  facebookAvatarFile(record) { return path.join(this.directory(record), 'facebook-profile-avatar.png') }
+
+  async facebookProfile(record) {
+    try {
+      const [profile, marker] = await Promise.all([
+        readFile(this.facebookProfileFile(record), 'utf8').then(JSON.parse),
+        readFile(this.sessionFile(record), 'utf8').then(JSON.parse),
+      ])
+      const name = safeLabel(profile.name)
+      if (!profile.accountId || profile.accountId !== marker.accountId) return null
+      let avatar = null
+      try {
+        const details = await stat(this.facebookAvatarFile(record))
+        avatar = { file: this.facebookAvatarFile(record), type: 'image/png', version: `${Math.floor(details.mtimeMs)}-${details.size}` }
+      } catch (error) { if (error.code !== 'ENOENT') throw error }
+      return { name, avatar }
+    } catch (error) {
+      if (error.code === 'ENOENT' || error instanceof SyntaxError) return null
+      throw error
+    }
+  }
 
   avatarFile(record, extension) { return path.join(this.avatarDir, `${record.id}.${extension}`) }
 
   async avatarInfo(record) {
+    const profile = await this.facebookProfile(record)
+    if (profile?.avatar) return profile.avatar
     for (const [type, descriptor] of avatarTypes) {
       const file = this.avatarFile(record, descriptor.extension)
       try {

@@ -25,25 +25,6 @@ async function api(path, method = 'GET', data, signal) {
   return result
 }
 
-async function avatarApi(id, method, file) {
-  const response = await fetch('/api/accounts/' + encodeURIComponent(id) + '/avatar', {
-    method, cache: 'no-store',
-    headers: {
-      'X-Session-Console-Key': state.key,
-      ...(file ? { 'Content-Type': file.type } : {}),
-    },
-    ...(file ? { body: file } : {}),
-  })
-  let result
-  try { result = await response.json() } catch { result = {} }
-  if (!response.ok) {
-    const error = new Error(result.error || 'Avatar update failed (HTTP ' + response.status + ')')
-    error.status = response.status
-    throw error
-  }
-  return result
-}
-
 function selectedAccount() {
   return state.accounts.find(account => account.id === state.selectedId) || null
 }
@@ -81,7 +62,7 @@ function element(tag, className, value) {
 
 function avatarNode(account) {
   const wrapper = element('span', 'account-avatar')
-  const fallback = element('span', 'account-avatar-fallback', (account.label || account.account || '?').trim().charAt(0).toUpperCase())
+  const fallback = element('span', 'account-avatar-fallback', (account.profileName || account.label || account.account || '?').trim().charAt(0).toUpperCase())
   fallback.setAttribute('aria-hidden', 'true')
   wrapper.append(fallback)
   if (!account.avatarVersion) return wrapper
@@ -173,51 +154,34 @@ function renderAccounts() {
   const list = $('account-list')
   const focused = document.activeElement
   const focusedId = focused?.dataset?.accountId
-  const focusedRole = focused?.dataset?.accountRole
   list.replaceChildren()
   $('account-count').textContent = state.accounts.length + (state.accounts.length === 1 ? ' account' : ' accounts')
   $('empty-accounts').hidden = state.accounts.length > 0
   for (const account of state.accounts) {
-    const row = element('div', 'account-row' + (account.id === state.selectedId ? ' selected' : ''))
-    const select = element('button', 'account-select')
-    select.type = 'button'
-    select.dataset.accountId = account.id
-    select.dataset.accountRole = 'select'
-    select.setAttribute('aria-current', account.id === state.selectedId ? 'true' : 'false')
-    select.addEventListener('click', () => chooseAccount(account.id))
+    const row = element('button', 'account-row' + (account.id === state.selectedId ? ' selected' : ''))
+    row.type = 'button'
+    row.dataset.accountId = account.id
+    row.setAttribute('aria-current', account.id === state.selectedId ? 'true' : 'false')
+    row.addEventListener('click', () => chooseAccount(account.id))
     const avatar = avatarNode(account)
     const identity = element('span', 'account-identity')
-    identity.append(element('strong', '', account.label || 'Unnamed account'), element('span', '', account.account || 'Account ID unavailable'))
-    select.append(avatar, identity)
+    identity.append(element('strong', '', account.profileName || account.label || 'Facebook account'), element('span', '', account.account || 'Account ID unavailable'))
     const details = element('div', 'account-details')
     const session = element('span', 'badge ' + statusTone(account), sessionLabel(account))
     const activity = element('span', 'activity-tag', activityLabel(account))
     activity.title = activityLabel(account)
     details.append(session, activity)
-    const view = element('button', 'button secondary row-view', 'Open')
-    view.type = 'button'
-    view.dataset.accountId = account.id
-    view.dataset.accountRole = 'view'
-    view.disabled = account.id === state.selectedId
-    view.addEventListener('click', () => chooseAccount(account.id))
-    row.append(select, details, view)
+    row.append(avatar, identity, details)
     list.append(row)
   }
-  if (focusedId && focusedRole) {
-    const replacement = [...list.querySelectorAll('button')].find(button =>
-      button.dataset.accountId === focusedId && button.dataset.accountRole === focusedRole)
-    const focusTarget = replacement?.disabled
-      ? [...list.querySelectorAll('button')].find(button => button.dataset.accountId === focusedId && button.dataset.accountRole === 'select')
-      : replacement
-    focusTarget?.focus({ preventScroll: true })
-  }
+  if (focusedId) list.querySelector(`[data-account-id="${CSS.escape(focusedId)}"]`)?.focus({ preventScroll: true })
 }
 
 function renderSelected() {
   const account = selectedAccount()
   $('selected-panel').hidden = !account
   if (!account) { clearManual(); return }
-  $('selected-heading').textContent = account.label || 'Unnamed account'
+  $('selected-heading').textContent = account.profileName || account.label || 'Facebook account'
   $('selected-identifier').textContent = account.account || 'Account ID unavailable'
   $('selected-status').textContent = sessionLabel(account)
   $('selected-status').className = 'badge ' + statusTone(account)
@@ -258,10 +222,6 @@ function renderSelected() {
 }
 
 function render() {
-  const running = state.accounts.find(account => account.running)
-  $('capacity-note').textContent = running
-    ? 'One browser at a time · ' + (running.label || 'An account') + ' is active. Stop it before starting another account.'
-    : 'One browser at a time · Select an account to start or check its session.'
   renderAccounts()
   renderSelected()
 }
@@ -424,18 +384,14 @@ function openDialog(mode) {
   $('dialog-help').textContent = mode === 'edit'
     ? 'Leave password and authenticator secret blank to keep the saved values.'
     : 'Credentials are saved on this server. You will complete sign-in steps in the browser.'
-  $('field-label').value = mode === 'edit' ? account.label || '' : ''
   $('field-account').value = mode === 'edit' ? account.account || '' : ''
   $('field-account').disabled = mode === 'edit'
   $('field-password').required = mode === 'add'
   $('field-status').value = mode === 'edit' && account.locked ? 'locked' : 'available'
-  $('field-avatar').value = ''
-  $('remove-avatar-wrap').hidden = mode !== 'edit' || !account.avatarVersion
-  $('remove-avatar').checked = false
   $('save-account').textContent = mode === 'edit' ? 'Save changes' : 'Add account'
   $('save-account').disabled = false
   $('account-dialog').showModal()
-  $('field-label').focus()
+  ;(mode === 'edit' ? $('field-status') : $('field-account')).focus()
 }
 
 function closeDialog() {
@@ -486,16 +442,7 @@ $('account-form').addEventListener('submit', async event => {
   const mode = state.dialogMode
   const id = state.dialogAccountId
   const values = Object.fromEntries(new FormData($('account-form')))
-  values.label = values.label.trim()
   values.locked = values.locked === 'locked'
-  delete values.avatar
-  delete values.removeAvatar
-  if (!values.label) return
-  const avatar = $('field-avatar').files[0]
-  if (avatar && (!['image/jpeg', 'image/png', 'image/webp'].includes(avatar.type) || avatar.size > 2 * 1024 * 1024)) {
-    $('dialog-error').textContent = 'Choose a JPEG, PNG, or WebP image up to 2 MB.'
-    return
-  }
   if (mode === 'edit') {
     delete values.account
     if (!values.password) delete values.password
@@ -507,13 +454,11 @@ $('account-form').addEventListener('submit', async event => {
   state.pendingDialog++
   state.requestVersion++
   try {
-    let result = await api(mode === 'edit' ? 'accounts/' + encodeURIComponent(id) + '/config' : 'accounts', 'POST', values)
+    if (mode === 'add') values.label = values.account.trim()
+    const result = await api(mode === 'edit' ? 'accounts/' + encodeURIComponent(id) + '/config' : 'accounts', 'POST', values)
     if (authVersion !== state.authVersion) return
     const targetId = mode === 'edit' ? id : result.accounts?.at(-1)?.id
     if (!targetId) throw new Error('Account was saved but could not be selected')
-    if (avatar) result = await avatarApi(targetId, 'POST', avatar)
-    else if (mode === 'edit' && $('remove-avatar').checked) result = await avatarApi(targetId, 'DELETE')
-    if (authVersion !== state.authVersion) return
     if (dialogVersion === state.dialogVersion) {
       const requestVersion = ++state.requestVersion
       applyList(result, requestVersion)

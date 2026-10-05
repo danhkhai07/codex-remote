@@ -8,8 +8,8 @@ works on desktop and mobile.
 ## Use
 
 1. Unlock with the existing console access code.
-2. Select **Add account** and enter the Facebook name, optional avatar,
-   account ID/email, password and, optionally, the authenticator secret.
+2. Select **Add account** and enter the account ID/email, password and,
+   optionally, the authenticator secret.
 3. Choose **Start login** on that account. Complete verification yourself in
    the browser panel. The current authenticator code is available when the
    page requests it; email/SMS codes must come from your own inbox or phone.
@@ -24,7 +24,10 @@ There are no batch login or engagement actions. The active worker uses ordinary
 Playwright with Chromium and manual verification; it does not call a CAPTCHA
 solver, inject challenge tokens or configure evasion proxies.
 
-Each account stays on one compact row. Its status is derived from real state:
+Each account stays on one compact, selectable row. Its Facebook display name
+and profile picture are refreshed from `/me` only after that saved browser
+session is authenticated as the expected account. Before the first successful
+check, the login identifier is used as the temporary label. Its status is derived from real state:
 **Not logged in** when there is no verification marker, **Logged in** when a
 verified marker exists, and **Locked** when an owner marks the account locked.
 Locked accounts cannot start a browser job. The activity tag shows the current
@@ -55,8 +58,9 @@ added later get their own directories. Existing secrets, including any legacy
 solver key, are not returned by the API. A legacy solver key is not used by
 the new worker.
 
-Uploaded avatars are stored separately under the private `avatars` directory.
-Only JPEG, PNG and WebP files up to 2 MB are accepted. Avatar reads require the
+Profile names and avatar captures are stored in the account's private directory
+with mode 0600. The worker captures the visible Facebook profile picture instead
+of exposing its CDN URL or asking for a manual upload. Avatar reads require the
 same console access code and never expose filesystem paths.
 
 `storage-state.json` is a secret-free verification marker. Browser cookies

@@ -157,9 +157,10 @@ async function status(record) {
   const current = state(record.id)
   const running = Boolean((active && active.id === record.id) || (jobReserved && jobReserved === record.id))
   const sessionSaved = await accounts.sessionSaved(record)
+  const profile = await accounts.facebookProfile(record)
   const avatar = await accounts.avatarInfo(record)
   return {
-    id: record.id, label: record.label, configured: true, account: masked(config.account),
+    id: record.id, label: record.label, profileName: profile?.name ?? null, configured: true, account: masked(config.account),
     locked: record.locked, sessionSaved, running,
     sessionStatus: record.locked ? 'locked' : sessionSaved ? 'logged-in' : 'logged-out',
     activity: running ? current.phase : 'Idle',

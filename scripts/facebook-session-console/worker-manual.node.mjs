@@ -22,10 +22,11 @@ function fixture() {
     else if (request.url === '/captcha') html = `<p>Complete a challenge to verify</p><button id="solve" style="position:fixed;left:100px;top:100px;width:120px;height:80px" onclick="location.href='/two_step_verification/two_factor/'">Solve puzzle</button>`
     else if (request.url === '/two_step_verification/two_factor/') html = `<p>Enter your authenticator app code</p><input autocomplete="one-time-code" maxlength="6" style="position:fixed;left:100px;top:100px;width:150px;height:40px"><button style="position:fixed;left:100px;top:160px" onclick="if(document.querySelector('input').value==='123456')location.href='/checkpoint/email'">Continue</button>`
     else if (request.url === '/checkpoint/email') html = `<p>We sent a code to your email</p><input style="position:fixed;left:100px;top:100px;width:150px;height:40px"><button style="position:fixed;left:100px;top:160px" onclick="if(document.querySelector('input').value==='654321')location.href='/done'">Continue</button>`
-    else if (request.url === '/done' || request.url === '/watch/') {
+    else if (request.url === '/done' || request.url === '/watch/' || request.url === '/me') {
       if (request.url === '/watch/') watchVisits++
       const cookies = request.headers.cookie || ''
-      if (request.url === '/watch/' && !cookies.includes('c_user=fixture')) html = `<input name="email"><input name="pass" type="password">`
+      if ((request.url === '/watch/' || request.url === '/me') && !cookies.includes('c_user=fixture')) html = `<input name="email"><input name="pass" type="password">`
+      else if (request.url === '/me') html = `<h1>Fixture Person</h1><img alt="Fixture Person's profile picture" width="160" height="160" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Crect width='160' height='160' fill='%231877f2'/%3E%3C/svg%3E"><button aria-label="Account">Account</button>`
       else html = `<button aria-label="Account">Account</button>`
       if (request.url === '/done') response.setHeader('Set-Cookie', ['c_user=fixture; Path=/; Max-Age=3600', 'xs=fixture; Path=/; Max-Age=3600'])
     } else { response.writeHead(404).end(); return }
@@ -118,6 +119,11 @@ test('manual owner flow, fresh browser verification, and read-only check', { tim
       const marker = JSON.parse(await readFile(path.join(state, 'storage-state.json')))
       assert.equal(marker.engine, 'playwright-chromium')
       assert.equal(marker.accountId, 'fixture')
+      const profile = JSON.parse(await readFile(path.join(state, 'facebook-profile.json')))
+      assert.equal(profile.accountId, 'fixture')
+      assert.equal(profile.name, 'Fixture Person')
+      assert.equal((await stat(path.join(state, 'facebook-profile.json'))).mode & 0o777, 0o600)
+      assert.ok((await stat(path.join(state, 'facebook-profile-avatar.png'))).size > 32)
       assert.equal((await stat(path.join(state, 'storage-state.json'))).mode & 0o777, 0o600)
       assert.ok(!JSON.stringify(marker).includes('PAID-KEY'))
       const check = runner(state, origin, 'check')

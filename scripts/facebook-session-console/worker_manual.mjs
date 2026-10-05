@@ -11,6 +11,8 @@ import { pathToFileURL } from 'node:url'
 const stateDir = process.env.FB_SESSION_STATE_DIR || '/root/.local/state/facebook-session-console'
 const profileDir = path.join(stateDir, 'browser-profile')
 const sessionFile = path.join(stateDir, 'storage-state.json')
+const facebookProfileFile = path.join(stateDir, 'facebook-profile.json')
+const facebookAvatarFile = path.join(stateDir, 'facebook-profile-avatar.png')
 const chromePath = process.env.FB_CHROME_PATH || '/root/.cache/ms-playwright/chromium-1187/chrome-linux/chrome'
 const playwrightPath = process.env.FB_PLAYWRIGHT_MODULE || '/root/.local/share/facebook-headless/node_modules/playwright-core/index.mjs'
 const action = process.argv[2]
@@ -174,6 +176,69 @@ async function writeMarker(accountId) {
   } finally { await rm(temporary, { force: true }).catch(() => {}) }
 }
 
+function cleanProfileName(value) {
+  if (typeof value !== 'string') return null
+  const name = value.replace(/\s+/g, ' ').trim().replace(/\s*[|·-]\s*Facebook$/i, '')
+  if (!name || name.length > 80 || /^(Facebook|Watch|Home|Log in)$/i.test(name)
+      || [...name].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) return null
+  return name
+}
+
+async function extractFacebookProfile(page) {
+  stage = 'reading Facebook profile'
+  await navigate(page, `${origin}/me`)
+  await delay(900)
+  const name = cleanProfileName(await page.evaluate(() => {
+    const headings = [...document.querySelectorAll('h1')]
+      .filter(node => { const box = node.getBoundingClientRect(); return box.width > 0 && box.height > 0 })
+      .map(node => node.textContent)
+    return headings.find(Boolean)
+      || document.querySelector('meta[property="og:title"]')?.getAttribute('content')
+      || document.title
+  }).catch(() => ''))
+  if (!name) return null
+  let avatar = null
+  const images = page.locator('img:visible')
+  let best = null
+  let bestScore = -1
+  for (let index = 0, count = Math.min(await images.count().catch(() => 0), 80); index < count; index++) {
+    const candidate = images.nth(index)
+    const data = await candidate.evaluate((node, profileName) => {
+      const box = node.getBoundingClientRect()
+      return { alt: node.getAttribute('alt') || '', width: box.width, height: box.height,
+        matchesName: (node.getAttribute('alt') || '').toLocaleLowerCase().includes(profileName.toLocaleLowerCase()) }
+    }, name).catch(() => null)
+    if (!data || data.width < 32 || data.height < 32) continue
+    const profileAlt = /profile (?:picture|photo)|ảnh đại diện/i.test(data.alt)
+    const square = Math.abs(data.width - data.height) <= Math.max(data.width, data.height) * 0.2
+    const score = (profileAlt ? 1000 : 0) + (data.matchesName ? 500 : 0) + (square ? 100 : 0) + Math.min(data.width, data.height)
+    if ((profileAlt || data.matchesName) && score > bestScore) { best = candidate; bestScore = score }
+  }
+  if (best) {
+    const screenshot = await best.screenshot({ type: 'png', timeout: 4000 }).catch(() => null)
+    if (screenshot?.length >= 32 && screenshot.length <= 2 * 1024 * 1024) avatar = screenshot
+  }
+  return { name, avatar }
+}
+
+async function writeFacebookProfile(accountId, profile) {
+  if (!profile?.name || !accountId) return
+  const temporary = `${facebookProfileFile}.${randomBytes(8).toString('hex')}.tmp`
+  try {
+    await writeFile(temporary, JSON.stringify({ accountId, name: profile.name, updatedAt: new Date().toISOString() }), { mode: 0o600, flag: 'wx' })
+    await rename(temporary, facebookProfileFile)
+    await chmod(facebookProfileFile, 0o600)
+  } finally { await rm(temporary, { force: true }).catch(() => {}) }
+  if (profile.avatar) {
+    const avatarTemporary = `${facebookAvatarFile}.${randomBytes(8).toString('hex')}.tmp`
+    try {
+      await writeFile(avatarTemporary, profile.avatar, { mode: 0o600, flag: 'wx' })
+      await rename(avatarTemporary, facebookAvatarFile)
+      await chmod(facebookAvatarFile, 0o600)
+    } finally { await rm(avatarTemporary, { force: true }).catch(() => {}) }
+  }
+}
+
 const labels = {
   login: 'Login form', 'login-rejected': 'Login rejected', captcha: 'CAPTCHA detected',
   'two-factor': '2FA code form detected', 'two-factor-loading': 'Waiting for 2FA page',
@@ -214,11 +279,15 @@ async function runLogin(chromium, config) {
           report('Account mismatch', 'The browser is signed in to a different account')
           return
         }
+        const profile = await extractFacebookProfile(current.page).catch(() => null)
         report('Checking saved session', '', false)
         await current.context.close()
         current = null
         const { confirmed, accountId } = await freshVerify(chromium, seenId)
-        if (confirmed) await writeMarker(accountId)
+        if (confirmed) {
+          await writeMarker(accountId)
+          await writeFacebookProfile(accountId, profile)
+        }
         report(confirmed ? 'Session ready' : 'Verification failed',
           confirmed ? 'Saved and verified in a fresh browser' : 'Facebook rejected the saved session')
         return
@@ -266,7 +335,12 @@ async function runCheck(chromium, config) {
     await navigate(current.page, checkUrl)
     await delay(1200)
     const kind = await detect(current.page, current.context)
-    const wrongAccount = kind === 'authenticated' && expectedId && await observedAccountId(current.context) !== expectedId
+    const observedId = kind === 'authenticated' ? await observedAccountId(current.context) : null
+    const wrongAccount = kind === 'authenticated' && expectedId && observedId !== expectedId
+    if (kind === 'authenticated' && !wrongAccount) {
+      const profile = await extractFacebookProfile(current.page).catch(() => null)
+      await writeFacebookProfile(observedId, profile)
+    }
     report(wrongAccount ? 'Account mismatch' : checkLabels[kind], kind === 'authenticated' && !wrongAccount
       ? 'Saved session passed a fresh-browser check' : 'Read-only check; no login or verification was submitted')
   } finally { await current?.context.close().catch(() => {}) }
@@ -306,4 +380,4 @@ if (process.env.FB_SESSION_WORKER_IMPORT !== '1') {
   })
 }
 
-export { acceptAction, classify, detect, drainActions }
+export { acceptAction, classify, cleanProfileName, detect, drainActions, extractFacebookProfile }
