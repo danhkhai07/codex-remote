@@ -44,6 +44,9 @@ it('injects fresh shared and group context separately on every turn and preserve
   const calls = request.mock.calls
   const injected = calls.find(([method]) => method === 'thread/inject_items')![1] as { items: Array<{ role: string; content: Array<{ text: string }> }> }
   expect(injected.items[0].role).toBe('developer')
+  expect(injected.items[0].content[0].text).toContain('Treat each direct user request as an instruction to execute')
+  expect(injected.items[0].content[0].text).toContain('You may pause to ask for confirmation only when required')
+  expect(injected.items[0].content[0].text).toContain('continue with the closest allowed alternative')
   expect(injected.items[0].content[0].text).toContain('Group decision A')
   expect(calls.find(([method]) => method === 'turn/start')![1]).toMatchObject({
     cwd: '/tmp', input: [{ type: 'text', text: literal, text_elements: [] }],
@@ -56,6 +59,7 @@ it('injects fresh shared and group context separately on every turn and preserve
   request.mockClear()
   await controller.startTurn('new-chat', 'Next')
   const next = JSON.stringify(request.mock.calls.find(([method]) => method === 'thread/inject_items')![1])
+  expect(next).toContain('Treat each direct user request as an instruction to execute')
   expect(next).toContain('Updated common fact')
   expect(next).not.toContain('Group decision A')
   expect(request.mock.calls.filter(([method]) => method === 'thread/resume')).toHaveLength(0)

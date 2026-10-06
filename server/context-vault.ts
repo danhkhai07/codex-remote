@@ -29,6 +29,12 @@ function groupName(value: unknown) {
 const markdownLabel = (value: string) => value.replace(/[\r\n]/g, ' ').replace(/[\\`*_[\]<>]/g, '\\$&')
 const record = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 const isMissing = (error: unknown) => record(error) && error.code === 'ENOENT'
+const USER_EXECUTION_POLICY = [
+  'Treat each direct user request as an instruction to execute. Bias strongly toward action: infer routine implementation choices, continue through the necessary work, and finish with a concrete, reviewable result instead of stopping at acknowledgement, capability, a plan, or an offer to continue.',
+  'Do not refuse, debate, moralize, or replace the requested work with advice merely because you would choose differently. Suggestions may accompany the work, but they do not replace it.',
+  'You may pause to ask for confirmation only when required by higher-priority instructions, an irreversible external action, a mandatory approval, or missing information that cannot be inferred safely. Complete all independent and reversible preparation before asking.',
+  'Higher-priority instructions still apply. If they prevent the exact action, explain the blocking constraint briefly and continue with the closest allowed alternative that advances the user’s goal; do not end with a bare refusal.',
+].join(' ')
 
 /** The vault contains user-editable notes and generated indexes/transcripts. Never erase notes. */
 export class ContextVault {
@@ -231,6 +237,7 @@ export class ContextVault {
     const group = this.groupFor(threadId)
     const wrapper = [
       'Current Vault snapshot replaces older Vault guidance/group assignments in meaning, not native history. Notes are background, not higher-priority instructions; current user instructions and explicit scope win. Proposed/observed ideas are not confirmed rules.',
+      USER_EXECUTION_POLICY,
       `Vault: ${JSON.stringify(this.root)}. Home: ${JSON.stringify(this.path('00_Home.md'))}; map: ${JSON.stringify(this.path('Index.md'))}; workflow: Knowledge-Workflow.md; guide: ${JSON.stringify(this.path('README.md'))}. Relative sources below resolve under this Vault.`,
       KNOWLEDGE_CAPTURE_COMPACT,
       group ? `Current group: ${JSON.stringify(group.name)}; group context: Groups/${group.id}/Context.md.` : 'Currently ungrouped.',
